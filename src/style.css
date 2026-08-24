@@ -428,3 +428,103 @@ button.big small {
   padding: 2px 6px;
   font-weight: 700;
 }
+
+/* ------------------------------------------------------------------ 믹서 */
+
+#mixer-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 42;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  background: rgba(8, 10, 14, 0.62);
+}
+
+#mixer-modal.hidden {
+  display: none;
+}
+
+.mixrow {
+  padding: 10px 0 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.mixhead {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.mixhead b {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+button.tiny {
+  min-height: 30px;
+  min-width: 54px;
+  padding: 0 8px;
+  font-size: 12px;
+  border-radius: 8px;
+}
+
+button.tiny.on {
+  background: var(--bad);
+  border-color: var(--bad);
+  color: #14060a;
+  font-weight: 700;
+}
+
+button.tiny.solo.on {
+  background: var(--warn);
+  border-color: var(--warn);
+  color: #1a1204;
+}
+
+.mixslider {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+  font-size: 12px;
+}
+
+.mixslider span {
+  flex: none;
+  width: 34px;
+  color: var(--dim);
+}
+
+.mixslider input[type="range"] {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 34px;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  accent-color: var(--accent);
+}
+
+.mixslider i {
+  flex: none;
+  width: 62px;
+  text-align: right;
+  font-style: normal;
+  color: var(--dim);
+  font-variant-numeric: tabular-nums;
+}
+
+button:disabled {
+  opacity: 0.35;
+}
+
+:root {
+  --bad: #f85149;
+  --warn: #d29922;
+}

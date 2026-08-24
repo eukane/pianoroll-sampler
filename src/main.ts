@@ -8,20 +8,27 @@
 import "./style.css";
 import { AudioEngine } from "./audio/engine";
 import { Mixer } from "./audio/mixer";
+import { MixerState } from "./audio/mixerState";
 import { InstrumentRegistry } from "./audio/registry";
 import type { Waveform } from "./audio/oscInstrument";
 import { Scheduler } from "./audio/scheduler";
 import { beatsPerBar, emptyProject, totalBeats } from "./model/project";
+import { channelForTrack } from "./model/channels";
+import type { Project } from "./model/types";
 import { PianoRoll } from "./ui/pianoroll";
 import { InstrumentPanel } from "./ui/instrumentPanel";
 import { ExportPanel } from "./ui/exportPanel";
+import { MixerPanel } from "./ui/mixerPanel";
+import { History } from "./history";
 
 const project = emptyProject();
 
 const engine = new AudioEngine();
 const mixer = new Mixer(engine.ctx, engine.master);
 const registry = new InstrumentRegistry(engine.ctx, mixer);
-const scheduler = new Scheduler(engine, registry, mixer, () => project);
+const mixerState = new MixerState();
+const scheduler = new Scheduler(engine, registry, mixer, mixerState, () => project);
+const history = new History(() => project);
 
 const $ = <T extends HTMLElement>(id: string): T => {
   const el = document.getElementById(id);
@@ -43,6 +50,11 @@ scheduler.loopStart = 0;
 scheduler.loopEnd = totalBeats(project);
 
 const roll = new PianoRoll(canvas, () => project, {
+  onBeforeChange: () => history.begin(),
+  onAfterChange: () => {
+    history.commit();
+    refreshHistoryButtons();
+  },
   onEdit: () => scheduler.invalidate(),
   onPreview: (pitch, trackIndex) => {
     if (engine.isUnlocked) scheduler.preview(pitch, trackIndex);
@@ -157,33 +169,88 @@ const panel = new InstrumentPanel(project, registry, {
   },
   onSourceChange: () => {
     // 노트는 그대로 두고 악기만 바뀐다. 재생 중이면 다음 노트부터 새 소리다.
-    project.tracks.forEach((t, i) => registry.prepare(t, i));
+    project.tracks.forEach((t, i) => registry.prepare(t, channelForTrack(i)));
+    mixerState.apply(project, mixer);
     scheduler.invalidate();
     waveRow.hidden = registry.usingSoundFont;
+    refreshHistoryButtons();
   },
   onStatus: showStatus,
 });
 roll.activeTrack = panel.activeTrack;
 
+// ------------------------------------------------------------ 실행 취소
+
+const undoBtn = $<HTMLButtonElement>("undo");
+const redoBtn = $<HTMLButtonElement>("redo");
+
+function refreshHistoryButtons(): void {
+  undoBtn.disabled = !history.canUndo;
+  redoBtn.disabled = !history.canRedo;
+}
+
+/** 되돌린 결과를 화면 전체에 반영한다. */
+function applyProject(loaded: Project, { keepHistory = true } = {}): void {
+  scheduler.stop();
+  Object.assign(project, loaded);
+  if (!keepHistory) history.clear();
+
+  bpmInput.value = String(project.bpm);
+  barsInput.value = String(project.bars);
+  if (scheduler.loopEnd > totalBeats(project)) scheduler.loopEnd = totalBeats(project);
+
+  panel.activeTrack = Math.min(panel.activeTrack, project.tracks.length - 1);
+  roll.activeTrack = panel.activeTrack;
+  panel.refresh();
+  mixerPanel.render();
+  mixerState.apply(project, mixer);
+  scheduler.invalidate();
+  refreshHistoryButtons();
+}
+
+undoBtn.addEventListener("click", () => {
+  const previous = history.undo();
+  if (previous) {
+    applyProject(previous);
+    showStatus("되돌렸습니다");
+  }
+});
+redoBtn.addEventListener("click", () => {
+  const next = history.redo();
+  if (next) {
+    applyProject(next);
+    showStatus("다시 실행했습니다");
+  }
+});
+
+// ---------------------------------------------------------------- 믹서
+
+const mixerPanel = new MixerPanel(() => project, mixerState, {
+  onBeforeChange: () => history.begin(),
+  onAfterChange: () => {
+    history.commit();
+    refreshHistoryButtons();
+  },
+  onChange: () => {
+    mixerState.apply(project, mixer);
+    scheduler.invalidate();
+  },
+  onStatus: showStatus,
+});
+
 // -------------------------------------------------------- 내보내기 / 가져오기
 
-new ExportPanel(() => project, registry, {
+new ExportPanel(() => project, registry, mixerState, {
   onStatus: showStatus,
   onProjectReplaced: (loaded) => {
     // 통째로 갈아끼우지 않고 **같은 객체 안을 바꾼다.** 스케줄러·피아노롤·패널이
     // 전부 이 객체를 붙들고 있어서, 새 객체로 바꾸면 옛것을 계속 보게 된다.
-    scheduler.stop();
-    Object.assign(project, loaded);
-
-    bpmInput.value = String(project.bpm);
-    barsInput.value = String(project.bars);
+    mixerState.clearSolo();
     scheduler.loopStart = 0;
-    scheduler.loopEnd = totalBeats(project);
+    scheduler.loopEnd = totalBeats(loaded);
+    // 다른 곡을 열었으니 앞 곡의 되돌리기 이력은 의미가 없다.
+    applyProject(loaded, { keepHistory: false });
     scheduler.seek(0);
-
-    panel.activeTrack = 0;
-    roll.activeTrack = 0;
-    panel.refresh();
     roll.scrollToPitch(averagePitch(project) || 60);
   },
 });
@@ -233,5 +300,45 @@ requestAnimationFrame(frame);
 
 // 개발 중 콘솔에서 상태를 들여다보기 위한 창구. 빌드하면 사라진다.
 if (import.meta.env.DEV) {
-  (window as unknown as Record<string, unknown>).__app = { project, scheduler, roll, engine, registry, panel, mixer };
+  (window as unknown as Record<string, unknown>).__app = { project, scheduler, roll, engine, registry, panel, mixer, mixerState, history };
 }
+
+
+// ------------------------------------------------------------ 키보드 (PC)
+
+/**
+ * 폰이 주 환경이라 단축키는 최소한만 둔다. **화면에서 되는 일을 키보드로도
+ * 되게 하는 것**이지, 키보드로만 되는 기능을 만들지는 않는다 (그러면 폰에서
+ * 못 쓴다).
+ */
+window.addEventListener("keydown", (e) => {
+  const target = e.target as HTMLElement | null;
+  // 글자를 치는 중이면 손대지 않는다 (BPM 칸, 악기 검색칸 등).
+  if (target && /^(INPUT|SELECT|TEXTAREA)$/.test(target.tagName)) return;
+
+  const mod = e.ctrlKey || e.metaKey;
+
+  if (e.code === "Space" && !mod) {
+    e.preventDefault();
+    setPlaying(!scheduler.isPlaying);
+    return;
+  }
+  if (mod && e.key.toLowerCase() === "z") {
+    e.preventDefault();
+    (e.shiftKey ? redoBtn : undoBtn).click();
+    return;
+  }
+  if (mod && e.key.toLowerCase() === "y") {
+    e.preventDefault();
+    redoBtn.click();
+    return;
+  }
+  if (e.key === "Escape") {
+    for (const id of ["preset-modal", "export-modal", "mixer-modal", "map-modal"]) {
+      document.getElementById(id)?.classList.add("hidden");
+    }
+  }
+});
+
+refreshHistoryButtons();
+mixerState.apply(project, mixer);

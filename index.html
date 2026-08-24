@@ -23,6 +23,8 @@
           <button id="play" class="primary" type="button">▶︎ 재생</button>
           <button id="loop" type="button">🔁 루프</button>
           <span id="pos" class="pos">1 : 1</span>
+          <button id="undo" type="button" title="실행 취소" disabled>↶</button>
+          <button id="redo" type="button" title="다시 실행" disabled>↷</button>
           <span class="spacer"></span>
           <button id="zoom-out" type="button" title="가로 축소">－</button>
           <button id="zoom-in" type="button" title="가로 확대">＋</button>
@@ -32,6 +34,7 @@
         <div class="row">
           <button id="instrument" type="button">🎹 임시 신스</button>
           <button id="load-sf" type="button">📂 음원</button>
+          <button id="mixer" type="button">🎚️ 믹서</button>
           <button id="export" type="button">💾 내보내기</button>
           <input id="sf-file" type="file" accept=".sf2,.sf3,.dls" hidden />
           <input id="sample-files" type="file" accept="audio/*,.wav" multiple hidden />
@@ -66,6 +69,16 @@
       <footer id="hint">
         탭=찍기 · 드래그=옮기기 · 오른쪽끝=길이 · 길게=삭제 · 두손가락=확대 · 위눈금=위치/루프
       </footer>
+    </div>
+
+    <div id="mixer-modal" class="hidden">
+      <div class="sheet">
+        <div class="sheet-head">
+          <b>믹서</b>
+          <button id="mixer-close" type="button">닫기</button>
+        </div>
+        <div id="mixer-list" class="sheet-body"></div>
+      </div>
     </div>
 
     <div id="export-modal" class="hidden">

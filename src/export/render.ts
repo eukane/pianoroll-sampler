@@ -36,6 +36,7 @@ import type { Project, Track } from "../model/types";
 import { totalBeats } from "../model/project";
 import { channelForTrack } from "../model/channels";
 import { Mixer } from "../audio/mixer";
+import { MixerState } from "../audio/mixerState";
 import { OscInstrument } from "../audio/oscInstrument";
 import { FolderSampler, type SampleFolder } from "../audio/folderSampler";
 import { projectToMidi } from "./midi";
@@ -71,6 +72,7 @@ export async function renderProject(
   project: Project,
   getSoundBank: SoundBankSource,
   folders: SampleFolder[] = [],
+  mixerState: MixerState = new MixerState(),
 ): Promise<AudioBuffer> {
   const frames = Math.max(1, Math.ceil(projectSeconds(project) * SAMPLE_RATE));
   const soundBank = await getSoundBank();
@@ -86,9 +88,9 @@ export async function renderProject(
     const ctx = new OfflineAudioContext(2, frames, SAMPLE_RATE);
     const part = { ...project, tracks: sfTracks };
     if (soundBank) {
-      await renderWithSoundFont(ctx, part, soundBank);
+      await renderWithSoundFont(ctx, part, project, soundBank, mixerState);
     } else {
-      renderLocally(ctx, part, project, []);
+      renderLocally(ctx, part, project, [], mixerState);
     }
     passes.push(await ctx.startRendering());
   }
@@ -96,7 +98,7 @@ export async function renderProject(
   // 샘플 폴더 트랙
   if (localTracks.length > 0) {
     const ctx = new OfflineAudioContext(2, frames, SAMPLE_RATE);
-    renderLocally(ctx, { ...project, tracks: localTracks }, project, folders);
+    renderLocally(ctx, { ...project, tracks: localTracks }, project, folders, mixerState);
     passes.push(await ctx.startRendering());
   }
 
@@ -121,14 +123,29 @@ function mixDown(buffers: AudioBuffer[], frames: number): AudioBuffer {
 
 async function renderWithSoundFont(
   ctx: OfflineAudioContext,
-  project: Project,
+  part: Project,
+  full: Project,
   soundBank: ArrayBuffer,
+  mixerState: MixerState,
 ): Promise<void> {
   await ctx.audioWorklet.addModule(workletUrl());
   const synth = new WorkletSynthesizer(ctx);
-  synth.connect(ctx.destination);
 
-  const midi = BasicMIDI.fromArrayBuffer(toArrayBuffer(projectToMidi(project)));
+  // 마스터로 한 번에 받지 않고 채널을 따로 뽑아 믹서를 거친다.
+  // 개별 출력이 OfflineAudioContext 에서도 살아 있는 걸 확인하고 이렇게 했다.
+  // 덕분에 화면에서 들은 음량·팬·리버브가 뽑아낸 WAV 와 같다.
+  const master = ctx.createGain();
+  master.connect(ctx.destination);
+  const mixer = new Mixer(ctx, master);
+  synth.connectIndividualOutputs(mixer.inputs);
+  mixerState.apply(full, mixer);
+
+  // 안 들리는 트랙은 아예 빼고 MIDI 를 만든다. 믹서에서 0 으로 눌러도 되지만,
+  // 소리를 만들지 않는 쪽이 렌더가 빠르다.
+  const audible = part.tracks.filter((t) => mixerState.isAudible(t));
+  const midi = BasicMIDI.fromArrayBuffer(
+    toArrayBuffer(projectToMidi({ ...full, tracks: full.tracks.map((t) => (audible.includes(t) ? t : { ...t, notes: [] })) })),
+  );
   // 문서 경고: 신스를 만든 직후, 다른 걸 부르기 전에 이걸 불러야 한다.
   await synth.startOfflineRender({
     midiSequence: midi,
@@ -149,6 +166,7 @@ function renderLocally(
   part: Project,
   full: Project,
   folders: SampleFolder[],
+  mixerState: MixerState,
 ): void {
   const master = ctx.createGain();
   master.gain.value = 0.9;
@@ -162,9 +180,14 @@ function renderLocally(
   const secPerBeat = 60 / Math.max(1, part.bpm);
 
   for (const track of part.tracks) {
-    if (track.muted) continue;
+    if (!mixerState.isAudible(track)) continue;
     const channel = channelForTrack(Math.max(0, full.tracks.indexOf(track)));
-    mixer.set(channel, track.volume, track.pan, false);
+    mixer.set(channel, {
+      volume: track.volume,
+      pan: track.pan,
+      muted: false,
+      send: track.reverbSend ?? 0,
+    });
 
     let instrument: OscInstrument | FolderSampler = osc;
     if (track.source.kind === "sampleFolder") {

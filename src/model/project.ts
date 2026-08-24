@@ -20,6 +20,7 @@ export function emptyTrack(name = "트랙 1"): Track {
     volume: 0.8,
     pan: 0,
     muted: false,
+    reverbSend: 0,
   };
 }
 

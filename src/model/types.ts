@@ -39,6 +39,13 @@ export type Track = {
   volume: number; // 0..1
   pan: number; // -1..1
   muted: boolean;
+  /**
+   * 리버브로 보내는 양 0~1. 없으면 0 으로 읽는다.
+   *
+   * 솔로는 여기 없다. 솔로는 "지금 이것만 들어 보자" 는 **작업 중의 상태**지
+   * 곡의 일부가 아니다. 저장했다 열었더니 한 트랙만 들리면 그게 더 이상하다.
+   */
+  reverbSend?: number;
 };
 
 export type Project = {

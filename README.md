@@ -18,7 +18,7 @@ npm run dev        # 폰에서 볼 주소가 같이 찍힌다 (같은 와이파�
 
 ```bash
 npm run build      # 타입 검사 + 프로덕션 빌드
-npm run smoke      # 브라우저 자동 점검 36가지 (dev 서버를 띄워 둔 상태에서)
+npm run smoke      # 브라우저 자동 점검 49가지 (dev 서버를 띄워 둔 상태에서)
 npm run midi       # MIDI 왕복 점검 14가지 (브라우저 없이, 1초)
 npm run names      # 샘플 파일명 읽기 점검 19가지 (브라우저 없이)
 ```
@@ -27,6 +27,14 @@ npm run names      # 샘플 파일명 읽기 점검 19가지 (브라우저 없�
 1.2KB 짜리라 음원을 받지 않아도 프리셋 목록·검색·악기 교체 경로가 전부 돈다.
 
 ## 진행 상황
+
+### M5 — 다듬기 ✅
+
+- **이번에 된 것**: 트랙별 음량·팬·음소거·솔로, 리버브(센드 방식), 실행 취소 /
+  다시 실행, 최소한의 키보드 단축키.
+- **확인하는 법**: `🎚️ 믹서` 에서 슬라이더를 움직이면 재생에도 내보낸 WAV 에도
+  똑같이 반영된다. 편집 후 `↶` 로 되돌리기 (드래그 한 번 = 되돌리기 한 번).
+- **단축키**: 스페이스(재생·정지) · Ctrl+Z / Ctrl+Shift+Z · Esc(창 닫기).
 
 ### M4 — 커스텀 샘플 폴더 (가야금용) ✅
 
@@ -95,9 +103,11 @@ src/
   audio/     engine(잠금해제) · scheduler(lookahead) · mixer(트랙별 배선)
              · instrument(인터페이스) · oscInstrument(음원 없을 때)
              · soundfont(SF2 샘플러) · folderSampler(낱개 WAV)
+             · reverb(계산으로 만든 울림) · mixerState(뮤트·솔로 판단)
              · registry(악기 교체가 일어나는 유일한 지점)
   ui/        pianoroll(캔버스 + 터치) · instrumentPanel(음원·프리셋·트랙)
-             · exportPanel(내보내기·가져오기) · theme
+             · exportPanel(내보내기·가져오기) · mixerPanel(음량·팬·울림) · theme
+  history.ts 실행 취소 (스냅숏 방식)
   export/    midi(SMF 읽기·쓰기) · wav(16bit PCM) · render(오프라인 렌더)
              · projectFile(저장·불러오기)
   util/      music(음높이 변환)

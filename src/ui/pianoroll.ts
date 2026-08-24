@@ -45,6 +45,10 @@ type Drag =
   | { mode: "pinch"; startDist: number; startPx: number; anchorBeat: number; startMidY: number; startScrollY: number };
 
 export type PianoRollCallbacks = {
+  /** 이제 뭔가 바꾼다 — 되돌리기용으로 직전 상태를 찍어 두라는 신호. */
+  onBeforeChange: () => void;
+  /** 바꾸기가 끝났다. */
+  onAfterChange: () => void;
   onEdit: () => void;
   onPreview: (pitch: number, trackIndex: number) => void;
   onSeek: (beat: number) => void;
@@ -428,6 +432,9 @@ export class PianoRoll {
 
     const hit = this.noteAt(p.x, p.y);
     if (hit) {
+      // 끄는 동안 프레임마다 찍으면 되돌리기가 1픽셀씩 돌아간다.
+      // 손가락을 대는 이 순간의 상태만 쌓는다.
+      this.cb.onBeforeChange();
       this.draggingNoteId = hit.id;
       if (this.onRightEdge(hit, p.x)) {
         this.drag = { mode: "resize", note: hit, startLength: hit.length, downBeat: this.xToBeat(p.x) };
@@ -534,6 +541,7 @@ export class PianoRoll {
 
     this.draggingNoteId = null;
     this.drag = { mode: "none" };
+    this.cb.onAfterChange();
   };
 
   private onWheel = (e: WheelEvent): void => {
@@ -599,6 +607,7 @@ export class PianoRoll {
         track.notes.splice(i, 1);
         navigator.vibrate?.(15);
         this.cb.onEdit();
+        this.cb.onAfterChange();
       }
       this.draggingNoteId = null;
       this.drag = { mode: "none" };
@@ -615,6 +624,7 @@ export class PianoRoll {
   private addNoteAt(x: number, y: number): void {
     const track = this.track;
     if (!track) return;
+    this.cb.onBeforeChange();
     const pitch = clampPitch(this.yToPitch(y));
     const start = Math.max(0, snapFloor(this.xToBeat(x), this.snapUnit));
     const note = makeNote(pitch, start, this.snapUnit);
@@ -622,6 +632,7 @@ export class PianoRoll {
     sortNotes(track);
     this.cb.onPreview(pitch, this.activeTrack);
     this.cb.onEdit();
+    this.cb.onAfterChange();
   }
 
   // ------------------------------------------------------------ 외부 조작

@@ -17,6 +17,8 @@
  *   · WAV / 트랙별 WAV / MIDI / 프로젝트가 실제로 내려받아지는가
  *   · 내보낸 걸 다시 읽으면 노트가 그대로인가 (왕복)
  *   · 낱개 WAV 폴더를 넣으면 건반에 놓이고 없는 음은 채워지는가
+ *   · 음소거·솔로·음량이 재생과 렌더 양쪽에 같이 먹히는가
+ *   · 되돌리기가 제스처 단위로 돌아가는가
  *   · 콘솔 오류가 하나도 없는가
  *
  * 쓰는 법: 다른 창에서 `npm run dev` 를 띄워 두고 `npm run smoke`.
@@ -551,6 +553,189 @@ check(
   "사운드폰트 트랙과 폴더 트랙이 섞여도 둘 다 소리가 난다",
   mixedRender.mixed > mixedRender.onlyFolder,
   mixedRender,
+);
+
+// =========================================================== M5: 믹서 · 되돌리기
+
+// 깨끗한 상태에서 시작
+await page.evaluate(() => {
+  const p = window.__app.project;
+  p.bpm = 120;
+  p.bars = 2;
+  p.tracks.length = 1;
+  p.tracks[0].source = { kind: "sf2", presetId: 0 };
+  p.tracks[0].notes = [60, 64, 67].map((pitch, i) => ({
+    id: "v" + i, pitch, start: i * 0.5, length: 0.5, velocity: 110,
+  }));
+  p.tracks[0].volume = 1;
+  p.tracks[0].muted = false;
+  p.tracks[0].reverbSend = 0;
+  window.__app.mixerState.clearSolo();
+  window.__app.panel.activeTrack = 0;
+  window.__app.roll.activeTrack = 0;
+});
+
+const renderPeak = () =>
+  page.evaluate(async () => {
+    const { renderProject } = await import("/src/export/render.ts");
+    const { peakOf } = await import("/src/export/wav.ts");
+    const buf = await renderProject(
+      window.__app.project,
+      () => window.__app.registry.soundfont.bankBuffer(),
+      window.__app.registry.folders.list,
+      window.__app.mixerState,
+    );
+    return +peakOf(buf).toFixed(4);
+  });
+
+const loud = await renderPeak();
+check("기준 렌더에 소리가 있다", loud > 0.01, loud);
+
+// ---- 음량 ----
+await page.evaluate(() => (window.__app.project.tracks[0].volume = 0.25));
+const quiet = await renderPeak();
+check("음량을 줄이면 렌더도 같이 작아진다", quiet < loud * 0.6 && quiet > 0.001, { loud, quiet });
+
+// ---- 음소거 ----
+await page.evaluate(() => {
+  window.__app.project.tracks[0].volume = 1;
+  window.__app.project.tracks[0].muted = true;
+});
+const muted = await renderPeak();
+check("음소거한 트랙은 렌더에서도 안 들린다", muted < 0.001, muted);
+
+// ---- 솔로 ----
+await page.evaluate(() => {
+  const p = window.__app.project;
+  p.tracks[0].muted = false;
+  p.tracks.push({
+    id: "solo2", name: "둘째", source: { kind: "sf2", presetId: 0 },
+    notes: [{ id: "s1", pitch: 48, start: 0, length: 2, velocity: 120 }],
+    volume: 1, pan: 0, muted: false, reverbSend: 0,
+  });
+});
+const bothTracks = await renderPeak();
+await page.evaluate(() => {
+  window.__app.mixerState.toggleSolo(window.__app.project.tracks[1]);
+});
+const soloOnly = await renderPeak();
+check(
+  "솔로를 걸면 그 트랙만 렌더된다",
+  soloOnly > 0.001 && soloOnly < bothTracks,
+  { bothTracks, soloOnly },
+);
+await page.evaluate(() => window.__app.mixerState.clearSolo());
+
+// ---- 리버브 센드 ----
+await page.evaluate(() => {
+  const p = window.__app.project;
+  p.tracks.length = 1;
+  p.tracks[0].notes = [{ id: "r1", pitch: 60, start: 0, length: 0.25, velocity: 110 }];
+  p.tracks[0].reverbSend = 0;
+});
+const dryTail = await page.evaluate(async () => {
+  const { renderProject } = await import("/src/export/render.ts");
+  const tailEnergy = (buf) => {
+    const d = buf.getChannelData(0);
+    // 노트(0.125초)가 끝나고 릴리즈까지 지난 뒤부터 잰다. 울림 자체가 1.8초
+    // 짜리라 2초 뒤부터 재면 이미 다 잦아든 다음이라 양쪽 다 0 이 나온다.
+    let sum = 0;
+    for (let i = Math.floor(buf.sampleRate * 0.4); i < Math.floor(buf.sampleRate * 2); i++) {
+      sum += Math.abs(d[i]);
+    }
+    return sum;
+  };
+  const render = async () =>
+    tailEnergy(await renderProject(
+      window.__app.project,
+      () => window.__app.registry.soundfont.bankBuffer(),
+      window.__app.registry.folders.list,
+      window.__app.mixerState,
+    ));
+  const dry = await render();
+  window.__app.project.tracks[0].reverbSend = 1;
+  const wet = await render();
+  return { dry: +dry.toFixed(2), wet: +wet.toFixed(2) };
+});
+check(
+  "울림을 올리면 소리가 끝난 뒤에도 꼬리가 남는다",
+  dryTail.wet > dryTail.dry * 2,
+  dryTail,
+);
+
+// ---- 믹서 화면 ----
+await page.evaluate(() => (window.__app.project.tracks[0].reverbSend = 0));
+await page.locator("#mixer").click();
+await page.waitForTimeout(200);
+check("믹서 화면이 열린다", await page.locator("#mixer-modal").isVisible());
+const sliders = await page.locator("#mixer-list .mixslider input").count();
+check("트랙마다 음량·팬·울림 세 개가 있다", sliders === 3, sliders);
+await page.locator("#mixer-close").click();
+
+// ---- 되돌리기 ----
+const beforeUndo = await page.evaluate(() => window.__app.project.tracks[0].notes.length);
+const rollBox = await page.locator("#roll").boundingBox();
+await page.touchscreen.tap(rollBox.x + 200, rollBox.y + rollBox.height * 0.5);
+await page.waitForTimeout(200);
+const afterTap = await page.evaluate(() => window.__app.project.tracks[0].notes.length);
+check("노트를 찍으면 되돌리기 버튼이 살아난다",
+  afterTap === beforeUndo + 1 && !(await page.locator("#undo").isDisabled()),
+  { beforeUndo, afterTap });
+
+await page.locator("#undo").click();
+await page.waitForTimeout(200);
+const afterUndo = await page.evaluate(() => window.__app.project.tracks[0].notes.length);
+check("되돌리면 찍은 노트가 사라진다", afterUndo === beforeUndo, { afterUndo, beforeUndo });
+
+await page.locator("#redo").click();
+await page.waitForTimeout(200);
+const afterRedo = await page.evaluate(() => window.__app.project.tracks[0].notes.length);
+check("다시 실행하면 되살아난다", afterRedo === beforeUndo + 1, afterRedo);
+
+// 드래그 한 번은 되돌리기 한 번이어야 한다 (프레임마다 쌓이면 안 된다)
+const dragTarget = await page.evaluate(() => {
+  const a = window.__app.roll;
+  const n = window.__app.project.tracks[0].notes[0];
+  // 노트를 화면 안으로 가져온 뒤 좌표를 잰다. 스크롤이 딴 데 가 있으면
+  // 계산한 자리가 캔버스 밖이라 마우스가 노트에 닿지도 않는다.
+  // (재생 중에 followPlayhead 가 가로 스크롤을 옮겨 놓는다)
+  a.scrollToPitch(n.pitch);
+  a.scrollX = 0;
+  return {
+    x: 46 + n.start * a.pxPerBeat - a.scrollX + 8,
+    y: 26 + (127 - n.pitch) * a.keyHeight - a.scrollY + a.keyHeight / 2,
+    pitch: n.pitch,
+  };
+});
+await page.mouse.move(rollBox.x + dragTarget.x, rollBox.y + dragTarget.y);
+await page.mouse.down();
+for (let i = 1; i <= 12; i += 1) {
+  await page.mouse.move(rollBox.x + dragTarget.x + i * 8, rollBox.y + dragTarget.y + i * 3);
+  await page.waitForTimeout(12);
+}
+await page.mouse.up();
+await page.waitForTimeout(200);
+const movedPitch = await page.evaluate(() => window.__app.project.tracks[0].notes[0].pitch);
+await page.locator("#undo").click();
+await page.waitForTimeout(200);
+const restoredPitch = await page.evaluate(() => window.__app.project.tracks[0].notes[0].pitch);
+check(
+  "끌어서 옮긴 것은 되돌리기 한 번에 통째로 돌아온다",
+  movedPitch !== dragTarget.pitch && restoredPitch === dragTarget.pitch,
+  { 원래: dragTarget.pitch, 옮긴뒤: movedPitch, 되돌린뒤: restoredPitch },
+);
+
+// ---- 단축키 ----
+await page.locator("#roll").click({ position: { x: 5, y: 5 } });
+await page.keyboard.press("Space");
+await page.waitForTimeout(400);
+const playingBySpace = await page.evaluate(() => window.__app.scheduler.isPlaying);
+await page.keyboard.press("Space");
+await page.waitForTimeout(200);
+check(
+  "스페이스로 재생·정지가 된다",
+  playingBySpace && !(await page.evaluate(() => window.__app.scheduler.isPlaying)),
+  playingBySpace,
 );
 
 check("콘솔 오류 없음", errors.length === 0, errors);

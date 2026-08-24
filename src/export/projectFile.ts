@@ -57,6 +57,8 @@ function readTrack(raw: unknown, index: number): Track {
   track.volume = clamp(num(t.volume, 0.8), 0, 1);
   track.pan = clamp(num(t.pan, 0), -1, 1);
   track.muted = t.muted === true;
+  // 예전에 저장한 파일에는 없는 값이다. 없으면 울림 0.
+  track.reverbSend = clamp(num(t.reverbSend, 0), 0, 1);
   track.notes = Array.isArray(t.notes) ? (t.notes as unknown[]).map(readNote).filter(isNote) : [];
   sortNotes(track);
   return track;

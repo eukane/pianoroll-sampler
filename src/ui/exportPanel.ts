@@ -14,6 +14,7 @@ import { projectToJson, projectFromJson } from "../export/projectFile";
 import { audioBufferToWav, peakOf } from "../export/wav";
 import { onlyTrack, projectSeconds, renderProject } from "../export/render";
 import type { InstrumentRegistry } from "../audio/registry";
+import type { MixerState } from "../audio/mixerState";
 
 export type ExportCallbacks = {
   onStatus: (message: string, kind?: "info" | "error") => void;
@@ -27,6 +28,7 @@ export class ExportPanel {
   constructor(
     private getProject: () => Project,
     private registry: InstrumentRegistry,
+    private mixerState: MixerState,
     private cb: ExportCallbacks,
   ) {
     this.sheet = document.getElementById("export-modal") as HTMLDivElement;
@@ -90,7 +92,7 @@ export class ExportPanel {
     try {
       const seconds = projectSeconds(project);
       this.cb.onStatus(`WAV 만드는 중… (${seconds.toFixed(1)}초 분량)`);
-      const buffer = await renderProject(project, this.bankSource, this.registry.folders.list);
+      const buffer = await renderProject(project, this.bankSource, this.registry.folders.list, this.mixerState);
       this.warnIfSilent(buffer);
       download(audioBufferToWav(buffer), `${this.baseName()}.wav`);
       this.cb.onStatus(`${this.baseName()}.wav 를 저장했습니다`);
