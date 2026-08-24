@@ -14,6 +14,8 @@
  *   · 트랙을 늘리면 채널이 갈라지는가
  *   · 사운드폰트를 바꿔 끼우면 목록과 트랙이 따라오는가
  *   · 깨진 파일이 앱을 굳히지 않는가
+ *   · WAV / 트랙별 WAV / MIDI / 프로젝트가 실제로 내려받아지는가
+ *   · 내보낸 걸 다시 읽으면 노트가 그대로인가 (왕복)
  *   · 콘솔 오류가 하나도 없는가
  *
  * 쓰는 법: 다른 창에서 `npm run dev` 를 띄워 두고 `npm run smoke`.
@@ -21,6 +23,7 @@
  */
 
 import { chromium, devices } from "playwright";
+import { readFileSync } from "node:fs";
 
 const URL = process.env.SMOKE_URL ?? "http://127.0.0.1:5173/";
 const results = [];
@@ -32,7 +35,7 @@ const launchOptions = {
 if (process.env.CHROMIUM_PATH) launchOptions.executablePath = process.env.CHROMIUM_PATH;
 
 const browser = await chromium.launch(launchOptions);
-const context = await browser.newContext({ ...devices["Pixel 5"] });
+const context = await browser.newContext({ ...devices["Pixel 5"], acceptDownloads: true });
 const page = await context.newPage();
 
 const errors = [];
@@ -291,6 +294,129 @@ await page.waitForTimeout(1200);
 const playingOk = await page.evaluate(() => window.__app.scheduler.isPlaying);
 await page.locator("#play").click();
 check("사운드폰트로 여러 트랙이 재생된다", playingOk);
+
+// =========================================================== M3: 내보내기
+
+/** 버튼을 눌러 실제로 내려받고, 파일 내용을 돌려준다. */
+async function grab(buttonId, timeout = 60000) {
+  await page.locator("#export").click();
+  await page.waitForTimeout(120);
+  const [download] = await Promise.all([
+    page.waitForEvent("download", { timeout }),
+    page.locator(`#${buttonId}`).click(),
+  ]);
+  const path = await download.path();
+  return { name: download.suggestedFilename(), bytes: readFileSync(path) };
+}
+
+// 알기 쉬운 멜로디를 하나 심어 둔다 (앞의 검사들이 노트를 흩어 놨다)
+await page.evaluate(() => {
+  const p = window.__app.project;
+  p.bpm = 120;
+  p.bars = 2;
+  p.tracks.length = 1;
+  p.tracks[0].notes = [60, 62, 64, 65].map((pitch, i) => ({
+    id: "m" + i, pitch, start: i * 0.5, length: 0.5, velocity: 100,
+  }));
+  window.__app.scheduler.loopEnabled = false;
+});
+
+// ---- WAV ----
+const wav = await grab("save-wav");
+const wv = new DataView(wav.bytes.buffer, wav.bytes.byteOffset, wav.bytes.byteLength);
+const tagAt = (n) => String.fromCharCode(...wav.bytes.subarray(n, n + 4));
+let loudest = 0;
+for (let i = 44; i + 1 < wav.bytes.length; i += 2) loudest = Math.max(loudest, Math.abs(wv.getInt16(i, true)));
+check(
+  "WAV 가 내려받아진다 (44.1kHz · 16bit · 무음 아님)",
+  tagAt(0) === "RIFF" && tagAt(8) === "WAVE" &&
+    wv.getUint32(24, true) === 44100 && wv.getUint16(34, true) === 16 && loudest > 200,
+  { name: wav.name, kb: Math.round(wav.bytes.length / 1024), sr: wv.getUint32(24, true), bits: wv.getUint16(34, true), loudest },
+);
+
+// ---- MIDI ----
+const mid = await grab("save-midi");
+const mv = new DataView(mid.bytes.buffer, mid.bytes.byteOffset, mid.bytes.byteLength);
+check(
+  "MIDI 가 내려받아진다 (SMF 포맷 1)",
+  String.fromCharCode(...mid.bytes.subarray(0, 4)) === "MThd" && mv.getUint16(8) === 1,
+  { name: mid.name, bytes: mid.bytes.length, format: mv.getUint16(8) },
+);
+
+// ---- 트랙별 WAV(스템) ----
+await page.evaluate(() => {
+  const p = window.__app.project;
+  p.tracks.push({
+    id: "t2", name: "Tenor Sax", source: { kind: "sf2", presetId: 66 },
+    notes: [{ id: "x", pitch: 48, start: 0, length: 2, velocity: 100 }],
+    volume: 0.8, pan: 0, muted: false,
+  });
+});
+await page.locator("#export").click();
+await page.waitForTimeout(120);
+const stems = [];
+page.on("download", (d) => stems.push(d.suggestedFilename()));
+await page.locator("#save-stems").click();
+await page.waitForFunction(
+  () => (document.getElementById("status")?.textContent ?? "").includes("트랙별 WAV 2개"),
+  null,
+  { timeout: 90000 },
+);
+check("트랙별 WAV 가 트랙 수만큼 나온다", stems.length === 2, stems);
+
+// ---- 프로젝트 JSON 왕복 ----
+const before = await page.evaluate(() => JSON.stringify(window.__app.project.tracks.map(t => t.notes)));
+const json = await grab("save-json");
+await page.evaluate(() => {
+  // 다른 상태에서 열어야 진짜로 덮어썼는지 알 수 있다
+  window.__app.project.tracks.forEach((t) => (t.notes.length = 0));
+  window.__app.project.bpm = 90;
+});
+await page.locator("#export").click();
+await page.waitForTimeout(120);
+await page.locator("#import-file").setInputFiles({
+  name: json.name, mimeType: "application/json", buffer: json.bytes,
+});
+await page.waitForTimeout(600);
+const afterJson = await page.evaluate(() => ({
+  notes: JSON.stringify(window.__app.project.tracks.map(t => t.notes)),
+  bpm: window.__app.project.bpm,
+}));
+check("프로젝트를 저장했다가 열면 그대로 돌아온다",
+  afterJson.notes === before && afterJson.bpm === 120, { bpm: afterJson.bpm });
+
+// ---- MIDI 왕복 (화면을 통해) ----
+await page.evaluate(() => { window.__app.project.tracks.forEach((t) => (t.notes.length = 0)); });
+await page.locator("#export").click();
+await page.waitForTimeout(120);
+await page.locator("#import-file").setInputFiles({
+  name: mid.name, mimeType: "audio/midi", buffer: mid.bytes,
+});
+await page.waitForTimeout(600);
+const afterMidi = await page.evaluate(() => ({
+  pitches: window.__app.project.tracks[0].notes.map((n) => n.pitch),
+  starts: window.__app.project.tracks[0].notes.map((n) => n.start),
+  bpm: window.__app.project.bpm,
+}));
+check(
+  "내보낸 MIDI 를 다시 열면 노트와 BPM 이 살아 있다",
+  JSON.stringify(afterMidi.pitches) === JSON.stringify([60, 62, 64, 65]) &&
+    JSON.stringify(afterMidi.starts) === JSON.stringify([0, 0.5, 1, 1.5]) &&
+    afterMidi.bpm === 120,
+  afterMidi,
+);
+
+// ---- 노트가 없으면 빈 파일을 내려받게 두지 않는다 ----
+await page.evaluate(() => { window.__app.project.tracks.forEach((t) => (t.notes.length = 0)); });
+await page.locator("#export").click();
+await page.waitForTimeout(120);
+await page.locator("#save-wav").click();
+await page.waitForTimeout(400);
+check(
+  "노트가 없으면 빈 파일 대신 안내를 낸다",
+  (await page.locator("#status").textContent())?.includes("노트가 하나도 없습니다"),
+  await page.locator("#status").textContent(),
+);
 
 check("콘솔 오류 없음", errors.length === 0, errors);
 

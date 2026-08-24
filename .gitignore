@@ -14,3 +14,4 @@ dist/
 *.midi
 scripts/smoke.png
 public/spessasynth_processor.min.js
+fixtures/

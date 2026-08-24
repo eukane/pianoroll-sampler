@@ -32,6 +32,7 @@
         <div class="row">
           <button id="instrument" type="button">🎹 임시 신스</button>
           <button id="load-sf" type="button">📂 음원</button>
+          <button id="export" type="button">💾 내보내기</button>
           <input id="sf-file" type="file" accept=".sf2,.sf3,.dls" hidden />
           <span class="spacer"></span>
           <label>BPM <input id="bpm" type="number" min="20" max="300" step="1" value="100" /></label>
@@ -64,6 +65,34 @@
       <footer id="hint">
         탭=찍기 · 드래그=옮기기 · 오른쪽끝=길이 · 길게=삭제 · 두손가락=확대 · 위눈금=위치/루프
       </footer>
+    </div>
+
+    <div id="export-modal" class="hidden">
+      <div class="sheet">
+        <div class="sheet-head">
+          <b>내보내기 · 가져오기</b>
+          <button id="export-close" type="button">닫기</button>
+        </div>
+        <div class="sheet-body">
+          <button id="save-wav" class="big" type="button">
+            🎧 WAV 로 내보내기<small>전체 믹스 · 44.1kHz 16bit</small>
+          </button>
+          <button id="save-stems" class="big" type="button">
+            🎚️ 트랙별 WAV<small>트랙마다 따로 — 다른 DAW 에 얹을 때</small>
+          </button>
+          <button id="save-midi" class="big" type="button">
+            🎼 MIDI 로 내보내기<small>SMF 포맷 1 · 트랙당 1채널</small>
+          </button>
+          <button id="save-json" class="big" type="button">
+            💾 프로젝트 저장<small>나중에 이어서 하려면</small>
+          </button>
+          <hr />
+          <button id="open-file" class="big" type="button">
+            📂 열기<small>.mid 나 저장해 둔 .json</small>
+          </button>
+          <input id="import-file" type="file" accept=".mid,.midi,.json" hidden />
+        </div>
+      </div>
     </div>
 
     <div id="preset-modal" class="hidden">

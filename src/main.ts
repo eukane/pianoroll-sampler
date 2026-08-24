@@ -14,6 +14,7 @@ import { Scheduler } from "./audio/scheduler";
 import { beatsPerBar, emptyProject, totalBeats } from "./model/project";
 import { PianoRoll } from "./ui/pianoroll";
 import { InstrumentPanel } from "./ui/instrumentPanel";
+import { ExportPanel } from "./ui/exportPanel";
 
 const project = emptyProject();
 
@@ -163,6 +164,36 @@ const panel = new InstrumentPanel(project, registry, {
   onStatus: showStatus,
 });
 roll.activeTrack = panel.activeTrack;
+
+// -------------------------------------------------------- 내보내기 / 가져오기
+
+new ExportPanel(() => project, registry, {
+  onStatus: showStatus,
+  onProjectReplaced: (loaded) => {
+    // 통째로 갈아끼우지 않고 **같은 객체 안을 바꾼다.** 스케줄러·피아노롤·패널이
+    // 전부 이 객체를 붙들고 있어서, 새 객체로 바꾸면 옛것을 계속 보게 된다.
+    scheduler.stop();
+    Object.assign(project, loaded);
+
+    bpmInput.value = String(project.bpm);
+    barsInput.value = String(project.bars);
+    scheduler.loopStart = 0;
+    scheduler.loopEnd = totalBeats(project);
+    scheduler.seek(0);
+
+    panel.activeTrack = 0;
+    roll.activeTrack = 0;
+    panel.refresh();
+    roll.scrollToPitch(averagePitch(project) || 60);
+  },
+});
+
+/** 불러온 곡이 화면 밖에 있으면 안 보인다. 노트가 몰린 높이로 옮겨 준다. */
+function averagePitch(p: typeof project): number {
+  const notes = p.tracks.flatMap((t) => t.notes);
+  if (notes.length === 0) return 0;
+  return Math.round(notes.reduce((sum, n) => sum + n.pitch, 0) / notes.length);
+}
 
 $("zoom-in").addEventListener("click", () => roll.zoomBy(1.35));
 $("zoom-out").addEventListener("click", () => roll.zoomBy(1 / 1.35));

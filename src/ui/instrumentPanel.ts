@@ -13,7 +13,7 @@
 
 import type { Project } from "../model/types";
 import { emptyTrack } from "../model/project";
-import { MAX_CHANNELS } from "../audio/mixer";
+import { MAX_TRACKS, channelForTrack } from "../model/channels";
 import type { InstrumentRegistry } from "../audio/registry";
 import type { Preset } from "../audio/soundfont";
 
@@ -79,6 +79,13 @@ export class InstrumentPanel {
     this.renderInstrumentButton();
   }
 
+  /** 프로젝트가 통째로 바뀌었을 때 (파일 열기) 화면을 다시 맞춘다. */
+  refresh(): void {
+    this.resnapTracks();
+    this.renderTracks();
+    this.renderInstrumentButton();
+  }
+
   // ------------------------------------------------------------ 사운드폰트
 
   async loadFile(file: File): Promise<void> {
@@ -89,8 +96,7 @@ export class InstrumentPanel {
     const mb = (file.size / 1024 / 1024).toFixed(0);
     this.cb.onStatus(`${file.name} 읽는 중… (${mb}MB)`);
     try {
-      const buffer = await file.arrayBuffer();
-      await this.registry.soundfont.load(buffer, file.name);
+      await this.registry.soundfont.load(file);
       this.resnapTracks();
       this.cb.onSourceChange();
       this.renderTracks();
@@ -174,7 +180,7 @@ export class InstrumentPanel {
     if (!track) return;
     track.source = { kind: "sf2", presetId: preset.id };
     track.name = preset.name;
-    this.registry.prepare(track, this.activeTrack);
+    this.registry.prepare(track, channelForTrack(this.activeTrack));
     this.cb.onSourceChange();
     this.renderTracks();
     this.renderInstrumentButton();
@@ -202,7 +208,7 @@ export class InstrumentPanel {
       const preset = sf.findPreset(track.source.presetId) ?? fallback;
       track.source = { kind: "sf2", presetId: preset.id };
       track.name = preset.name;
-      this.registry.prepare(track, i);
+      this.registry.prepare(track, channelForTrack(i));
     });
   }
 
@@ -230,7 +236,7 @@ export class InstrumentPanel {
       this.trackStrip.appendChild(chip);
     });
 
-    if (this.project.tracks.length < MAX_CHANNELS) {
+    if (this.project.tracks.length < MAX_TRACKS) {
       const add = document.createElement("button");
       add.type = "button";
       add.className = "chip add";
@@ -249,9 +255,9 @@ export class InstrumentPanel {
   }
 
   private addTrack(): void {
-    if (this.project.tracks.length >= MAX_CHANNELS) {
-      // 채널 16개가 상한인 이유는 DECISIONS.md 참고 (MIDI 채널 = 트랙 = 개별 출력).
-      this.cb.onStatus(`트랙은 ${MAX_CHANNELS}개까지입니다`, "error");
+    if (this.project.tracks.length >= MAX_TRACKS) {
+      // 15개인 이유는 model/channels.ts 참고 (MIDI 채널 9번은 드럼 자리라 비운다).
+      this.cb.onStatus(`트랙은 ${MAX_TRACKS}개까지입니다`, "error");
       return;
     }
     const index = this.project.tracks.length;
@@ -262,7 +268,7 @@ export class InstrumentPanel {
       track.name = preset.name;
     }
     this.project.tracks.push(track);
-    this.registry.prepare(track, index);
+    this.registry.prepare(track, channelForTrack(index));
     this.selectTrack(index);
   }
 }

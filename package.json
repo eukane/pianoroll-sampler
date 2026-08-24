@@ -12,7 +12,8 @@
     "preview": "vite preview --host",
     "smoke": "node scripts/smoke.mjs",
     "gen-fixture": "node scripts/gen-fixture.mjs",
-    "presmoke": "npm run gen-fixture"
+    "presmoke": "npm run gen-fixture",
+    "midi": "node scripts/midi-roundtrip.mjs"
   },
   "devDependencies": {
     "playwright": "^1.49.0",
@@ -20,6 +21,7 @@
     "vite": "^5.4.10"
   },
   "dependencies": {
+    "spessasynth_core": "^4.3.20",
     "spessasynth_lib": "^4.3.14"
   }
 }

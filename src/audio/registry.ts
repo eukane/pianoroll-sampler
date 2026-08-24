@@ -45,6 +45,7 @@ export class InstrumentRegistry {
   /**
    * 연주 전에 채널을 트랙 설정대로 맞춰 둔다.
    * 노트마다 부르지 않고 트랙 설정이 바뀔 때만 부르면 된다.
+   * `channel` 은 트랙 번호가 아니라 **MIDI 채널**이다 (model/channels.ts).
    */
   prepare(track: Track, channel: number): void {
     if (track.source.kind === "sf2" && this.soundfont.isReady) {

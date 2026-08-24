@@ -22,6 +22,7 @@ import type { AudioEngine } from "./engine";
 import type { InstrumentRegistry } from "./registry";
 import type { Mixer } from "./mixer";
 import { totalBeats } from "../model/project";
+import { channelForTrack } from "../model/channels";
 
 const TICK_MS = 25;
 const LOOKAHEAD_SEC = 0.12;
@@ -92,7 +93,7 @@ export class Scheduler {
 
     this.buildEvents();
     // 채널마다 악기를 걸어 둔다. 노트마다 보내면 같은 메시지가 수백 번 나간다.
-    project.tracks.forEach((t, i) => this.registry.prepare(t, i));
+    project.tracks.forEach((t, i) => this.registry.prepare(t, channelForTrack(i)));
     this.startTime = this.engine.currentTime - (from - this.regionStart) * this.secPerBeat;
     this.passBase = this.startTime;
     this.evIdx = this.firstEventAtOrAfter(from);
@@ -219,9 +220,10 @@ export class Scheduler {
     }
     const durationSec = Math.max(0.02, lengthBeats * this.secPerBeat);
 
-    // 트랙 번호가 곧 MIDI 채널이고, 채널이 곧 믹서 입력이다.
-    this.mixer.set(ev.trackIndex, track.volume, track.pan, track.muted);
-    this.registry.forTrack(track).play(ev.pitch, ev.velocity, when, durationSec, ev.trackIndex);
+    // 트랙 번호와 MIDI 채널은 같지 않다 (9번은 드럼 자리라 건너뛴다).
+    const channel = channelForTrack(ev.trackIndex);
+    this.mixer.set(channel, track.volume, track.pan, track.muted);
+    this.registry.forTrack(track).play(ev.pitch, ev.velocity, when, durationSec, channel);
   }
 
   /** 노트를 찍거나 끌 때 한 번 들려주는 미리듣기. */
@@ -229,9 +231,10 @@ export class Scheduler {
     const project = this.getProject();
     const track = project.tracks[trackIndex];
     if (!track) return;
-    this.mixer.set(trackIndex, track.volume, track.pan, false);
-    this.registry.prepare(track, trackIndex);
+    const channel = channelForTrack(trackIndex);
+    this.mixer.set(channel, track.volume, track.pan, false);
+    this.registry.prepare(track, channel);
     const when = this.engine.currentTime + 0.005;
-    this.registry.forTrack(track).play(pitch, velocity, when, 0.25, trackIndex);
+    this.registry.forTrack(track).play(pitch, velocity, when, 0.25, channel);
   }
 }

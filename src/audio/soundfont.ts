@@ -13,6 +13,7 @@
 import { WorkletSynthesizer } from "spessasynth_lib";
 import type { Instrument } from "./instrument";
 import type { Mixer } from "./mixer";
+import { packPresetId, unpackPresetId } from "../model/preset";
 
 /** 화면에 뿌리는 프리셋 한 줄. */
 export type Preset = {
@@ -23,15 +24,6 @@ export type Preset = {
   bankLSB: number;
   name: string;
 };
-
-/** 뱅크와 프로그램을 presetId 하나로 묶는다 (모델의 source.presetId 가 number 라서). */
-export function packPresetId(bankMSB: number, program: number): number {
-  return bankMSB * 128 + program;
-}
-
-export function unpackPresetId(id: number): { bankMSB: number; program: number } {
-  return { bankMSB: Math.floor(id / 128), program: id % 128 };
-}
 
 /**
  * 사운드폰트 파일인지 앞 12바이트로 먼저 본다.
@@ -67,6 +59,12 @@ export class SoundFontInstrument implements Instrument {
    */
   private loaded = false;
   private loadedName = "";
+  /**
+   * 원본 파일을 들고 있는다. 내보내기(M3)에서 오프라인 렌더용으로 같은
+   * 사운드폰트를 **다시** 넘겨야 하는데, ArrayBuffer 를 복사해 두면 수백 MB 가
+   * 메모리에 그대로 남는다. File 은 디스크를 가리키는 손잡이라 거의 공짜다.
+   */
+  private sourceFile: File | null = null;
   private presets: Preset[] = [];
   /** 채널에 지금 걸려 있는 프리셋. 같은 값을 또 보내지 않으려고 들고 있는다. */
   private channelPreset = new Map<number, number>();
@@ -103,7 +101,15 @@ export class SoundFontInstrument implements Instrument {
    * 워크렛 파일은 번들러를 거치지 않고 **페이지 기준 URL** 로만 불러올 수 있어서
    * public/ 에 복사해 둔다 (scripts/copy-worklet.mjs).
    */
-  async load(buffer: ArrayBuffer, fileName: string): Promise<void> {
+  /** 내보낼 때 쓸 사운드폰트를 다시 읽어 온다. 없으면 null. */
+  async bankBuffer(): Promise<ArrayBuffer | null> {
+    if (!this.loaded || !this.sourceFile) return null;
+    return this.sourceFile.arrayBuffer();
+  }
+
+  async load(file: File): Promise<void> {
+    const buffer = await file.arrayBuffer();
+    const fileName = file.name;
     if (!looksLikeSoundBank(buffer)) {
       throw new Error("사운드폰트 파일이 아니거나 파일이 깨졌습니다 (RIFF/sfbk 헤더가 없습니다)");
     }
@@ -144,6 +150,7 @@ export class SoundFontInstrument implements Instrument {
     // 사운드폰트를 바꿔 끼우면 채널에 걸린 프리셋도 다시 보내야 한다.
     this.channelPreset.clear();
     this.loaded = true;
+    this.sourceFile = file;
   }
 
   /** 채널에 프리셋을 건다. 악기 교체가 실제로 일어나는 곳. */
