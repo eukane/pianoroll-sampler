@@ -93,9 +93,73 @@ M3 의 오프라인 렌더에서 실시간 이벤트 루프 없이 같은 코드
 
 ---
 
-## M2 예정 — SF2/SF3 재생 라이브러리 선정
+## M2
 
-후보: `spessasynth_lib`, `js-synthesizer`(libfluidsynth WASM), `smplr`.
-선정 기준: ① SF2 직접 로드 ② 오프라인 렌더 가능 ③ 모바일 사파리/크롬 동작.
-**M2 를 시작할 때 각 라이브러리의 현재 문서를 확인하고** 고른 이유를 여기에
-한 문단으로 남긴다.
+### SF2/SF3 재생은 `spessasynth_lib` 로 (v4.3.14, Apache-2.0)
+
+후보 셋의 현재 문서를 확인하고 골랐다. 기준은 ① SF2 직접 로드 ② 오프라인
+렌더 가능 ③ 모바일 사파리/크롬 동작.
+
+| | SF2 직접 로드 | 오프라인 렌더 | 비고 |
+| --- | --- | --- | --- |
+| **spessasynth_lib** | SF2·SF3·SFOGG·DLS | `OfflineAudioContext` 지원 명시 | Apache-2.0, 의존성 없음 |
+| js-synthesizer | SF2 (SF3 는 다른 빌드) | 프레임 직접 생성 가능 | 코어가 **LGPL v2.1** libfluidsynth WASM |
+| smplr | `Soundfont2Sampler` 로 가능 | 실시간 재생 위주, 명시 없음 | 범용 샘플러에 가깝다 |
+
+`js-synthesizer` 를 뺀 결정적인 이유는 라이선스다. 라이브러리 자체는
+BSD-3-Clause 지만 실제 소리를 내는 libfluidsynth WASM 이 LGPL v2.1 이다.
+개인용으로는 문제없지만 나중에 배포 형태를 바꿀 때 발목을 잡는다.
+spessasynth 는 Apache-2.0 한 장으로 끝난다.
+
+`smplr` 은 SF2 를 읽긴 하지만 오프라인 렌더가 명시돼 있지 않다. M3 의 WAV
+내보내기가 이 프로젝트의 핵심 기능이라 ②번을 만족 못 하면 탈락이다.
+
+### 확인한 것: 스케줄러를 갈아엎지 않아도 된다
+
+가장 걱정한 부분은 **타이밍**이었다. 샘플러의 noteOn 이 "지금 당장" 만
+된다면, M1 에서 만든 lookahead 스케줄러(절대 시각으로 예약)를 버리고
+setTimeout 으로 때려야 해서 박자가 흔들린다.
+
+문서에는 안 나와서 설치하고 타입 정의를 직접 읽었다
+(`node_modules/spessasynth_core/dist/index.d.ts:2951`).
+
+```ts
+interface SynthMethodOptions {
+  /** The audio context time when the event should execute, in seconds. */
+  time: number;
+}
+noteOn(channel, midiNote, velocity, eventOptions?: SynthMethodOptions): void
+```
+
+**절대 시각을 받는다.** M1 스케줄러가 계산한 `when` 을 그대로 넘기면 된다.
+`Instrument` 인터페이스도 그대로 두고 구현체만 갈아끼운다. 인터페이스를
+미리 갈라 둔 게 여기서 값을 했다.
+
+### 트랙 ↔ MIDI 채널 ↔ 개별 출력
+
+```ts
+connectIndividualOutputs(audioNodes: AudioNode[]): void  // 정확히 16개
+```
+
+MIDI 채널 16개의 출력을 **따로** 뽑을 수 있다. 그래서
+
+    트랙 n  →  MIDI 채널 n  →  개별 출력 n  →  트랙 게인/팬 → 마스터
+
+로 잇는다. 트랙마다 소리가 갈라져 있으니 M3 의 **트랙별 WAV(스템) 내보내기**
+와 M5 의 볼륨·팬·뮤트·솔로가 추가 작업 없이 이 배선 위에 얹힌다.
+
+대신 **트랙은 최대 16개**라는 제약이 따라온다. 스펙 요구는 최소 4트랙이라
+문제없고, 넘어가면 신스를 하나 더 띄우면 된다.
+
+### 악기 교체는 `programChange` 한 줄
+
+```ts
+programChange(channel, programNumber, { time })
+```
+
+노트 데이터는 손대지 않는다. 트랙의 `source.presetId` 를 바꾸고 채널에
+프로그램 체인지를 보내면 끝이다. "노트는 악기 정보를 갖지 않는다" 는
+M1 의 원칙이 여기서 그대로 값을 한다.
+
+프리셋 목록은 `synth.presetList: MIDIPatchFull[]` 로 이름·프로그램·뱅크가
+나온다. "sax" 검색은 이 목록을 이름으로 거르는 것이다.
