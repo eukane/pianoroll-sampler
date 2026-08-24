@@ -12,8 +12,10 @@
     "preview": "vite preview --host",
     "smoke": "node scripts/smoke.mjs",
     "gen-fixture": "node scripts/gen-fixture.mjs",
-    "presmoke": "npm run gen-fixture",
-    "midi": "node scripts/midi-roundtrip.mjs"
+    "presmoke": "npm run gen-fixture && npm run gen-samples",
+    "midi": "node scripts/midi-roundtrip.mjs",
+    "gen-samples": "node scripts/gen-samples.mjs",
+    "names": "node scripts/samplename-test.mjs"
   },
   "devDependencies": {
     "playwright": "^1.49.0",

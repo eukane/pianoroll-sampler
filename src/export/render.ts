@@ -32,11 +32,12 @@
 
 import { WorkletSynthesizer } from "spessasynth_lib";
 import { BasicMIDI } from "spessasynth_core";
-import type { Project } from "../model/types";
+import type { Project, Track } from "../model/types";
 import { totalBeats } from "../model/project";
 import { channelForTrack } from "../model/channels";
 import { Mixer } from "../audio/mixer";
 import { OscInstrument } from "../audio/oscInstrument";
+import { FolderSampler, type SampleFolder } from "../audio/folderSampler";
 import { projectToMidi } from "./midi";
 
 export const SAMPLE_RATE = 44100;
@@ -60,20 +61,62 @@ export function onlyTrack(project: Project, index: number): Project {
 /** 렌더할 때마다 새 버퍼를 내주는 함수. 없으면 null 을 돌려주면 된다. */
 export type SoundBankSource = () => Promise<ArrayBuffer | null>;
 
+/**
+ * 한 프로젝트에 사운드폰트 트랙과 샘플 폴더 트랙이 섞여 있을 수 있다.
+ * 둘은 렌더 방식이 완전히 달라서(하나는 MIDI 를 통째로 넘기고, 하나는 노트를
+ * 직접 꽂는다) **각각 렌더한 뒤 더한다.** 한 컨텍스트에 억지로 밀어 넣으면
+ * startOfflineRender 가 컨텍스트를 가져가 버려 나머지가 묻힌다.
+ */
 export async function renderProject(
   project: Project,
   getSoundBank: SoundBankSource,
+  folders: SampleFolder[] = [],
 ): Promise<AudioBuffer> {
-  const frames = Math.ceil(projectSeconds(project) * SAMPLE_RATE);
-  const ctx = new OfflineAudioContext(2, Math.max(1, frames), SAMPLE_RATE);
-
+  const frames = Math.max(1, Math.ceil(projectSeconds(project) * SAMPLE_RATE));
   const soundBank = await getSoundBank();
-  if (soundBank) {
-    await renderWithSoundFont(ctx, project, soundBank);
-  } else {
-    renderWithOscillator(ctx, project);
+
+  const isFolderTrack = (t: Track) => t.source.kind === "sampleFolder";
+  const sfTracks = project.tracks.filter((t) => !isFolderTrack(t));
+  const localTracks = project.tracks.filter(isFolderTrack);
+
+  const passes: AudioBuffer[] = [];
+
+  // 사운드폰트 트랙 (음원이 없으면 임시 신스로)
+  if (sfTracks.length > 0) {
+    const ctx = new OfflineAudioContext(2, frames, SAMPLE_RATE);
+    const part = { ...project, tracks: sfTracks };
+    if (soundBank) {
+      await renderWithSoundFont(ctx, part, soundBank);
+    } else {
+      renderLocally(ctx, part, project, []);
+    }
+    passes.push(await ctx.startRendering());
   }
-  return ctx.startRendering();
+
+  // 샘플 폴더 트랙
+  if (localTracks.length > 0) {
+    const ctx = new OfflineAudioContext(2, frames, SAMPLE_RATE);
+    renderLocally(ctx, { ...project, tracks: localTracks }, project, folders);
+    passes.push(await ctx.startRendering());
+  }
+
+  if (passes.length === 0) {
+    return new OfflineAudioContext(2, frames, SAMPLE_RATE).startRendering();
+  }
+  return passes.length === 1 ? passes[0] : mixDown(passes, frames);
+}
+
+/** 여러 번 나눠 렌더한 결과를 하나로 더한다. */
+function mixDown(buffers: AudioBuffer[], frames: number): AudioBuffer {
+  const out = buffers[0];
+  for (let c = 0; c < out.numberOfChannels; c += 1) {
+    const target = out.getChannelData(c);
+    for (let b = 1; b < buffers.length; b += 1) {
+      const src = buffers[b].getChannelData(Math.min(c, buffers[b].numberOfChannels - 1));
+      for (let i = 0; i < frames; i += 1) target[i] += src[i];
+    }
+  }
+  return out;
 }
 
 async function renderWithSoundFont(
@@ -94,22 +137,45 @@ async function renderWithSoundFont(
   });
 }
 
-/** 음원이 없을 때. 스케줄러 없이 모든 노트를 절대 시각으로 미리 꽂는다. */
-function renderWithOscillator(ctx: OfflineAudioContext, project: Project): void {
+/**
+ * 샘플 폴더와 임시 신스는 스케줄러 없이 모든 노트를 절대 시각으로 미리 꽂는다.
+ * 실시간 이벤트 루프가 필요 없는 게 `play(..., when)` 설계의 값이다 (M1 참고).
+ *
+ * `full` 은 원본 프로젝트다. 채널 번호를 원래 트랙 순서에서 뽑아야 트랙별
+ * 음량·팬이 실제 재생과 같아진다.
+ */
+function renderLocally(
+  ctx: OfflineAudioContext,
+  part: Project,
+  full: Project,
+  folders: SampleFolder[],
+): void {
   const master = ctx.createGain();
   master.gain.value = 0.9;
   master.connect(ctx.destination);
 
   const mixer = new Mixer(ctx, master);
-  const osc = new OscInstrument(ctx as unknown as AudioContext, mixer);
-  const secPerBeat = 60 / Math.max(1, project.bpm);
+  const osc = new OscInstrument(ctx, mixer);
+  const sampler = new FolderSampler(ctx, mixer);
+  sampler.adopt(folders);
 
-  project.tracks.forEach((track, index) => {
-    if (track.muted) return;
-    const channel = channelForTrack(index);
+  const secPerBeat = 60 / Math.max(1, part.bpm);
+
+  for (const track of part.tracks) {
+    if (track.muted) continue;
+    const channel = channelForTrack(Math.max(0, full.tracks.indexOf(track)));
     mixer.set(channel, track.volume, track.pan, false);
+
+    let instrument: OscInstrument | FolderSampler = osc;
+    if (track.source.kind === "sampleFolder") {
+      if (sampler.get(track.source.folderId)) {
+        sampler.setChannelFolder(channel, track.source.folderId);
+        instrument = sampler;
+      }
+    }
+
     for (const note of track.notes) {
-      osc.play(
+      instrument.play(
         note.pitch,
         note.velocity,
         note.start * secPerBeat,
@@ -117,7 +183,7 @@ function renderWithOscillator(ctx: OfflineAudioContext, project: Project): void 
         channel,
       );
     }
-  });
+  }
 }
 
 function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {

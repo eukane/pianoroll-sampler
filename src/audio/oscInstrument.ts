@@ -30,7 +30,7 @@ export class OscInstrument implements Instrument {
   private voices: Voice[] = [];
 
   constructor(
-    private ctx: AudioContext,
+    private ctx: BaseAudioContext,
     private mixer: Mixer,
     public waveform: Waveform = "sawtooth",
   ) {}

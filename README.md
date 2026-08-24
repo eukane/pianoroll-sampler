@@ -18,14 +18,25 @@ npm run dev        # 폰에서 볼 주소가 같이 찍힌다 (같은 와이파�
 
 ```bash
 npm run build      # 타입 검사 + 프로덕션 빌드
-npm run smoke      # 브라우저 자동 점검 29가지 (dev 서버를 띄워 둔 상태에서)
+npm run smoke      # 브라우저 자동 점검 36가지 (dev 서버를 띄워 둔 상태에서)
 npm run midi       # MIDI 왕복 점검 14가지 (브라우저 없이, 1초)
+npm run names      # 샘플 파일명 읽기 점검 19가지 (브라우저 없이)
 ```
 
 `npm run smoke` 는 테스트용 SF2 를 직접 만들어 쓴다(`scripts/gen-fixture.mjs`).
 1.2KB 짜리라 음원을 받지 않아도 프리셋 목록·검색·악기 교체 경로가 전부 돈다.
 
 ## 진행 상황
+
+### M4 — 커스텀 샘플 폴더 (가야금용) ✅
+
+- **이번에 된 것**: 낱개 WAV 를 폴더째로 넣으면 파일명에서 음높이를 읽어 자동
+  배치(`가야금_C4.wav` · `gayageum-60.wav` · `sax_A#3_mf.wav`), 못 알아들은
+  파일은 수동으로 건반 지정, **없는 음은 가장 가까운 샘플을 피치 시프트로**
+  채움, 세기 층(`_p`/`_mf`/`_f`) 인식, 릴리즈 꼬리.
+- **확인하는 법**: `🎹 악기이름` → `＋ 폴더 넣기` 로 단음 WAV 들을 고른다.
+  스무 개 남짓이면 두 옥타브가 연주된다.
+- **아직 아닌 것**: 믹서·리버브·실행취소는 M5.
 
 ### M3 — 내보내기 / 가져오기 ✅
 
@@ -59,7 +70,6 @@ npm run midi       # MIDI 왕복 점검 14가지 (브라우저 없이, 1초)
 
 | | 내용 |
 | --- | --- |
-| M4 | 폴더 샘플러 (국악기처럼 음 하나가 WAV 하나로 오는 음원) |
 | M5 | 볼륨·팬·뮤트·솔로, 리버브, 실행취소, 키보드 단축키 |
 
 ## 음원 구하는 곳
@@ -84,7 +94,8 @@ src/
   model/     Note · Track · Project (노트는 악기 정보를 갖지 않는다)
   audio/     engine(잠금해제) · scheduler(lookahead) · mixer(트랙별 배선)
              · instrument(인터페이스) · oscInstrument(음원 없을 때)
-             · soundfont(SF2 샘플러) · registry(악기 교체가 일어나는 유일한 지점)
+             · soundfont(SF2 샘플러) · folderSampler(낱개 WAV)
+             · registry(악기 교체가 일어나는 유일한 지점)
   ui/        pianoroll(캔버스 + 터치) · instrumentPanel(음원·프리셋·트랙)
              · exportPanel(내보내기·가져오기) · theme
   export/    midi(SMF 읽기·쓰기) · wav(16bit PCM) · render(오프라인 렌더)

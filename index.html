@@ -34,6 +34,7 @@
           <button id="load-sf" type="button">📂 음원</button>
           <button id="export" type="button">💾 내보내기</button>
           <input id="sf-file" type="file" accept=".sf2,.sf3,.dls" hidden />
+          <input id="sample-files" type="file" accept="audio/*,.wav" multiple hidden />
           <span class="spacer"></span>
           <label>BPM <input id="bpm" type="number" min="20" max="300" step="1" value="100" /></label>
           <label>마디 <input id="bars" type="number" min="1" max="64" step="1" value="4" /></label>
@@ -92,6 +93,17 @@
           </button>
           <input id="import-file" type="file" accept=".mid,.midi,.json" hidden />
         </div>
+      </div>
+    </div>
+
+    <div id="map-modal" class="hidden">
+      <div class="sheet">
+        <div class="sheet-head">
+          <b>건반 정하기</b>
+          <button id="map-close" type="button">닫기</button>
+        </div>
+        <p class="note" id="map-note"></p>
+        <div id="map-list" class="sheet-body"></div>
       </div>
     </div>
 

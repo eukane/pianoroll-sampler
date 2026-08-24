@@ -15,14 +15,17 @@ import type { Instrument } from "./instrument";
 import type { Mixer } from "./mixer";
 import { OscInstrument, type Waveform } from "./oscInstrument";
 import { SoundFontInstrument } from "./soundfont";
+import { FolderSampler } from "./folderSampler";
 
 export class InstrumentRegistry {
   readonly osc: OscInstrument;
   readonly soundfont: SoundFontInstrument;
+  readonly folders: FolderSampler;
 
   constructor(ctx: AudioContext, mixer: Mixer) {
     this.osc = new OscInstrument(ctx, mixer);
     this.soundfont = new SoundFontInstrument(ctx, mixer);
+    this.folders = new FolderSampler(ctx, mixer);
   }
 
   get usingSoundFont(): boolean {
@@ -38,7 +41,12 @@ export class InstrumentRegistry {
   }
 
   forTrack(track: Track): Instrument {
-    if (track.source.kind === "sf2" && this.soundfont.isReady) return this.soundfont;
+    if (track.source.kind === "sampleFolder") {
+      // 폴더가 아직 안 들어왔으면 임시 신스로. 소리가 아예 안 나면 사용자는
+      // 앱이 고장 난 줄 안다.
+      return this.folders.get(track.source.folderId) ? this.folders : this.osc;
+    }
+    if (this.soundfont.isReady) return this.soundfont;
     return this.osc;
   }
 
@@ -48,7 +56,11 @@ export class InstrumentRegistry {
    * `channel` 은 트랙 번호가 아니라 **MIDI 채널**이다 (model/channels.ts).
    */
   prepare(track: Track, channel: number): void {
-    if (track.source.kind === "sf2" && this.soundfont.isReady) {
+    if (track.source.kind === "sampleFolder") {
+      this.folders.setChannelFolder(channel, track.source.folderId);
+      return;
+    }
+    if (this.soundfont.isReady) {
       this.soundfont.setPreset(channel, track.source.presetId);
     }
   }
@@ -56,5 +68,6 @@ export class InstrumentRegistry {
   stopAll(): void {
     this.osc.stopAll();
     this.soundfont.stopAll();
+    this.folders.stopAll();
   }
 }

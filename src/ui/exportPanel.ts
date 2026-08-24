@@ -90,7 +90,7 @@ export class ExportPanel {
     try {
       const seconds = projectSeconds(project);
       this.cb.onStatus(`WAV 만드는 중… (${seconds.toFixed(1)}초 분량)`);
-      const buffer = await renderProject(project, this.bankSource);
+      const buffer = await renderProject(project, this.bankSource, this.registry.folders.list);
       this.warnIfSilent(buffer);
       download(audioBufferToWav(buffer), `${this.baseName()}.wav`);
       this.cb.onStatus(`${this.baseName()}.wav 를 저장했습니다`);
@@ -114,7 +114,7 @@ export class ExportPanel {
 
       for (const [n, { track, index }] of usable.entries()) {
         this.cb.onStatus(`트랙별 WAV ${n + 1}/${usable.length} — ${track.name}`);
-        const buffer = await renderProject(onlyTrack(project, index), this.bankSource);
+        const buffer = await renderProject(onlyTrack(project, index), this.bankSource, this.registry.folders.list);
         const safe = track.name.replace(/[^\w가-힣 -]/g, "").trim() || `track${index + 1}`;
         download(audioBufferToWav(buffer), `${index + 1}_${safe}.wav`);
         // 브라우저가 연속 다운로드를 막지 않게 한 박자 쉰다.
@@ -179,6 +179,11 @@ export class ExportPanel {
     const total = project.tracks.reduce((n, t) => n + t.notes.length, 0);
     if (total > 0) return true;
     // 빈 파일을 내려받게 두면 사용자는 앱이 고장 났다고 생각한다.
+    //
+    // 시트를 닫고 나서 알린다. 안내는 화면 아래쪽에 뜨는데 시트가 그 위를
+    // 덮고 있어서, 열어 둔 채로 알리면 **아무것도 안 보인다.** 버튼을 눌렀는데
+    // 반응이 없는 것과 똑같아진다.
+    this.close();
     this.cb.onStatus("노트가 하나도 없습니다. 먼저 격자를 눌러 찍어 주세요.", "error");
     return false;
   }

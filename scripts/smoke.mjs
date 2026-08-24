@@ -16,6 +16,7 @@
  *   · 깨진 파일이 앱을 굳히지 않는가
  *   · WAV / 트랙별 WAV / MIDI / 프로젝트가 실제로 내려받아지는가
  *   · 내보낸 걸 다시 읽으면 노트가 그대로인가 (왕복)
+ *   · 낱개 WAV 폴더를 넣으면 건반에 놓이고 없는 음은 채워지는가
  *   · 콘솔 오류가 하나도 없는가
  *
  * 쓰는 법: 다른 창에서 `npm run dev` 를 띄워 두고 `npm run smoke`.
@@ -23,7 +24,7 @@
  */
 
 import { chromium, devices } from "playwright";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 
 const URL = process.env.SMOKE_URL ?? "http://127.0.0.1:5173/";
 const results = [];
@@ -416,6 +417,135 @@ check(
   "노트가 없으면 빈 파일 대신 안내를 낸다",
   (await page.locator("#status").textContent())?.includes("노트가 하나도 없습니다"),
   await page.locator("#status").textContent(),
+);
+
+// =========================================================== M4: 폴더 샘플러
+
+// 경로가 아니라 내용으로 넘긴다. playwright 가 한글 파일명을 경로로 받으면
+// 조용히 흘려서 ASCII 이름만 도착한다 (앱이 아니라 테스트 도구 쪽 한계다).
+const sampleFiles = readdirSync("fixtures/samples").map((f) => ({
+  name: f,
+  mimeType: "audio/wav",
+  buffer: readFileSync(`fixtures/samples/${f}`),
+}));
+
+// 새 트랙에 폴더를 넣는다
+await page.evaluate(() => {
+  document.getElementById("export-modal")?.classList.add("hidden");
+  const p = window.__app.project;
+  p.tracks.length = 1;
+  p.tracks[0].notes = [];
+  window.__app.panel.activeTrack = 0;
+});
+await page.locator("#instrument").click();
+await page.waitForTimeout(150);
+await page.locator("#sample-files").setInputFiles(sampleFiles);
+await page.waitForFunction(() => window.__app.registry.folders.list.length > 0, null, { timeout: 20000 });
+await page.waitForTimeout(400);
+
+const folder = await page.evaluate(() => {
+  const f = window.__app.registry.folders.list[0];
+  return {
+    name: f.name,
+    mapped: f.mapped.length,
+    unmapped: f.unmapped.map((e) => e.fileName),
+    range: f.range,
+    trackSource: window.__app.project.tracks[0].source,
+    trackName: window.__app.project.tracks[0].name,
+  };
+});
+check(
+  "낱개 WAV 폴더를 넣으면 파일명대로 건반에 놓인다",
+  folder.mapped === 10 && folder.name === "가야금" && folder.trackSource.kind === "sampleFolder",
+  folder,
+);
+check(
+  "이름으로 음높이를 모르는 파일은 버리지 않고 따로 세운다",
+  folder.unmapped.length === 1 && folder.unmapped[0] === "녹음본.wav",
+  folder.unmapped,
+);
+check(
+  "그 파일들을 정하라고 건반 화면을 띄운다",
+  await page.locator("#map-modal").isVisible(),
+);
+
+// 수동으로 건반 정하기
+await page.locator("#map-list select").first().selectOption("64");
+await page.waitForTimeout(200);
+const afterMap = await page.evaluate(() => ({
+  mapped: window.__app.registry.folders.list[0].mapped.length,
+  unmapped: window.__app.registry.folders.list[0].unmapped.length,
+}));
+check("건반을 골라 주면 그 샘플도 쓰인다", afterMap.mapped === 11 && afterMap.unmapped === 0, afterMap);
+await page.locator("#map-close").click();
+
+// 두 옥타브가 실제로 소리 나는가 — 샘플이 없는 음은 피치 시프트로 채워야 한다
+const coverage = await page.evaluate(() => {
+  const f = window.__app.registry.folders.list[0];
+  const out = { covered: 0, total: 0, exact: 0 };
+  for (let pitch = 48; pitch <= 72; pitch += 1) {
+    out.total += 1;
+    const hit = f.pick(pitch, 100);
+    if (hit) {
+      out.covered += 1;
+      if (hit.pitch === pitch) out.exact += 1;
+    }
+  }
+  return out;
+});
+check(
+  "샘플이 없는 음도 가장 가까운 것으로 채운다 (두 옥타브 전부)",
+  coverage.covered === coverage.total && coverage.exact < coverage.total,
+  coverage,
+);
+
+// 폴더 악기로 실제 렌더가 되는가
+await page.evaluate(() => {
+  const t = window.__app.project.tracks[0];
+  t.notes = [60, 62, 64, 65, 67].map((pitch, i) => ({
+    id: "g" + i, pitch, start: i * 0.5, length: 0.5, velocity: 100,
+  }));
+  window.__app.project.bpm = 120;
+  window.__app.project.bars = 2;
+});
+const folderRender = await page.evaluate(async () => {
+  const { renderProject } = await import("/src/export/render.ts");
+  const { peakOf } = await import("/src/export/wav.ts");
+  const buf = await renderProject(
+    window.__app.project,
+    () => window.__app.registry.soundfont.bankBuffer(),
+    window.__app.registry.folders.list,
+  );
+  return { peak: +peakOf(buf).toFixed(4) };
+});
+check("폴더 악기도 WAV 로 렌더된다 (무음 아님)", folderRender.peak > 0.01, folderRender);
+
+// 사운드폰트 트랙 + 폴더 트랙이 섞여도 둘 다 들어가는가
+const mixedRender = await page.evaluate(async () => {
+  const { renderProject } = await import("/src/export/render.ts");
+  const { peakOf } = await import("/src/export/wav.ts");
+  const p = window.__app.project;
+  p.tracks.push({
+    id: "sf", name: "Marimba", source: { kind: "sf2", presetId: 12 },
+    notes: [{ id: "sf1", pitch: 48, start: 0, length: 2, velocity: 110 }],
+    volume: 0.8, pan: 0, muted: false,
+  });
+  const only = await renderProject(
+    { ...p, tracks: [p.tracks[0]] },
+    () => window.__app.registry.soundfont.bankBuffer(),
+    window.__app.registry.folders.list,
+  );
+  const both = await renderProject(
+    p,
+    () => window.__app.registry.soundfont.bankBuffer(),
+    window.__app.registry.folders.list,
+  );
+  return { onlyFolder: +peakOf(only).toFixed(4), mixed: +peakOf(both).toFixed(4) };
+});
+check(
+  "사운드폰트 트랙과 폴더 트랙이 섞여도 둘 다 소리가 난다",
+  mixedRender.mixed > mixedRender.onlyFolder,
+  mixedRender,
 );
 
 check("콘솔 오류 없음", errors.length === 0, errors);

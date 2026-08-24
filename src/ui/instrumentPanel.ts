@@ -16,6 +16,8 @@ import { emptyTrack } from "../model/project";
 import { MAX_TRACKS, channelForTrack } from "../model/channels";
 import type { InstrumentRegistry } from "../audio/registry";
 import type { Preset } from "../audio/soundfont";
+import type { SampleFolder } from "../audio/folderSampler";
+import { midiToName } from "../util/music";
 
 export type PanelCallbacks = {
   onTrackChange: (index: number) => void;
@@ -30,7 +32,10 @@ export class InstrumentPanel {
   private trackStrip: HTMLDivElement;
   private instrumentBtn: HTMLButtonElement;
   private fileInput: HTMLInputElement;
+  private sampleInput: HTMLInputElement;
+  private mapModal: HTMLDivElement;
   private query = "";
+  private folderSeq = 0;
 
   activeTrack = 0;
 
@@ -45,6 +50,8 @@ export class InstrumentPanel {
     this.trackStrip = document.getElementById("tracks") as HTMLDivElement;
     this.instrumentBtn = document.getElementById("instrument") as HTMLButtonElement;
     this.fileInput = document.getElementById("sf-file") as HTMLInputElement;
+    this.sampleInput = document.getElementById("sample-files") as HTMLInputElement;
+    this.mapModal = document.getElementById("map-modal") as HTMLDivElement;
 
     this.instrumentBtn.addEventListener("click", () => this.openPicker());
     (document.getElementById("preset-close") as HTMLButtonElement).addEventListener("click", () =>
@@ -65,6 +72,18 @@ export class InstrumentPanel {
       const file = this.fileInput.files?.[0];
       if (file) void this.loadFile(file);
       this.fileInput.value = "";
+    });
+
+    this.sampleInput.addEventListener("change", () => {
+      const files = [...(this.sampleInput.files ?? [])];
+      if (files.length > 0) void this.loadSampleFolder(files);
+      this.sampleInput.value = "";
+    });
+    (document.getElementById("map-close") as HTMLButtonElement).addEventListener("click", () =>
+      this.mapModal.classList.add("hidden"),
+    );
+    this.mapModal.addEventListener("click", (e) => {
+      if (e.target === this.mapModal) this.mapModal.classList.add("hidden");
     });
 
     // 드래그해서 떨어뜨리기 (PC)
@@ -131,15 +150,20 @@ export class InstrumentPanel {
     this.listEl.textContent = "";
 
     if (presets.length === 0) {
+      this.renderFolderRows();
       const empty = document.createElement("div");
       empty.className = "empty";
       empty.innerHTML =
-        "아직 음원이 없습니다.<br><b>📂 음원</b> 을 눌러 <code>.sf2</code> 파일을 넣으세요." +
-        "<br><small>General MIDI 사운드폰트 하나면 색소폰까지 128개 악기가 들어 있습니다." +
-        " 지금은 임시 신스 소리로 납니다.</small>";
+        "아직 사운드폰트가 없습니다.<br><b>📂 음원</b> 으로 <code>.sf2</code> 를 넣거나," +
+        " 위의 <b>폴더 넣기</b> 로 낱개 WAV 를 넣으세요." +
+        "<br><small>가야금·해금 같은 국악기는 음 하나가 WAV 하나로 오기 때문에 폴더 쪽입니다." +
+        " 아무것도 없으면 임시 신스 소리로 납니다.</small>";
       this.listEl.appendChild(empty);
       return;
     }
+
+    // 샘플 폴더를 목록 맨 위에 놓는다. 국악기는 이쪽으로만 들어온다.
+    this.renderFolderRows();
 
     const q = this.query;
     const matched = q ? presets.filter((p) => p.name.toLowerCase().includes(q)) : presets;
@@ -172,6 +196,132 @@ export class InstrumentPanel {
       more.textContent = `…외 ${matched.length - shown.length}개. 검색해서 좁혀 보세요.`;
       this.listEl.appendChild(more);
     }
+  }
+
+  // -------------------------------------------------------- 샘플 폴더 (M4)
+
+  private renderFolderRows(): void {
+    // 검색 중에는 '폴더 넣기' 를 띄우지 않는다. 검색 결과는 **찾은 악기**만
+    // 나와야지 거기에 버튼이 섞이면 "이것도 색소폰인가?" 가 된다.
+    if (!this.query) {
+      const add = document.createElement("button");
+      add.type = "button";
+      add.className = "preset folder";
+      add.innerHTML = '<span class="pname"></span><span class="badge">WAV</span>';
+      (add.querySelector(".pname") as HTMLSpanElement).textContent = "＋ 폴더 넣기 (낱개 WAV)";
+      add.addEventListener("click", () => this.sampleInput.click());
+      this.listEl.appendChild(add);
+    }
+
+    const current = this.project.tracks[this.activeTrack]?.source;
+    // 폴더도 이름으로 검색된다 — "가야금" 을 치면 찾을 수 있어야 한다.
+    const folders = this.query
+      ? this.registry.folders.list.filter((f) => f.name.toLowerCase().includes(this.query))
+      : this.registry.folders.list;
+    for (const folder of folders) {
+      const row = document.createElement("button");
+      row.type = "button";
+      const chosen = current?.kind === "sampleFolder" && current.folderId === folder.id;
+      row.className = "preset folder" + (chosen ? " current" : "");
+
+      const range = folder.range;
+      const detail = range
+        ? `${midiToName(range.low)}~${midiToName(range.high)}`
+        : "건반 미정";
+      const missing = folder.unmapped.length;
+      row.innerHTML = '<span class="pname"></span><span class="pnum"></span>';
+      (row.querySelector(".pname") as HTMLSpanElement).textContent =
+        `${folder.name} (${folder.mapped.length}개)`;
+      (row.querySelector(".pnum") as HTMLSpanElement).textContent =
+        missing > 0 ? `${detail} · 미정 ${missing}` : detail;
+
+      row.addEventListener("click", () => this.chooseFolder(folder));
+      this.listEl.appendChild(row);
+    }
+  }
+
+  private async loadSampleFolder(files: File[]): Promise<void> {
+    const audio = files.filter((f) => /\.(wav|mp3|ogg|flac|m4a|aiff?)$/i.test(f.name));
+    if (audio.length === 0) {
+      this.cb.onStatus("소리 파일이 없습니다. WAV 가 들어 있는 폴더를 골라 주세요.", "error");
+      return;
+    }
+
+    this.cb.onStatus(`${audio.length}개 읽는 중…`);
+    this.folderSeq += 1;
+    const id = `folder${this.folderSeq}`;
+    try {
+      const { folder, failed } = await this.registry.folders.addFolder(id, audio);
+      this.chooseFolder(folder);
+
+      const parts = [`${folder.name} — ${folder.mapped.length}개 배치`];
+      if (folder.unmapped.length > 0) parts.push(`건반 미정 ${folder.unmapped.length}개`);
+      if (failed.length > 0) parts.push(`읽지 못함 ${failed.length}개`);
+      this.cb.onStatus(parts.join(" · "), failed.length > 0 ? "error" : "info");
+
+      // 자동으로 못 맞춘 게 있으면 바로 정하게 띄운다. 나중에 찾아 들어가라고
+      // 하면 아무도 안 한다.
+      if (folder.unmapped.length > 0) this.openMapping(folder);
+    } catch (err) {
+      this.cb.onStatus(
+        `샘플을 읽지 못했습니다: ${err instanceof Error ? err.message : String(err)}`,
+        "error",
+      );
+    }
+  }
+
+  private chooseFolder(folder: SampleFolder): void {
+    const track = this.project.tracks[this.activeTrack];
+    if (!track) return;
+    track.source = { kind: "sampleFolder", folderId: folder.id };
+    track.name = folder.name;
+    this.registry.prepare(track, channelForTrack(this.activeTrack));
+    this.cb.onSourceChange();
+    this.renderTracks();
+    this.renderInstrumentButton();
+    this.closePicker();
+    this.cb.onStatus(`${this.activeTrack + 1}번 트랙 → ${folder.name}`);
+  }
+
+  /** 파일명으로 못 알아들은 샘플을 사람이 직접 건반에 놓는 화면. */
+  private openMapping(folder: SampleFolder): void {
+    const list = document.getElementById("map-list") as HTMLDivElement;
+    const note = document.getElementById("map-note") as HTMLParagraphElement;
+    list.textContent = "";
+    note.textContent =
+      `${folder.name}: 파일 이름으로 음높이를 알아내지 못한 ${folder.unmapped.length}개입니다.` +
+      " 어느 건반의 소리인지 골라 주세요. 비워 두면 그 파일은 쓰이지 않습니다.";
+
+    for (const entry of folder.unmapped) {
+      const row = document.createElement("div");
+      row.className = "maprow";
+
+      const name = document.createElement("span");
+      name.textContent = entry.fileName;
+
+      const select = document.createElement("select");
+      const none = document.createElement("option");
+      none.value = "";
+      none.textContent = "안 씀";
+      select.appendChild(none);
+      // 사람이 쓸 만한 범위만. 128개를 다 넣으면 폰에서 고를 수가 없다.
+      for (let pitch = 24; pitch <= 96; pitch += 1) {
+        const option = document.createElement("option");
+        option.value = String(pitch);
+        option.textContent = midiToName(pitch);
+        select.appendChild(option);
+      }
+      select.addEventListener("change", () => {
+        entry.pitch = select.value === "" ? null : Number(select.value);
+        this.cb.onSourceChange();
+        this.renderTracks();
+      });
+
+      row.append(name, select);
+      list.appendChild(row);
+    }
+
+    this.mapModal.classList.remove("hidden");
   }
 
   /** 악기 교체. **노트는 손대지 않는다.** */
