@@ -20,7 +20,13 @@ export type Note = {
   velocity: number; // 0..127
 };
 
-/** 트랙이 어떤 음원을 쓰는지. M2 에서 sf2, M4 에서 sampleFolder 가 실제로 붙는다. */
+/**
+ * 트랙이 어떤 음원을 쓰는지. M4 에서 sampleFolder 가 붙는다.
+ *
+ * `presetId` 는 뱅크와 프로그램을 한 숫자로 묶은 값이다 (bankMSB * 128 + program).
+ * 모델이 숫자 하나만 허용해서 이렇게 눌러 담았다. 푸는 건 audio/soundfont.ts 의
+ * packPresetId / unpackPresetId.
+ */
 export type TrackSource =
   | { kind: "sf2"; presetId: number }
   | { kind: "sampleFolder"; folderId: string };

@@ -20,6 +20,7 @@
 import type { Project } from "../model/types";
 import type { AudioEngine } from "./engine";
 import type { InstrumentRegistry } from "./registry";
+import type { Mixer } from "./mixer";
 import { totalBeats } from "../model/project";
 
 const TICK_MS = 25;
@@ -33,8 +34,6 @@ type Event = {
   length: number; // 박
 };
 
-type TrackNodes = { gain: GainNode; pan: StereoPannerNode };
-
 export class Scheduler {
   private playing = false;
   private timer: number | null = null;
@@ -47,7 +46,6 @@ export class Scheduler {
   private regionStart = 0;
   private regionEnd = 0;
 
-  private trackNodes = new Map<string, TrackNodes>();
   private stoppedAt = 0; // 정지 상태에서 헤드를 그릴 위치(박)
 
   loopEnabled = false;
@@ -59,6 +57,7 @@ export class Scheduler {
   constructor(
     private engine: AudioEngine,
     private registry: InstrumentRegistry,
+    private mixer: Mixer,
     private getProject: () => Project,
   ) {}
 
@@ -92,6 +91,8 @@ export class Scheduler {
     if (from < this.regionStart || from >= this.regionEnd) from = this.regionStart;
 
     this.buildEvents();
+    // 채널마다 악기를 걸어 둔다. 노트마다 보내면 같은 메시지가 수백 번 나간다.
+    project.tracks.forEach((t, i) => this.registry.prepare(t, i));
     this.startTime = this.engine.currentTime - (from - this.regionStart) * this.secPerBeat;
     this.passBase = this.startTime;
     this.evIdx = this.firstEventAtOrAfter(from);
@@ -218,32 +219,19 @@ export class Scheduler {
     }
     const durationSec = Math.max(0.02, lengthBeats * this.secPerBeat);
 
-    const nodes = this.nodesFor(track.id, track.volume, track.pan);
-    this.registry.forTrack(track).play(ev.pitch, ev.velocity, when, durationSec, nodes.gain);
-  }
-
-  private nodesFor(trackId: string, volume: number, pan: number): TrackNodes {
-    let nodes = this.trackNodes.get(trackId);
-    if (!nodes) {
-      const gain = this.engine.ctx.createGain();
-      const panner = this.engine.ctx.createStereoPanner();
-      gain.connect(panner);
-      panner.connect(this.engine.master);
-      nodes = { gain, pan: panner };
-      this.trackNodes.set(trackId, nodes);
-    }
-    nodes.gain.gain.value = volume;
-    nodes.pan.pan.value = pan;
-    return nodes;
+    // 트랙 번호가 곧 MIDI 채널이고, 채널이 곧 믹서 입력이다.
+    this.mixer.set(ev.trackIndex, track.volume, track.pan, track.muted);
+    this.registry.forTrack(track).play(ev.pitch, ev.velocity, when, durationSec, ev.trackIndex);
   }
 
   /** 노트를 찍거나 끌 때 한 번 들려주는 미리듣기. */
-  preview(pitch: number, velocity = 100): void {
+  preview(pitch: number, trackIndex = 0, velocity = 100): void {
     const project = this.getProject();
-    const track = project.tracks[0];
+    const track = project.tracks[trackIndex];
     if (!track) return;
-    const nodes = this.nodesFor(track.id, track.volume, track.pan);
+    this.mixer.set(trackIndex, track.volume, track.pan, false);
+    this.registry.prepare(track, trackIndex);
     const when = this.engine.currentTime + 0.005;
-    this.registry.forTrack(track).play(pitch, velocity, when, 0.18, nodes.gain);
+    this.registry.forTrack(track).play(pitch, velocity, when, 0.25, trackIndex);
   }
 }

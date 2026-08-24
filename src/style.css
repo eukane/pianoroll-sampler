@@ -177,3 +177,143 @@ input[type="number"] {
   font-size: 12px;
   line-height: 1.6;
 }
+
+/* ---------------------------------------------------------------- 트랙 칩 */
+
+.chip {
+  min-height: 30px;
+  min-width: 0;
+  padding: 0 10px;
+  font-size: 12px;
+  border-radius: 15px;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chip.on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #0d1014;
+  font-weight: 700;
+}
+
+.chip.add {
+  min-width: 36px;
+  padding: 0;
+}
+
+/* -------------------------------------------------------------- 악기 목록 */
+
+#preset-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  background: rgba(8, 10, 14, 0.62);
+}
+
+#preset-modal.hidden {
+  display: none;
+}
+
+.sheet {
+  width: 100%;
+  max-width: 560px;
+  max-height: 78dvh;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 16px 16px 0 0;
+  padding: 10px 10px calc(10px + env(safe-area-inset-bottom));
+}
+
+.sheet-head {
+  display: flex;
+  gap: 8px;
+  padding-bottom: 8px;
+}
+
+.sheet-head input {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 40px;
+}
+
+#preset-list {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.preset {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 44px;
+  margin-bottom: 4px;
+  text-align: left;
+  background: #20242e;
+}
+
+.preset.current {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.preset .pname {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.preset .pnum {
+  flex: none;
+  font-size: 11px;
+  color: var(--dim);
+  font-variant-numeric: tabular-nums;
+}
+
+#preset-list .empty {
+  padding: 20px 12px;
+  color: var(--dim);
+  font-size: 13px;
+  line-height: 1.7;
+  text-align: center;
+}
+
+#preset-list .empty code {
+  background: #20242e;
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+
+/* ------------------------------------------------------------------ 알림 */
+
+#status {
+  flex: none;
+  padding: 7px 12px;
+  font-size: 12px;
+  background: #1d2733;
+  color: #b8c6da;
+  border-top: 1px solid var(--line);
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#status.error {
+  background: #3a2126;
+  color: #ffb4b4;
+}
+
+#status.hidden {
+  display: none;
+}

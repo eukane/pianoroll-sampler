@@ -9,6 +9,9 @@
  *   · 길게 누르면 지워지는가
  *   · 재생 헤드가 BPM 에 맞는 속도로 나아가는가
  *   · 루프 구간을 벗어나지 않고 되돌아오는가
+ *   · SF2 를 읽고 프리셋 목록·검색이 되는가
+ *   · **악기를 바꿔도 노트 데이터가 그대로인가** (M2 의 핵심)
+ *   · 트랙을 늘리면 채널이 갈라지는가
  *   · 콘솔 오류가 하나도 없는가
  *
  * 쓰는 법: 다른 창에서 `npm run dev` 를 띄워 두고 `npm run smoke`.
@@ -164,6 +167,74 @@ check(
   { wraps, max: Math.max(...samples).toFixed(3) },
 );
 check("정지 버튼으로 실제로 멈춘다", !(await page.evaluate(() => window.__app.scheduler.isPlaying)));
+
+// =========================================================== M2: 샘플러
+
+// 사운드폰트 넣기 (실제 사용자 경로 그대로: 파일 선택 → ArrayBuffer → 로드)
+await page.locator("#sf-file").setInputFiles("fixtures/test.sf2");
+await page.waitForFunction(() => window.__app.registry.usingSoundFont, null, { timeout: 15000 });
+const presetCount = await page.evaluate(() => window.__app.registry.soundfont.presetList.length);
+check("SF2 를 읽고 프리셋 목록이 나온다", presetCount === 7, presetCount);
+
+// 악기 목록 열기 = 첫 번째 탭
+await page.locator("#instrument").click();
+await page.waitForTimeout(150);
+check("악기 버튼 한 번에 목록이 열린다", await page.locator("#preset-modal").isVisible());
+
+// 검색이 목록을 좁히는가
+await page.locator("#preset-search").fill("sax");
+await page.waitForTimeout(150);
+const saxRows = await page.locator("#preset-list .preset").count();
+const saxNames = await page.locator("#preset-list .preset .pname").allTextContents();
+check('"sax" 검색이 색소폰만 남긴다', saxRows === 4, saxNames);
+
+// ---- M2 완료 기준: 두 번째 탭으로 악기가 바뀌고 노트는 그대로 ----
+const notesBefore = await page.evaluate(() =>
+  JSON.stringify(window.__app.project.tracks[0].notes),
+);
+const sourceBefore = await page.evaluate(() => ({ ...window.__app.project.tracks[0].source }));
+
+await page.locator("#preset-list .preset", { hasText: "Alto Sax" }).click();
+await page.waitForTimeout(200);
+
+const notesAfter = await page.evaluate(() =>
+  JSON.stringify(window.__app.project.tracks[0].notes),
+);
+const sourceAfter = await page.evaluate(() => ({ ...window.__app.project.tracks[0].source }));
+check(
+  "두 번 탭으로 악기가 바뀐다 (알토 색소폰)",
+  sourceAfter.presetId === 65 && sourceAfter.presetId !== sourceBefore.presetId,
+  { sourceBefore, sourceAfter },
+);
+check(
+  "악기를 바꿔도 노트 데이터는 한 글자도 안 바뀐다",
+  notesBefore === notesAfter,
+  notesBefore === notesAfter ? undefined : { notesBefore, notesAfter },
+);
+check("목록이 닫히고 악기 이름이 반영된다", (await page.locator("#instrument").textContent())?.includes("Alto Sax"));
+
+// ---- 다중 트랙 ----
+await page.locator(".chip.add").click();
+await page.waitForTimeout(150);
+const trackCount = await page.evaluate(() => window.__app.project.tracks.length);
+check("트랙을 늘릴 수 있다", trackCount === 2, trackCount);
+
+// 2번 트랙에 노트를 찍고 두 트랙 동시 재생
+await page.touchscreen.tap(box.x + 140, box.y + box.height * 0.6);
+await page.waitForTimeout(100);
+const perTrack = await page.evaluate(() =>
+  window.__app.project.tracks.map((t) => t.notes.length),
+);
+check("새 노트는 선택된 트랙에 들어간다", perTrack[1] === 1, perTrack);
+
+await page.evaluate(() => {
+  window.__app.scheduler.loopEnabled = false;
+});
+await page.locator("#play").click();
+await page.waitForTimeout(1200);
+const playingOk = await page.evaluate(() => window.__app.scheduler.isPlaying);
+await page.locator("#play").click();
+check("사운드폰트로 여러 트랙이 재생된다", playingOk);
 
 check("콘솔 오류 없음", errors.length === 0, errors);
 

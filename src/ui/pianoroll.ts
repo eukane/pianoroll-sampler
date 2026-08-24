@@ -46,7 +46,7 @@ type Drag =
 
 export type PianoRollCallbacks = {
   onEdit: () => void;
-  onPreview: (pitch: number) => void;
+  onPreview: (pitch: number, trackIndex: number) => void;
   onSeek: (beat: number) => void;
   onLoopChange: (startBeat: number, endBeat: number) => void;
   getPlayheadBeat: () => number;
@@ -223,31 +223,40 @@ export class PianoRoll {
   }
 
   private drawNotes(): void {
-    const g = this.ctx2d;
-    const track = this.track;
-    if (!track) return;
+    const project = this.getProject();
+    // 다른 트랙은 흐리게 뒤에 깔아 준다. 여러 트랙을 겹쳐 만들 때
+    // 남의 노트가 어디 있는지 안 보이면 같은 자리에 계속 찍게 된다.
+    project.tracks.forEach((t, i) => {
+      if (i !== this.activeTrack) this.drawTrackNotes(t.notes, false);
+    });
+    this.drawTrackNotes(project.tracks[this.activeTrack]?.notes ?? [], true);
+  }
 
-    for (const n of track.notes) {
+  private drawTrackNotes(notes: Note[], active: boolean): void {
+    const g = this.ctx2d;
+
+    for (const n of notes) {
       const x = this.beatToX(n.start);
       const w = Math.max(3, n.length * this.pxPerBeat);
       const y = this.pitchToY(n.pitch);
       const h = this.keyHeight;
       if (x + w < GUTTER || x > this.width || y + h < RULER || y > this.height) continue;
 
-      const active = n.id === this.draggingNoteId;
-      const alpha = 0.45 + (n.velocity / 127) * 0.55;
+      const dragging = n.id === this.draggingNoteId;
+      const alpha = (0.45 + (n.velocity / 127) * 0.55) * (active ? 1 : 0.34);
       g.globalAlpha = alpha;
-      g.fillStyle = active ? C.noteActive : C.note;
+      g.fillStyle = dragging ? C.noteActive : active ? C.note : C.noteOther;
       this.roundRect(x, y + 1, w, h - 2, Math.min(4, h / 3));
       g.fill();
-      g.globalAlpha = 1;
+      g.globalAlpha = active ? 1 : 0.45;
 
-      g.strokeStyle = active ? C.noteActive : C.noteEdge;
+      g.strokeStyle = dragging ? C.noteActive : active ? C.noteEdge : C.noteOther;
       g.lineWidth = 1;
       this.roundRect(x + 0.5, y + 1.5, w - 1, h - 3, Math.min(4, h / 3));
       g.stroke();
+      g.globalAlpha = 1;
 
-      if (w > 34 && h >= 14) {
+      if (active && w > 34 && h >= 14) {
         g.fillStyle = "#0d1014";
         g.font = `600 ${Math.min(11, h - 6)}px system-ui, sans-serif`;
         g.textBaseline = "middle";
@@ -412,7 +421,7 @@ export class PianoRoll {
     if (p.x < GUTTER) {
       // 건반을 누르면 그 음을 들려준다. 소리 확인용.
       const pitch = clampPitch(this.yToPitch(p.y));
-      this.cb.onPreview(pitch);
+      this.cb.onPreview(pitch, this.activeTrack);
       this.drag = { mode: "none" };
       return;
     }
@@ -468,7 +477,7 @@ export class PianoRoll {
         const rawStart = this.xToBeat(p.x) - this.drag.grabOffsetBeat;
         const newStart = Math.max(0, snap(rawStart, this.snapUnit));
         const newPitch = clampPitch(this.yToPitch(p.y));
-        if (newPitch !== n.pitch) this.cb.onPreview(newPitch);
+        if (newPitch !== n.pitch) this.cb.onPreview(newPitch, this.activeTrack);
         n.start = newStart;
         n.pitch = newPitch;
         this.cb.onEdit();
@@ -611,7 +620,7 @@ export class PianoRoll {
     const note = makeNote(pitch, start, this.snapUnit);
     track.notes.push(note);
     sortNotes(track);
-    this.cb.onPreview(pitch);
+    this.cb.onPreview(pitch, this.activeTrack);
     this.cb.onEdit();
   }
 

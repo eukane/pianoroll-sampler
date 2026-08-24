@@ -7,17 +7,20 @@
 
 import "./style.css";
 import { AudioEngine } from "./audio/engine";
+import { Mixer } from "./audio/mixer";
 import { InstrumentRegistry } from "./audio/registry";
 import type { Waveform } from "./audio/oscInstrument";
 import { Scheduler } from "./audio/scheduler";
 import { beatsPerBar, emptyProject, totalBeats } from "./model/project";
 import { PianoRoll } from "./ui/pianoroll";
+import { InstrumentPanel } from "./ui/instrumentPanel";
 
 const project = emptyProject();
 
 const engine = new AudioEngine();
-const registry = new InstrumentRegistry(engine.ctx);
-const scheduler = new Scheduler(engine, registry, () => project);
+const mixer = new Mixer(engine.ctx, engine.master);
+const registry = new InstrumentRegistry(engine.ctx, mixer);
+const scheduler = new Scheduler(engine, registry, mixer, () => project);
 
 const $ = <T extends HTMLElement>(id: string): T => {
   const el = document.getElementById(id);
@@ -40,8 +43,8 @@ scheduler.loopEnd = totalBeats(project);
 
 const roll = new PianoRoll(canvas, () => project, {
   onEdit: () => scheduler.invalidate(),
-  onPreview: (pitch) => {
-    if (engine.isUnlocked) scheduler.preview(pitch);
+  onPreview: (pitch, trackIndex) => {
+    if (engine.isUnlocked) scheduler.preview(pitch, trackIndex);
   },
   onSeek: (beat) => scheduler.seek(beat),
   onLoopChange: (start, end) => {
@@ -130,6 +133,37 @@ waveSelect.addEventListener("change", () => {
   registry.setWaveform(waveSelect.value as Waveform);
 });
 
+// ------------------------------------------------------- 악기 / 트랙 패널
+
+const statusEl = $<HTMLDivElement>("status");
+let statusTimer: number | null = null;
+
+function showStatus(message: string, kind: "info" | "error" = "info"): void {
+  statusEl.textContent = message;
+  statusEl.classList.remove("hidden");
+  statusEl.classList.toggle("error", kind === "error");
+  if (statusTimer !== null) clearTimeout(statusTimer);
+  // 오류는 읽을 시간을 더 준다.
+  statusTimer = window.setTimeout(() => statusEl.classList.add("hidden"), kind === "error" ? 6000 : 3500);
+}
+
+// 사운드폰트가 올라오면 임시 신스 파형 선택은 의미가 없어진다.
+const waveRow = waveSelect.closest("label") as HTMLLabelElement;
+
+const panel = new InstrumentPanel(project, registry, {
+  onTrackChange: (index) => {
+    roll.activeTrack = index;
+  },
+  onSourceChange: () => {
+    // 노트는 그대로 두고 악기만 바뀐다. 재생 중이면 다음 노트부터 새 소리다.
+    project.tracks.forEach((t, i) => registry.prepare(t, i));
+    scheduler.invalidate();
+    waveRow.hidden = registry.usingSoundFont;
+  },
+  onStatus: showStatus,
+});
+roll.activeTrack = panel.activeTrack;
+
 $("zoom-in").addEventListener("click", () => roll.zoomBy(1.35));
 $("zoom-out").addEventListener("click", () => roll.zoomBy(1 / 1.35));
 $("keys-in").addEventListener("click", () => roll.zoomKeys(1.25));
@@ -168,5 +202,5 @@ requestAnimationFrame(frame);
 
 // 개발 중 콘솔에서 상태를 들여다보기 위한 창구. 빌드하면 사라진다.
 if (import.meta.env.DEV) {
-  (window as unknown as Record<string, unknown>).__app = { project, scheduler, roll, engine };
+  (window as unknown as Record<string, unknown>).__app = { project, scheduler, roll, engine, registry, panel, mixer };
 }

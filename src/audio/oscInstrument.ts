@@ -12,6 +12,7 @@
  */
 
 import type { Instrument } from "./instrument";
+import type { Mixer } from "./mixer";
 import { midiToFreq } from "../util/music";
 
 export type Waveform = "sine" | "sawtooth" | "square" | "triangle";
@@ -30,10 +31,12 @@ export class OscInstrument implements Instrument {
 
   constructor(
     private ctx: AudioContext,
+    private mixer: Mixer,
     public waveform: Waveform = "sawtooth",
   ) {}
 
-  play(pitch: number, velocity: number, when: number, durationSec: number, dest: AudioNode): void {
+  play(pitch: number, velocity: number, when: number, durationSec: number, channel: number): void {
+    const dest = this.mixer.input(channel);
     this.prune(when);
     if (this.voices.length >= MAX_VOICES) this.steal();
 

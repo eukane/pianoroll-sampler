@@ -18,10 +18,23 @@ npm run dev        # 폰에서 볼 주소가 같이 찍힌다 (같은 와이파�
 
 ```bash
 npm run build      # 타입 검사 + 프로덕션 빌드
-npm run smoke      # 브라우저 자동 점검 (dev 서버를 띄워 둔 상태에서)
+npm run smoke      # 브라우저 자동 점검 20가지 (dev 서버를 띄워 둔 상태에서)
 ```
 
+`npm run smoke` 는 테스트용 SF2 를 직접 만들어 쓴다(`scripts/gen-fixture.mjs`).
+1.2KB 짜리라 음원을 받지 않아도 프리셋 목록·검색·악기 교체 경로가 전부 돈다.
+
 ## 진행 상황
+
+### M2 — 샘플러 + 악기 교체 ✅
+
+- **이번에 된 것**: `.sf2`/`.sf3` 넣기(파일 선택·드래그), 프리셋 검색("sax" 치면
+  색소폰만), 트랙별 악기 지정, **두 번 탭으로 악기 교체**(노트는 그대로),
+  트랙 최대 16개 동시 재생, 트랙별 출력 분리.
+- **확인하는 법**: `📂 음원` 으로 GM 사운드폰트(`.sf2`)를 넣고 → `🎹 악기이름`
+  탭 → "sax" 검색 → 아무 색소폰이나 탭. 찍어 둔 멜로디가 그대로 색소폰으로 난다.
+  트랙 줄의 `＋` 로 트랙을 늘리고 트랙마다 다른 악기를 걸 수 있다.
+- **아직 아닌 것**: 내보내기는 M3. 국악기처럼 WAV 낱개로 오는 음원은 M4.
 
 ### M1 — 피아노롤 에디터 + 임시 신스 ✅
 
@@ -37,7 +50,6 @@ npm run smoke      # 브라우저 자동 점검 (dev 서버를 띄워 둔 상태
 
 | | 내용 |
 | --- | --- |
-| M2 | SF2/SF3 샘플러 + 악기 교체, 프리셋 검색, 다중 트랙 |
 | M3 | WAV(전체·트랙별) · MIDI 내보내기 / MIDI·프로젝트 가져오기 |
 | M4 | 폴더 샘플러 (국악기처럼 음 하나가 WAV 하나로 오는 음원) |
 | M5 | 볼륨·팬·뮤트·솔로, 리버브, 실행취소, 키보드 단축키 |
@@ -62,9 +74,10 @@ npm run smoke      # 브라우저 자동 점검 (dev 서버를 띄워 둔 상태
 ```
 src/
   model/     Note · Track · Project (노트는 악기 정보를 갖지 않는다)
-  audio/     engine(잠금해제) · scheduler(lookahead) · instrument(인터페이스)
-             · oscInstrument(M1 임시) · registry(악기 교체가 일어나는 유일한 지점)
-  ui/        pianoroll(캔버스 + 터치) · theme
+  audio/     engine(잠금해제) · scheduler(lookahead) · mixer(트랙별 배선)
+             · instrument(인터페이스) · oscInstrument(음원 없을 때)
+             · soundfont(SF2 샘플러) · registry(악기 교체가 일어나는 유일한 지점)
+  ui/        pianoroll(캔버스 + 터치) · instrumentPanel(음원·프리셋·트랙) · theme
   util/      music(음높이 변환)
 ```
 

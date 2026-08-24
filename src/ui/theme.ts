@@ -22,6 +22,7 @@ export const C = {
   lineBeat: "#2b3140",
   lineBar: "#454e63",
   note: "#4ec9b0",
+  noteOther: "#7f8ba3",
   noteEdge: "#8ff0dc",
   noteActive: "#ffd479",
   text: "#e6e9ef",
