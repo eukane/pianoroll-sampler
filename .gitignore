@@ -1,0 +1,15 @@
+node_modules/
+dist/
+.vite/
+.DS_Store
+*.local
+
+# 음원은 저장소에 넣지 않는다. 사용자가 직접 넣는 구조다.
+*.sf2
+*.sf3
+*.wav
+*.mp3
+*.ogg
+*.mid
+*.midi
+scripts/smoke.png

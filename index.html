@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <!-- user-scalable=no: 두 손가락 핀치를 브라우저 확대가 아니라 피아노롤 확대로 쓴다 -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover"
+    />
+    <meta name="theme-color" content="#12141a" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%2312141a'/%3E%3Crect x='5' y='8' width='13' height='5' rx='2' fill='%234ec9b0'/%3E%3Crect x='11' y='15' width='16' height='5' rx='2' fill='%234ec9b0'/%3E%3Crect x='7' y='22' width='10' height='5' rx='2' fill='%234ec9b0'/%3E%3C/svg%3E"
+    />
+    <title>피아노롤</title>
+  </head>
+  <body>
+    <div id="app">
+      <header id="bar">
+        <div class="row">
+          <button id="play" class="primary" type="button">▶︎ 재생</button>
+          <button id="loop" type="button">🔁 루프</button>
+          <span id="pos" class="pos">1 : 1</span>
+          <span class="spacer"></span>
+          <button id="zoom-out" type="button" title="가로 축소">－</button>
+          <button id="zoom-in" type="button" title="가로 확대">＋</button>
+          <button id="keys-out" type="button" title="세로 축소">▁</button>
+          <button id="keys-in" type="button" title="세로 확대">▇</button>
+        </div>
+        <div class="row">
+          <label>BPM <input id="bpm" type="number" min="20" max="300" step="1" value="100" /></label>
+          <label>마디 <input id="bars" type="number" min="1" max="64" step="1" value="4" /></label>
+          <label>
+            스냅
+            <select id="snap">
+              <option value="1">1/4</option>
+              <option value="0.5" selected>1/8</option>
+              <option value="0.25">1/16</option>
+            </select>
+          </label>
+          <label>
+            소리
+            <select id="wave">
+              <option value="sawtooth" selected>톱니</option>
+              <option value="sine">사인</option>
+              <option value="square">사각</option>
+              <option value="triangle">삼각</option>
+            </select>
+          </label>
+        </div>
+      </header>
+
+      <canvas id="roll"></canvas>
+
+      <footer id="hint">
+        탭=찍기 · 드래그=옮기기 · 오른쪽끝=길이 · 길게=삭제 · 두손가락=확대 · 위눈금=위치/루프
+      </footer>
+    </div>
+
+    <div id="unlock">
+      <div class="card">
+        <div class="big">🔊</div>
+        <p>화면을 한 번 탭하면 소리가 켜집니다</p>
+        <small>폰 브라우저는 사용자가 만지기 전에 소리를 내주지 않습니다</small>
+      </div>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
