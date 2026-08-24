@@ -20,7 +20,16 @@ const source = bank.presets[0];
 const instrument = source.zones[0].instrument;
 
 // 이름은 실제 GM 배치를 흉내 낸다. "sax" 검색이 되는지 봐야 해서.
-const wanted = [
+// 두 번째 인자를 주면 다른 프리셋 구성으로 만든다 (사운드폰트 교체 시험용).
+const variant = process.argv[2] === "b";
+
+const wanted = variant
+  ? [
+      [0, "Church Organ"],
+      [12, "Marimba"],
+      [40, "Violin"],
+    ]
+  : [
   [0, "Acoustic Grand Piano"],
   [56, "Trumpet"],
   [64, "Soprano Sax"],
@@ -29,6 +38,8 @@ const wanted = [
   [67, "Baritone Sax"],
   [105, "Gayageum"],
 ];
+
+const outPath = variant ? "fixtures/test-b.sf2" : "fixtures/test.sf2";
 
 source.name = wanted[0][1];
 source.program = wanted[0][0];
@@ -46,8 +57,8 @@ for (const [program, name] of wanted.slice(1)) {
 bank.flush();
 const out = bank.writeSF2();
 mkdirSync("fixtures", { recursive: true });
-writeFileSync("fixtures/test.sf2", Buffer.from(out));
+writeFileSync(outPath, Buffer.from(out));
 
 const check = SoundBankLoader.fromArrayBuffer(out);
-console.log(`fixtures/test.sf2 — ${out.byteLength} bytes`);
+console.log(`${outPath} — ${out.byteLength} bytes`);
 console.log("프리셋:", check.presets.map((p) => `${p.program} ${p.name}`).join(" | "));

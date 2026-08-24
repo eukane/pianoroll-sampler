@@ -33,6 +33,31 @@ export function unpackPresetId(id: number): { bankMSB: number; program: number }
   return { bankMSB: Math.floor(id / 128), program: id % 128 };
 }
 
+/**
+ * 사운드폰트 파일인지 앞 12바이트로 먼저 본다.
+ *
+ * 깨진 파일을 그냥 넘기면 워크렛이 파싱하다 조용히 멈춘다 — resolve 도 reject
+ * 도 안 해서 `await` 가 영원히 안 끝나고, 화면은 "읽는 중…" 에서 굳는다.
+ * 실제로 그렇게 굳는 걸 확인하고 넣은 검사다.
+ *
+ * 게다가 헤더를 먼저 보면 **멀쩡히 쓰던 사운드폰트를 깨진 파일로 날리는 일**도
+ * 막는다. 신스에 넘기기 전에 걸러내기 때문이다.
+ *
+ *   RIFF....sfbk  = SF2 / SF3
+ *   RIFF....DLS   = DLS
+ */
+export function looksLikeSoundBank(buffer: ArrayBuffer): boolean {
+  if (buffer.byteLength < 12) return false;
+  const head = new Uint8Array(buffer, 0, 12);
+  const tag = (from: number) => String.fromCharCode(...head.slice(from, from + 4));
+  if (tag(0) !== "RIFF") return false;
+  const form = tag(8);
+  return form === "sfbk" || form === "DLS ";
+}
+
+/** 워크렛이 응답 없이 멈추는 경우를 대비한 상한. 큰 파일도 이 안에는 끝난다. */
+const LOAD_TIMEOUT_MS = 60_000;
+
 export class SoundFontInstrument implements Instrument {
   private synth: WorkletSynthesizer | null = null;
   /**
@@ -63,6 +88,15 @@ export class SoundFontInstrument implements Instrument {
     return this.presets;
   }
 
+  findPreset(id: number): Preset | undefined {
+    return this.presets.find((p) => p.id === id);
+  }
+
+  /** 트랙에 걸 만한 기본 악기. 목록의 첫 번째. */
+  get defaultPreset(): Preset | undefined {
+    return this.presets[0];
+  }
+
   /**
    * 사운드폰트를 읽어 들인다. 처음 부를 때 워크렛도 같이 올린다.
    *
@@ -70,6 +104,10 @@ export class SoundFontInstrument implements Instrument {
    * public/ 에 복사해 둔다 (scripts/copy-worklet.mjs).
    */
   async load(buffer: ArrayBuffer, fileName: string): Promise<void> {
+    if (!looksLikeSoundBank(buffer)) {
+      throw new Error("사운드폰트 파일이 아니거나 파일이 깨졌습니다 (RIFF/sfbk 헤더가 없습니다)");
+    }
+
     if (!this.synth) {
       await this.ctx.audioWorklet.addModule(
         `${import.meta.env.BASE_URL}spessasynth_processor.min.js`,
@@ -81,8 +119,16 @@ export class SoundFontInstrument implements Instrument {
       this.synth = synth;
     }
 
-    await this.synth.soundBankManager.addSoundBank(buffer, "main");
-    await this.synth.isReady;
+    // 헤더가 맞아도 안쪽이 깨져 있으면 워크렛이 응답을 안 보낼 수 있다.
+    // 영원히 기다리느니 시간을 끊고 사람 말로 알려 준다.
+    await withTimeout(
+      (async () => {
+        await this.synth!.soundBankManager.addSoundBank(buffer, "main");
+        await this.synth!.isReady;
+      })(),
+      LOAD_TIMEOUT_MS,
+      "사운드폰트를 읽다가 응답이 없습니다. 파일이 손상됐을 수 있습니다.",
+    );
 
     this.loadedName = fileName.replace(/\.(sf2|sf3|dls)$/i, "");
     this.presets = this.synth.presetList
@@ -123,4 +169,14 @@ export class SoundFontInstrument implements Instrument {
   stopAll(): void {
     this.synth?.stopAll(true);
   }
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+  let timer: number;
+  return Promise.race([
+    promise.finally(() => clearTimeout(timer)),
+    new Promise<never>((_, reject) => {
+      timer = window.setTimeout(() => reject(new Error(message)), ms);
+    }),
+  ]);
 }

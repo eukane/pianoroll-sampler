@@ -12,6 +12,8 @@
  *   · SF2 를 읽고 프리셋 목록·검색이 되는가
  *   · **악기를 바꿔도 노트 데이터가 그대로인가** (M2 의 핵심)
  *   · 트랙을 늘리면 채널이 갈라지는가
+ *   · 사운드폰트를 바꿔 끼우면 목록과 트랙이 따라오는가
+ *   · 깨진 파일이 앱을 굳히지 않는가
  *   · 콘솔 오류가 하나도 없는가
  *
  * 쓰는 법: 다른 창에서 `npm run dev` 를 띄워 두고 `npm run smoke`.
@@ -176,6 +178,18 @@ await page.waitForFunction(() => window.__app.registry.usingSoundFont, null, { t
 const presetCount = await page.evaluate(() => window.__app.registry.soundfont.presetList.length);
 check("SF2 를 읽고 프리셋 목록이 나온다", presetCount === 7, presetCount);
 
+// 음원을 넣으면 트랙이 무슨 악기인지 화면에 나와야 한다.
+// (예전에는 첫 악기 id 가 0 이면 자동 배정이 통째로 건너뛰어져 "트랙 1" 로 남았다)
+const named = await page.evaluate(() => ({
+  track: window.__app.project.tracks[0].name,
+  button: document.getElementById("instrument").textContent,
+}));
+check(
+  "음원을 넣으면 트랙에 악기 이름이 붙는다",
+  named.track === "Acoustic Grand Piano" && named.button.includes("Acoustic Grand Piano"),
+  named,
+);
+
 // 악기 목록 열기 = 첫 번째 탭
 await page.locator("#instrument").click();
 await page.waitForTimeout(150);
@@ -212,6 +226,48 @@ check(
   notesBefore === notesAfter ? undefined : { notesBefore, notesAfter },
 );
 check("목록이 닫히고 악기 이름이 반영된다", (await page.locator("#instrument").textContent())?.includes("Alto Sax"));
+
+// ---- 사운드폰트 바꿔 끼우기 ----
+await page.locator("#sf-file").setInputFiles("fixtures/test-b.sf2");
+await page.waitForFunction(
+  () => window.__app.registry.soundfont.presetList.some((p) => p.name === "Marimba"),
+  null,
+  { timeout: 15000 },
+);
+const swapped = await page.evaluate(() => ({
+  presets: window.__app.registry.soundfont.presetList.map((p) => p.name),
+  trackName: window.__app.project.tracks[0].name,
+  presetId: window.__app.project.tracks[0].source.presetId,
+}));
+check(
+  "음원을 바꾸면 목록이 교체되고 트랙이 없는 악기를 안 가리킨다",
+  swapped.presets.length === 3 &&
+    !swapped.presets.includes("Alto Sax") &&
+    swapped.presets.includes(swapped.trackName),
+  swapped,
+);
+
+// ---- 깨진 파일이 앱을 굳히지 않는가 ----
+// 예전에는 워크렛이 응답을 안 보내 "읽는 중…" 에서 영원히 멈췄다.
+await page.locator("#sf-file").setInputFiles({
+  name: "깨진.sf2",
+  mimeType: "application/octet-stream",
+  buffer: Buffer.from("RIFFxxxxgarbage-not-a-real-soundfont"),
+});
+await page.waitForFunction(
+  () => (document.getElementById("status")?.textContent ?? "").includes("읽지 못했습니다"),
+  null,
+  { timeout: 8000 },
+);
+const survived = await page.evaluate(() => ({
+  stillPlayable: window.__app.registry.usingSoundFont,
+  presets: window.__app.registry.soundfont.presetList.length,
+}));
+check(
+  "깨진 파일은 오류를 알리고 쓰던 음원을 날리지 않는다",
+  survived.stillPlayable && survived.presets === 3,
+  survived,
+);
 
 // ---- 다중 트랙 ----
 await page.locator(".chip.add").click();

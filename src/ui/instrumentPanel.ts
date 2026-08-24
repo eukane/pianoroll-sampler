@@ -91,15 +91,7 @@ export class InstrumentPanel {
     try {
       const buffer = await file.arrayBuffer();
       await this.registry.soundfont.load(buffer, file.name);
-      // 이미 있던 트랙들을 사운드폰트의 첫 프리셋으로 올려 준다.
-      const first = this.registry.soundfont.presetList[0];
-      if (first) {
-        for (const track of this.project.tracks) {
-          if (track.source.kind === "sf2" && track.source.presetId === 0) {
-            track.source = { kind: "sf2", presetId: first.id };
-          }
-        }
-      }
+      this.resnapTracks();
       this.cb.onSourceChange();
       this.renderTracks();
       this.renderInstrumentButton();
@@ -188,6 +180,30 @@ export class InstrumentPanel {
     this.renderInstrumentButton();
     this.closePicker();
     this.cb.onStatus(`${this.activeTrack + 1}번 트랙 → ${preset.name}`);
+  }
+
+  /**
+   * 새 사운드폰트에 맞춰 트랙의 악기를 다시 붙인다.
+   *
+   * 두 가지를 고친다.
+   *   · 트랙이 **없는 악기**를 가리키고 있으면 첫 악기로 내린다. 사운드폰트를
+   *     바꾸면 프리셋 번호는 그대로인데 가리키는 악기가 사라질 수 있다.
+   *   · 트랙 이름을 악기 이름으로 맞춘다. 예전에는 첫 악기의 id 가 마침 0 이면
+   *     "이미 0 이니 바꿀 것 없다" 로 빠져서 트랙이 계속 "트랙 1" 로 남았다.
+   *     화면에 무슨 악기가 걸렸는지 안 나오는 게 이 버그였다.
+   */
+  private resnapTracks(): void {
+    const sf = this.registry.soundfont;
+    const fallback = sf.defaultPreset;
+    if (!fallback) return;
+
+    this.project.tracks.forEach((track, i) => {
+      if (track.source.kind !== "sf2") return;
+      const preset = sf.findPreset(track.source.presetId) ?? fallback;
+      track.source = { kind: "sf2", presetId: preset.id };
+      track.name = preset.name;
+      this.registry.prepare(track, i);
+    });
   }
 
   private currentPresetId(): number | null {
