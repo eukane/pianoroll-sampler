@@ -371,7 +371,16 @@ export class InstrumentPanel {
 
   private renderInstrumentButton(): void {
     const track = this.project.tracks[this.activeTrack];
-    const label = this.registry.usingSoundFont ? (track?.name ?? "악기") : "임시 신스";
+    // 사운드폰트만 보면 안 된다. 폴더 샘플러를 쓰는 트랙인데 "임시 신스" 라고
+    // 적히면 무엇이 걸렸는지 화면이 거짓말을 하는 셈이다.
+    const source = track?.source;
+    let label = "임시 신스";
+    if (source?.kind === "sampleFolder") {
+      const folder = this.registry.folders.get(source.folderId);
+      if (folder) label = folder.name;
+    } else if (this.registry.usingSoundFont) {
+      label = track?.name ?? "악기";
+    }
     this.instrumentBtn.textContent = `🎹 ${label}`;
   }
 

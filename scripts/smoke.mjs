@@ -455,6 +455,11 @@ const folder = await page.evaluate(() => {
   };
 });
 check(
+  "폴더 악기를 쓰는 트랙은 악기 이름이 폴더 이름으로 나온다",
+  (await page.locator("#instrument").textContent())?.includes("가야금"),
+  await page.locator("#instrument").textContent(),
+);
+check(
   "낱개 WAV 폴더를 넣으면 파일명대로 건반에 놓인다",
   folder.mapped === 10 && folder.name === "가야금" && folder.trackSource.kind === "sampleFolder",
   folder,
