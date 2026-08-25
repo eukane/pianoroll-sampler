@@ -158,6 +158,25 @@ async function renderWithSoundFont(
     midiSequence: midi,
     loopCount: 0,
     soundBankList: [{ bankOffset: 0, soundBankBuffer: soundBank }],
+    sequencerOptions: {
+      /**
+       * **앞 무음을 자르지 않는다.**
+       *
+       * 기본값은 켜져 있다. MIDI 플레이어에서는 맞는 편의 기능이다 — 파일을
+       * 틀었는데 3초를 기다리게 하지 않으니까. 그런데 우리는 플레이어가 아니라
+       * 편집기다. 첫 노트가 1박에 있으면 그 자리에서 나야 한다.
+       *
+       * 이걸 모르고 뒀다가 렌더 경로 둘이 어긋났다. 1박(0.5초)에 같은 노트를
+       * 놓고 재 보니
+       *
+       *     폴더 샘플러 트랙 → 22062번째 샘플 (이론값 22050, 정확)
+       *     SF2 트랙        →   136번째 샘플 (맨 앞으로 당겨짐)
+       *
+       * 497ms 차이다. 트랙 하나만 뽑아 보면 "좀 일찍 시작하네" 정도라 그냥
+       * 넘어가는데, 두 종류를 같이 뽑으면 가야금만 반 박 밀려 들린다.
+       */
+      skipToFirstNoteOn: false,
+    },
   });
 }
 

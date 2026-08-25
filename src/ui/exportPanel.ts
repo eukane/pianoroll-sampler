@@ -92,6 +92,7 @@ export class ExportPanel {
     try {
       const seconds = projectSeconds(project);
       this.cb.onStatus(`WAV 만드는 중… (${seconds.toFixed(1)}초 분량)`);
+      await nextFrame();
       const buffer = await renderProject(project, this.bankSource, this.registry.folders.list, this.mixerState);
       this.warnIfSilent(buffer);
       download(audioBufferToWav(buffer), `${this.baseName()}.wav`);
@@ -103,6 +104,17 @@ export class ExportPanel {
     }
   }
 
+  /**
+   * 트랙별 WAV.
+   *
+   * 트랙 수만큼 렌더하고, 렌더할 때마다 사운드폰트를 **다시 읽는다.** 100MB
+   * 짜리를 넣고 4트랙을 뽑으면 400MB 를 읽는 셈이다. 수백 MB 를 메모리에 두 벌
+   * 들고 있지 않으려는 대가인데(export/render.ts 참고), 그동안 화면이 조용하면
+   * 사용자는 앱이 죽은 줄 알고 나가 버린다.
+   *
+   * 그래서 트랙 번호만이 아니라 **지금 무엇을 하고 있는지**까지 적는다.
+   * 음원을 읽는 중인지 소리를 만드는 중인지가 보이면 기다릴 수 있다.
+   */
   private async exportStems(): Promise<void> {
     const project = this.getProject();
     if (!this.hasNotes(project)) return;
@@ -114,10 +126,26 @@ export class ExportPanel {
         .map((track, index) => ({ track, index }))
         .filter(({ track }) => track.notes.length > 0);
 
+      const bankMB = await this.bankSizeMB();
+      const hint = bankMB > 20 ? ` · 음원 ${bankMB}MB` : "";
+
       for (const [n, { track, index }] of usable.entries()) {
-        this.cb.onStatus(`트랙별 WAV ${n + 1}/${usable.length} — ${track.name}`);
-        const buffer = await renderProject(onlyTrack(project, index), this.bankSource, this.registry.folders.list);
+        const step = `트랙별 WAV ${n + 1}/${usable.length} — ${track.name}`;
+        this.cb.onStatus(`${step} · 음원 읽는 중…${hint}`);
+        // 화면이 한 번 그려질 틈을 준다. 안 그러면 안내가 안 보인 채로
+        // 렌더가 시작돼서, 적어 놓은 의미가 없다.
+        await nextFrame();
+
+        this.cb.onStatus(`${step} · 소리 만드는 중…`);
+        await nextFrame();
+        const buffer = await renderProject(
+          onlyTrack(project, index),
+          this.bankSource,
+          this.registry.folders.list,
+        );
+
         const safe = track.name.replace(/[^\w가-힣 -]/g, "").trim() || `track${index + 1}`;
+        this.cb.onStatus(`${step} · 저장 중…`);
         download(audioBufferToWav(buffer), `${index + 1}_${safe}.wav`);
         // 브라우저가 연속 다운로드를 막지 않게 한 박자 쉰다.
         await sleep(350);
@@ -127,6 +155,16 @@ export class ExportPanel {
       this.fail("트랙별 WAV", err);
     } finally {
       this.busy = false;
+    }
+  }
+
+  /** 음원이 큰지 미리 알려 주려고. 못 재면 0. */
+  private async bankSizeMB(): Promise<number> {
+    try {
+      const b = await this.registry.soundfont.bankBuffer();
+      return b ? Math.round(b.byteLength / 1024 / 1024) : 0;
+    } catch {
+      return 0;
     }
   }
 
@@ -220,4 +258,9 @@ function download(blob: Blob, filename: string): void {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** 화면이 한 번 그려지도록 양보한다. 안내를 적어 놓고 바로 렌더에 들어가면 안 보인다. */
+function nextFrame(): Promise<void> {
+  return new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve, 0)));
 }

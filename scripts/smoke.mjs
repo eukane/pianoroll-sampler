@@ -20,6 +20,7 @@
  *   · 음소거·솔로·음량이 재생과 렌더 양쪽에 같이 먹히는가
  *   · 되돌리기가 제스처 단위로 돌아가는가
  *   · 손가락을 대는 순간 소리가 나는가 (떼는 순간이 아니라)
+ *   · 렌더 경로가 둘로 갈리는데 서로 정렬돼 있는가
  *   · 콘솔 오류가 하나도 없는가
  *
  * 쓰는 법: 다른 창에서 `npm run dev` 를 띄워 두고 `npm run smoke`.
@@ -795,6 +796,51 @@ check(
   "손가락을 대는 즉시 소리가 난다 (떼는 순간이 아니라)",
   latency !== null && latency < 30,
   { 누른뒤ms: latency, 손가락댄시간ms: 150 },
+);
+
+// ---- 렌더 경로 둘이 정렬돼 있는가 ----
+//
+// SF2 트랙은 startOfflineRender(MIDI 경유), 폴더 샘플러 트랙은 노트를 직접
+// 꽂는다. 경로가 갈려서 각각은 잘 되는데 **합칠 때 어긋날** 수 있다.
+// 실제로 어긋나 있었다 — 시퀀서의 skipToFirstNoteOn 이 앞 무음을 잘라서
+// SF2 트랙만 맨 앞으로 당겨졌다. 1박에 놓은 노트가 497ms 밀렸다.
+// 한 트랙씩 뽑아 보면 절대 안 잡히는 종류라 못 박아 둔다.
+const alignment = await page.evaluate(async () => {
+  const { renderProject } = await import("/src/export/render.ts");
+  const app = window.__app;
+  const folderId = app.registry.folders.list[0]?.id;
+  if (!folderId) return { skipped: true };
+
+  const at = (source) => ({
+    bpm: 120, bars: 2, timeSig: [4, 4],
+    tracks: [{
+      id: "x", name: "t", source,
+      notes: [{ id: "n", pitch: 60, start: 1, length: 0.5, velocity: 120 }],
+      volume: 1, pan: 0, muted: false, reverbSend: 0,
+    }],
+  });
+  const firstAudible = (buf) => {
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < d.length; i++) if (Math.abs(d[i]) > 1e-5) return i;
+    return -1;
+  };
+  const render = (p) => renderProject(p, () => app.registry.soundfont.bankBuffer(),
+    app.registry.folders.list, app.mixerState);
+
+  const sf = await render(at({ kind: "sf2", presetId: 0 }));
+  const fl = await render(at({ kind: "sampleFolder", folderId }));
+  const ideal = Math.round(1 * (60 / 120) * sf.sampleRate);
+  return {
+    skipped: false,
+    sfLateMs: +(((firstAudible(sf) - ideal) / sf.sampleRate) * 1000).toFixed(3),
+    flLateMs: +(((firstAudible(fl) - ideal) / fl.sampleRate) * 1000).toFixed(3),
+    gapMs: +(((firstAudible(fl) - firstAudible(sf)) / sf.sampleRate) * 1000).toFixed(3),
+  };
+});
+check(
+  "SF2 트랙과 폴더 트랙이 같은 자리에서 소리 난다 (렌더 퀀텀 1개 이내)",
+  alignment.skipped || Math.abs(alignment.gapMs) < 3.0,
+  alignment,
 );
 
 check("콘솔 오류 없음", errors.length === 0, errors);
