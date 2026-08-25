@@ -144,7 +144,10 @@ export class SoundFontInstrument implements Instrument {
       await this.ctx.audioWorklet.addModule(
         `${import.meta.env.BASE_URL}spessasynth_processor.min.js`,
       );
-      const synth = new WorkletSynthesizer(this.ctx);
+      // 이벤트 시스템은 쓰지 않는다. 워크렛이 노트마다 메인 스레드로 알림을
+      // 보내는데, 우리는 듣는 쪽이 없어서 그대로 버려진다. 폰에서는 그 왕복이
+      // 그냥 낭비다.
+      const synth = new WorkletSynthesizer(this.ctx, { eventsEnabled: false });
       // 채널 16개를 트랙별 게인으로 각각 뽑는다. 마스터로 한 번에 받으면
       // 트랙별 음량도, M3 의 스템 내보내기도 못 한다.
       synth.connectIndividualOutputs(this.mixer.inputs);

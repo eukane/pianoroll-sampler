@@ -19,6 +19,7 @@
  *   · 낱개 WAV 폴더를 넣으면 건반에 놓이고 없는 음은 채워지는가
  *   · 음소거·솔로·음량이 재생과 렌더 양쪽에 같이 먹히는가
  *   · 되돌리기가 제스처 단위로 돌아가는가
+ *   · 손가락을 대는 순간 소리가 나는가 (떼는 순간이 아니라)
  *   · 콘솔 오류가 하나도 없는가
  *
  * 쓰는 법: 다른 창에서 `npm run dev` 를 띄워 두고 `npm run smoke`.
@@ -736,6 +737,35 @@ check(
   "스페이스로 재생·정지가 된다",
   playingBySpace && !(await page.evaluate(() => window.__app.scheduler.isPlaying)),
   playingBySpace,
+);
+
+// ---- 누르는 즉시 소리가 나는가 ----
+// 예전에는 노트가 찍히는 순간(= 손가락을 뗄 때) 소리를 냈다. 그러면 누르고
+// 있는 시간이 그대로 지연이 된다 — 실측 124ms 였다. 조용히 되돌아가기 쉬운
+// 종류라 못 박아 둔다.
+await page.evaluate(() => {
+  window.__previewAt = [];
+  const s = window.__app.scheduler;
+  const orig = s.preview.bind(s);
+  s.preview = (...a) => { window.__previewAt.push(performance.now()); return orig(...a); };
+  const canvas = document.getElementById("roll");
+  window.__downAt = 0;
+  canvas.addEventListener("pointerdown", () => (window.__downAt = performance.now()), true);
+});
+const latBox = await page.locator("#roll").boundingBox();
+await page.mouse.move(latBox.x + 150, latBox.y + latBox.height * 0.55);
+await page.mouse.down();
+await page.waitForTimeout(150);   // 사람이 탭할 때만큼 누르고 있는다
+await page.mouse.up();
+await page.waitForTimeout(150);
+const latency = await page.evaluate(() => {
+  const p = window.__previewAt;
+  return p.length ? +(p[0] - window.__downAt).toFixed(1) : null;
+});
+check(
+  "손가락을 대는 즉시 소리가 난다 (떼는 순간이 아니라)",
+  latency !== null && latency < 30,
+  { 누른뒤ms: latency, 손가락댄시간ms: 150 },
 );
 
 check("콘솔 오류 없음", errors.length === 0, errors);

@@ -451,6 +451,14 @@ export class PianoRoll {
       return;
     }
 
+    // 빈 격자를 누른 것 — 손가락을 **대는 순간** 그 음을 들려준다.
+    //
+    // 예전에는 노트가 찍히는 순간(손가락을 뗄 때) 소리를 냈다. 그러면 누르고
+    // 있는 시간이 그대로 지연이 된다. 실측 124ms 였고, 오래 누를수록 더 늘었다.
+    // 건반은 누르면 바로 소리가 나야 악기로 느껴진다.
+    //
+    // 화면을 밀려고 눌렀을 때도 소리가 한 번 나지만, 짧고 그게 더 자연스럽다.
+    this.cb.onPreview(clampPitch(this.yToPitch(p.y)), this.activeTrack);
     this.drag = { mode: "pan", scrollX: this.scrollX, scrollY: this.scrollY, moved: false };
   };
 
@@ -630,7 +638,7 @@ export class PianoRoll {
     const note = makeNote(pitch, start, this.snapUnit);
     track.notes.push(note);
     sortNotes(track);
-    this.cb.onPreview(pitch, this.activeTrack);
+    // 미리듣기는 손가락을 댈 때 이미 냈다. 여기서 또 내면 두 번 울린다.
     this.cb.onEdit();
     this.cb.onAfterChange();
   }
