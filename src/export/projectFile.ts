@@ -12,6 +12,7 @@
 import type { Note, Project, Track } from "../model/types";
 import { emptyTrack, newId, sortNotes } from "../model/project";
 import { MAX_TRACKS } from "../model/channels";
+import { MAX_PRESET_ID } from "../model/preset";
 
 export const FILE_VERSION = 1;
 
@@ -51,7 +52,7 @@ function readTrack(raw: unknown, index: number): Track {
   if (source?.kind === "sampleFolder" && typeof source.folderId === "string") {
     track.source = { kind: "sampleFolder", folderId: source.folderId };
   } else {
-    track.source = { kind: "sf2", presetId: Math.round(clamp(num(source?.presetId, 0), 0, 16383)) };
+    track.source = { kind: "sf2", presetId: Math.round(clamp(num(source?.presetId, 0), 0, MAX_PRESET_ID)) };
   }
 
   track.volume = clamp(num(t.volume, 0.8), 0, 1);

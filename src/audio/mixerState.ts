@@ -11,7 +11,7 @@
  */
 
 import type { Project, Track } from "../model/types";
-import { channelForTrack } from "../model/channels";
+import { assignChannels } from "../model/channels";
 import type { Mixer } from "./mixer";
 
 export class MixerState {
@@ -43,8 +43,9 @@ export class MixerState {
 
   /** 프로젝트 전체를 믹서에 반영한다. 설정이 바뀔 때마다 부르면 된다. */
   apply(project: Project, mixer: Mixer): void {
+    const channels = assignChannels(project);
     project.tracks.forEach((track, index) => {
-      mixer.set(channelForTrack(index), {
+      mixer.set(channels[index], {
         volume: track.volume,
         pan: track.pan,
         muted: !this.isAudible(track),

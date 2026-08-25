@@ -10,7 +10,7 @@
  */
 
 import { projectToMidi, midiToProject, PPQ } from "../src/export/midi.ts";
-import { packPresetId } from "../src/model/preset.ts";
+import { packPresetId, isDrumPreset } from "../src/model/preset.ts";
 
 const results = [];
 const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail });
@@ -106,6 +106,41 @@ for (let i = 0; i < manyBytes.length - 2; i++) {
   if ((manyBytes[i] & 0xf0) === 0x90 && manyBytes[i + 2] > 0) channels.add(manyBytes[i] & 0x0f);
 }
 check("트랙이 12개여도 드럼 채널(9)에 노트를 쓰지 않는다", !channels.has(9), [...channels].sort((a, b) => a - b));
+
+// --- 드럼은 9번 채널로 나가고, 다시 읽어도 드럼이다 ---
+const withDrum = {
+  bpm: 100, bars: 2, timeSig: [4, 4],
+  tracks: [
+    { id: "d1", name: "Standard 1", source: { kind: "sf2", presetId: packPresetId(0, 0, true) },
+      notes: [{ id: "k", pitch: 36, start: 0, length: 0.5, velocity: 120 }],
+      volume: 0.8, pan: 0, muted: false },
+    { id: "p1", name: "Grand Piano", source: { kind: "sf2", presetId: packPresetId(0, 0) },
+      notes: [{ id: "c", pitch: 60, start: 0, length: 1, velocity: 100 }],
+      volume: 0.8, pan: 0, muted: false },
+  ],
+};
+check(
+  "드럼과 피아노는 프로그램 번호가 같아도 다른 id 다",
+  withDrum.tracks[0].source.presetId !== withDrum.tracks[1].source.presetId,
+  withDrum.tracks.map((t) => t.source.presetId),
+);
+
+const drumBytes = projectToMidi(withDrum);
+const drumChannels = new Set();
+for (let i = 0; i < drumBytes.length - 2; i++) {
+  if ((drumBytes[i] & 0xf0) === 0x90 && drumBytes[i + 2] > 0) drumChannels.add(drumBytes[i] & 0x0f);
+}
+check("드럼 트랙은 9번 채널로 나간다", drumChannels.has(9), [...drumChannels].sort((a, b) => a - b));
+check("일반 트랙은 9번을 피한다", drumChannels.has(0), [...drumChannels].sort((a, b) => a - b));
+
+const drumBack = midiToProject(drumBytes);
+const drumTrack = drumBack.tracks.find((t) => isDrumPreset(t.source.presetId));
+const toneTrack = drumBack.tracks.find((t) => !isDrumPreset(t.source.presetId));
+check(
+  "다시 읽어도 드럼은 드럼, 악기는 악기다",
+  !!drumTrack && !!toneTrack && drumTrack.notes[0].pitch === 36 && toneTrack.notes[0].pitch === 60,
+  drumBack.tracks.map((t) => `${t.name}:${t.source.presetId}`),
+);
 
 // --- 쓰레기 입력 ---
 let rejected = false;

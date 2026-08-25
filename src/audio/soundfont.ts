@@ -17,12 +17,14 @@ import { packPresetId, unpackPresetId } from "../model/preset";
 
 /** 화면에 뿌리는 프리셋 한 줄. */
 export type Preset = {
-  /** Track.source.presetId 에 저장되는 값. 뱅크와 프로그램을 한 숫자로 묶었다. */
+  /** Track.source.presetId 에 저장되는 값. 뱅크·프로그램·드럼 여부를 한 숫자로 묶었다. */
   id: number;
   program: number;
   bankMSB: number;
   bankLSB: number;
   name: string;
+  /** 드럼 킷인가. 번호가 일반 악기와 겹쳐서 이 구분이 없으면 엉뚱한 악기가 걸린다. */
+  isDrum: boolean;
 };
 
 /**
@@ -163,13 +165,17 @@ export class SoundFontInstrument implements Instrument {
     this.loadedName = fileName.replace(/\.(sf2|sf3|dls)$/i, "");
     this.presets = this.synth.presetList
       .map((p) => ({
-        id: packPresetId(p.bankMSB ?? 0, p.program),
+        // isDrum 이 라이브러리가 권하는 판별 방법이다 (isGMGSDrum 은 GM/GS 만 잡는다).
+        id: packPresetId(p.bankMSB ?? 0, p.program, p.isDrum === true),
         program: p.program,
         bankMSB: p.bankMSB ?? 0,
         bankLSB: p.bankLSB ?? 0,
         name: (p.name ?? "").trim() || `프로그램 ${p.program}`,
+        isDrum: p.isDrum === true,
       }))
-      .sort((a, b) => a.bankMSB - b.bankMSB || a.program - b.program);
+      // 일반 악기를 먼저, 드럼 킷을 뒤로. 대부분 악기를 찾는다.
+      .sort((a, b) =>
+        Number(a.isDrum) - Number(b.isDrum) || a.bankMSB - b.bankMSB || a.program - b.program);
 
     // 사운드폰트를 바꿔 끼우면 채널에 걸린 프리셋도 다시 보내야 한다.
     this.channelPreset.clear();
@@ -183,11 +189,15 @@ export class SoundFontInstrument implements Instrument {
     if (this.channelPreset.get(channel) === presetId) return;
     this.channelPreset.set(channel, presetId);
 
-    const { bankMSB, program } = unpackPresetId(presetId);
+    const { bankMSB, program, isDrum } = unpackPresetId(presetId);
     const options = when === undefined ? undefined : { time: when };
-    // 뱅크 선택(CC0/CC32) 후 프로그램 체인지. 표준 MIDI 순서다.
-    this.synth.controllerChange(channel, 0, bankMSB, options);
-    this.synth.controllerChange(channel, 32, 0, options);
+    // 드럼은 9번 채널에 놓기 때문에(model/channels.ts) 뱅크를 따로 보내지 않는다.
+    // 신스가 그 채널을 알아서 타악기로 다룬다.
+    if (!isDrum) {
+      // 뱅크 선택(CC0/CC32) 후 프로그램 체인지. 표준 MIDI 순서다.
+      this.synth.controllerChange(channel, 0, bankMSB, options);
+      this.synth.controllerChange(channel, 32, 0, options);
+    }
     this.synth.programChange(channel, program, options);
   }
 

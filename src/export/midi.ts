@@ -19,7 +19,7 @@
 // import 되어야 한다. Vite 는 양쪽 다 받는다.
 import type { Note, Project, Track } from "../model/types";
 import { beatsPerBar, emptyTrack, makeNote, sortNotes } from "../model/project.ts";
-import { channelForTrack, MAX_TRACKS } from "../model/channels.ts";
+import { assignChannels, MAX_TRACKS } from "../model/channels.ts";
 import { packPresetId, unpackPresetId } from "../model/preset.ts";
 
 /** 4분음표 하나를 몇 틱으로 볼지. 480 은 DAW 들이 흔히 쓰는 값이다. */
@@ -110,8 +110,9 @@ export function projectToMidi(project: Project): Uint8Array {
   tempo.raw([0xff, 0x2f, 0x00]); // 트랙 끝
   tracks.push(chunk("MTrk", tempo.toBytes()));
 
+  const channels = assignChannels(project);
   project.tracks.forEach((track, index) => {
-    tracks.push(chunk("MTrk", writeTrack(track, channelForTrack(index))));
+    tracks.push(chunk("MTrk", writeTrack(track, channels[index])));
   });
 
   const header = new ByteWriter();
@@ -138,9 +139,12 @@ function writeTrack(track: Track, channel: number): Uint8Array {
   events.push({ tick: 0, order: 0, data: [0xff, 0x03, nameBytes.length, ...nameBytes] });
 
   if (track.source.kind === "sf2") {
-    const { bankMSB, program } = unpackPresetId(track.source.presetId);
-    events.push({ tick: 0, order: 1, data: [0xb0 | channel, 0, bankMSB] });
-    events.push({ tick: 0, order: 2, data: [0xb0 | channel, 32, 0] });
+    const { bankMSB, program, isDrum } = unpackPresetId(track.source.presetId);
+    // 드럼은 9번 채널이라는 것 자체가 규약이다. 뱅크를 보내면 오히려 어긋난다.
+    if (!isDrum) {
+      events.push({ tick: 0, order: 1, data: [0xb0 | channel, 0, bankMSB] });
+      events.push({ tick: 0, order: 2, data: [0xb0 | channel, 32, 0] });
+    }
     events.push({ tick: 0, order: 3, data: [0xc0 | channel, program] });
   }
 
@@ -357,12 +361,13 @@ export function midiToProject(bytes: Uint8Array): Project {
 
   const tracks: Track[] = lanes.map(([channel, l], i) => {
     const track = emptyTrack(l.name || `트랙 ${i + 1}`);
-    track.source = { kind: "sf2", presetId: packPresetId(l.bankMSB, l.program) };
+    // 9번 채널에서 온 노트는 드럼이다 (GM 규약).
+    track.source = { kind: "sf2", presetId: packPresetId(l.bankMSB, l.program, channel === 9) };
     track.notes = l.notes;
     sortNotes(track);
     // 드럼 채널에서 온 노트라는 걸 이름에 남긴다. 지금은 드럼 재생을 안 하지만
     // 사용자가 왜 소리가 이상한지는 알 수 있어야 한다.
-    if (channel === 9 && !l.name) track.name = "드럼 (타악기 트랙)";
+    if (channel === 9 && !l.name) track.name = "드럼";
     return track;
   });
 

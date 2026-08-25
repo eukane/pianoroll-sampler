@@ -34,7 +34,7 @@ import { WorkletSynthesizer } from "spessasynth_lib";
 import { BasicMIDI } from "spessasynth_core";
 import type { Project, Track } from "../model/types";
 import { totalBeats } from "../model/project";
-import { channelForTrack } from "../model/channels";
+import { assignChannels } from "../model/channels";
 import { Mixer } from "../audio/mixer";
 import { MixerState } from "../audio/mixerState";
 import { OscInstrument } from "../audio/oscInstrument";
@@ -181,7 +181,7 @@ function renderLocally(
 
   for (const track of part.tracks) {
     if (!mixerState.isAudible(track)) continue;
-    const channel = channelForTrack(Math.max(0, full.tracks.indexOf(track)));
+    const channel = assignChannels(full)[Math.max(0, full.tracks.indexOf(track))];
     mixer.set(channel, {
       volume: track.volume,
       pan: track.pan,

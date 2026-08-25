@@ -13,7 +13,7 @@
 
 import type { Project } from "../model/types";
 import { emptyTrack } from "../model/project";
-import { MAX_TRACKS, channelForTrack } from "../model/channels";
+import { MAX_TRACKS, assignChannels } from "../model/channels";
 import type { InstrumentRegistry } from "../audio/registry";
 import type { Preset } from "../audio/soundfont";
 import type { SampleFolder } from "../audio/folderSampler";
@@ -275,7 +275,7 @@ export class InstrumentPanel {
     if (!track) return;
     track.source = { kind: "sampleFolder", folderId: folder.id };
     track.name = folder.name;
-    this.registry.prepare(track, channelForTrack(this.activeTrack));
+    this.registry.prepare(track, assignChannels(this.project)[this.activeTrack]);
     this.cb.onSourceChange();
     this.renderTracks();
     this.renderInstrumentButton();
@@ -330,7 +330,7 @@ export class InstrumentPanel {
     if (!track) return;
     track.source = { kind: "sf2", presetId: preset.id };
     track.name = preset.name;
-    this.registry.prepare(track, channelForTrack(this.activeTrack));
+    this.registry.prepare(track, assignChannels(this.project)[this.activeTrack]);
     this.cb.onSourceChange();
     this.renderTracks();
     this.renderInstrumentButton();
@@ -358,7 +358,7 @@ export class InstrumentPanel {
       const preset = sf.findPreset(track.source.presetId) ?? fallback;
       track.source = { kind: "sf2", presetId: preset.id };
       track.name = preset.name;
-      this.registry.prepare(track, channelForTrack(i));
+      this.registry.prepare(track, assignChannels(this.project)[i]);
     });
   }
 
@@ -427,7 +427,7 @@ export class InstrumentPanel {
       track.name = preset.name;
     }
     this.project.tracks.push(track);
-    this.registry.prepare(track, channelForTrack(index));
+    this.registry.prepare(track, assignChannels(this.project)[index]);
     this.selectTrack(index);
   }
 }

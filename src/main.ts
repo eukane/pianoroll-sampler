@@ -14,7 +14,7 @@ import { canUseSoundFont, INSECURE_HINT } from "./audio/soundfont";
 import type { Waveform } from "./audio/oscInstrument";
 import { Scheduler } from "./audio/scheduler";
 import { beatsPerBar, emptyProject, totalBeats } from "./model/project";
-import { channelForTrack } from "./model/channels";
+import { assignChannels } from "./model/channels";
 import type { Project } from "./model/types";
 import { PianoRoll } from "./ui/pianoroll";
 import { InstrumentPanel } from "./ui/instrumentPanel";
@@ -170,7 +170,8 @@ const panel = new InstrumentPanel(project, registry, {
   },
   onSourceChange: () => {
     // 노트는 그대로 두고 악기만 바뀐다. 재생 중이면 다음 노트부터 새 소리다.
-    project.tracks.forEach((t, i) => registry.prepare(t, channelForTrack(i)));
+    const chs = assignChannels(project);
+    project.tracks.forEach((t, i) => registry.prepare(t, chs[i]));
     mixerState.apply(project, mixer);
     scheduler.invalidate();
     waveRow.hidden = registry.usingSoundFont;

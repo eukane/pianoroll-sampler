@@ -23,7 +23,7 @@ import type { InstrumentRegistry } from "./registry";
 import type { Mixer } from "./mixer";
 import type { MixerState } from "./mixerState";
 import { totalBeats } from "../model/project";
-import { channelForTrack } from "../model/channels";
+import { assignChannels, channelForTrack } from "../model/channels";
 
 const TICK_MS = 25;
 const LOOKAHEAD_SEC = 0.12;
@@ -95,7 +95,8 @@ export class Scheduler {
 
     this.buildEvents();
     // 채널마다 악기와 음량을 걸어 둔다. 노트마다 보내면 같은 메시지가 수백 번 나간다.
-    project.tracks.forEach((t, i) => this.registry.prepare(t, channelForTrack(i)));
+    const channels = assignChannels(project);
+    project.tracks.forEach((t, i) => this.registry.prepare(t, channels[i]));
     this.mixerState.apply(project, this.mixer);
     this.startTime = this.engine.currentTime - (from - this.regionStart) * this.secPerBeat;
     this.passBase = this.startTime;
@@ -224,9 +225,9 @@ export class Scheduler {
     }
     const durationSec = Math.max(0.02, lengthBeats * this.secPerBeat);
 
-    // 트랙 번호와 MIDI 채널은 같지 않다 (9번은 드럼 자리라 건너뛴다).
+    // 트랙 번호와 MIDI 채널은 같지 않다 (드럼은 9번, 나머지는 9번을 건너뛴다).
     // 음량·팬은 play() 에서 한 번 걸어 뒀다 — 노트마다 다시 걸 필요가 없다.
-    const channel = channelForTrack(ev.trackIndex);
+    const channel = assignChannels(project)[ev.trackIndex] ?? channelForTrack(ev.trackIndex);
     this.registry.forTrack(track).play(ev.pitch, ev.velocity, when, durationSec, channel);
   }
 
@@ -235,7 +236,7 @@ export class Scheduler {
     const project = this.getProject();
     const track = project.tracks[trackIndex];
     if (!track) return;
-    const channel = channelForTrack(trackIndex);
+    const channel = assignChannels(project)[trackIndex] ?? channelForTrack(trackIndex);
     // 미리듣기는 뮤트여도 들려준다 — 사용자가 방금 그 건반을 누른 것이다.
     this.mixer.set(channel, {
       volume: track.volume,
