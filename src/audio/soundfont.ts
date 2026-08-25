@@ -124,6 +124,17 @@ export class SoundFontInstrument implements Instrument {
    * 워크렛 파일은 번들러를 거치지 않고 **페이지 기준 URL** 로만 불러올 수 있어서
    * public/ 에 복사해 둔다 (scripts/copy-worklet.mjs).
    */
+  /**
+   * 사운드폰트 파일 크기(바이트). 안 읽고 알 수 있다.
+   *
+   * 크기를 알려고 `bankBuffer()` 를 부르면 **파일을 통째로 읽는다.** 100MB 짜리면
+   * 100MB 를 읽어 놓고 byteLength 만 보고 버리는 셈이다. File 은 크기를 그냥
+   * 들고 있으니 그걸 쓴다.
+   */
+  get bankSizeBytes(): number {
+    return this.sourceFile?.size ?? 0;
+  }
+
   /** 내보낼 때 쓸 사운드폰트를 다시 읽어 온다. 없으면 null. */
   async bankBuffer(): Promise<ArrayBuffer | null> {
     if (!this.loaded || !this.sourceFile) return null;

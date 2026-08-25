@@ -126,7 +126,7 @@ export class ExportPanel {
         .map((track, index) => ({ track, index }))
         .filter(({ track }) => track.notes.length > 0);
 
-      const bankMB = await this.bankSizeMB();
+      const bankMB = Math.round(this.registry.soundfont.bankSizeBytes / 1024 / 1024);
       const hint = bankMB > 20 ? ` · 음원 ${bankMB}MB` : "";
 
       for (const [n, { track, index }] of usable.entries()) {
@@ -155,16 +155,6 @@ export class ExportPanel {
       this.fail("트랙별 WAV", err);
     } finally {
       this.busy = false;
-    }
-  }
-
-  /** 음원이 큰지 미리 알려 주려고. 못 재면 0. */
-  private async bankSizeMB(): Promise<number> {
-    try {
-      const b = await this.registry.soundfont.bankBuffer();
-      return b ? Math.round(b.byteLength / 1024 / 1024) : 0;
-    } catch {
-      return 0;
     }
   }
 

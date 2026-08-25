@@ -204,10 +204,12 @@ function renderLocally(
   sampler.adopt(folders);
 
   const secPerBeat = 60 / Math.max(1, part.bpm);
+  // 트랙마다 다시 계산하지 않는다.
+  const channels = assignChannels(full);
 
   for (const track of part.tracks) {
     if (!mixerState.isAudible(track)) continue;
-    const channel = assignChannels(full)[Math.max(0, full.tracks.indexOf(track))];
+    const channel = channels[Math.max(0, full.tracks.indexOf(track))];
     mixer.set(channel, {
       volume: track.volume,
       pan: track.pan,

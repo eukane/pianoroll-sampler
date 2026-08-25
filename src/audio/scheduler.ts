@@ -42,6 +42,13 @@ export class Scheduler {
 
   private events: Event[] = [];
   private evIdx = 0;
+  /**
+   * 트랙 → MIDI 채널 배치. buildEvents 에서 한 번 만들어 둔다.
+   *
+   * `scheduleEvent` 는 **노트마다** 도는 자리라 거기서 매번 다시 계산하면
+   * 재생 내내 배열을 새로 만들어 버린다. 폰에서 굳이 만들 쓰레기가 아니다.
+   */
+  private channels: number[] = [];
 
   private startTime = 0; // regionStart 에 해당하는 ctx 시각
   private passBase = 0; // 지금 예약 중인 루프 회차의 시작 ctx 시각
@@ -95,8 +102,7 @@ export class Scheduler {
 
     this.buildEvents();
     // 채널마다 악기와 음량을 걸어 둔다. 노트마다 보내면 같은 메시지가 수백 번 나간다.
-    const channels = assignChannels(project);
-    project.tracks.forEach((t, i) => this.registry.prepare(t, channels[i]));
+    project.tracks.forEach((t, i) => this.registry.prepare(t, this.channels[i]));
     this.mixerState.apply(project, this.mixer);
     this.startTime = this.engine.currentTime - (from - this.regionStart) * this.secPerBeat;
     this.passBase = this.startTime;
@@ -176,6 +182,7 @@ export class Scheduler {
     });
     events.sort((a, b) => a.start - b.start);
     this.events = events;
+    this.channels = assignChannels(project);
   }
 
   private firstEventAtOrAfter(beat: number): number {
@@ -227,7 +234,7 @@ export class Scheduler {
 
     // 트랙 번호와 MIDI 채널은 같지 않다 (드럼은 9번, 나머지는 9번을 건너뛴다).
     // 음량·팬은 play() 에서 한 번 걸어 뒀다 — 노트마다 다시 걸 필요가 없다.
-    const channel = assignChannels(project)[ev.trackIndex] ?? channelForTrack(ev.trackIndex);
+    const channel = this.channels[ev.trackIndex] ?? channelForTrack(ev.trackIndex);
     this.registry.forTrack(track).play(ev.pitch, ev.velocity, when, durationSec, channel);
   }
 
@@ -236,6 +243,7 @@ export class Scheduler {
     const project = this.getProject();
     const track = project.tracks[trackIndex];
     if (!track) return;
+    // 재생 중이 아니면 채널 배치가 아직 없다. 탭할 때마다 부르는 자리라 매번 계산해도 된다.
     const channel = assignChannels(project)[trackIndex] ?? channelForTrack(trackIndex);
     // 미리듣기는 뮤트여도 들려준다 — 사용자가 방금 그 건반을 누른 것이다.
     this.mixer.set(channel, {

@@ -353,13 +353,16 @@ export class InstrumentPanel {
     const fallback = sf.defaultPreset;
     if (!fallback) return;
 
-    this.project.tracks.forEach((track, i) => {
+    // 트랙마다 배치를 다시 계산하지 않는다. 게다가 아래에서 source 를 바꾸므로
+    // 드럼 여부가 달라질 수 있어, 다 바꾼 뒤에 한 번 배치한다.
+    this.project.tracks.forEach((track) => {
       if (track.source.kind !== "sf2") return;
       const preset = sf.findPreset(track.source.presetId) ?? fallback;
       track.source = { kind: "sf2", presetId: preset.id };
       track.name = preset.name;
-      this.registry.prepare(track, assignChannels(this.project)[i]);
     });
+    const channels = assignChannels(this.project);
+    this.project.tracks.forEach((track, i) => this.registry.prepare(track, channels[i]));
   }
 
   private currentPresetId(): number | null {
