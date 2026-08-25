@@ -1,0 +1,65 @@
+# 푸시하면 GitHub Pages 로 자동 배포한다.
+#
+# 이 앱은 백엔드가 없는 정적 파일 묶음이라 어딘가에 올려 두기만 하면
+# **주소만 열어서** 쓸 수 있다. 패드에서 쓰는 게 목적이라 이게 중요하다 —
+# 컴퓨터를 켜서 서버를 띄울 필요가 없어진다.
+#
+# 처음 한 번은 저장소 설정에서 켜 줘야 한다:
+#   Settings → Pages → Source 를 "GitHub Actions" 로
+
+name: Pages 배포
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# 배포는 한 번에 하나만. 연달아 푸시해도 순서가 꼬이지 않는다.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # 소리가 안 나는 것보다 빌드가 깨지는 게 낫다. 타입 검사와
+      # 브라우저가 필요 없는 점검은 배포 전에 돌린다.
+      - name: 점검 (브라우저 없이)
+        run: |
+          npm run midi
+          npm run names
+
+      - name: 빌드
+        run: npm run build
+        env:
+          # 저장소 이름이 곧 하위 경로다. 이름을 바꾸면 여기도 바뀐다.
+          BASE_PATH: /${{ github.event.repository.name }}/
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

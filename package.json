@@ -17,7 +17,8 @@
     "gen-samples": "node scripts/gen-samples.mjs",
     "names": "node scripts/samplename-test.mjs",
     "dev:https": "vite --mode https",
-    "predev:https": "npm run copy-worklet"
+    "predev:https": "npm run copy-worklet",
+    "built-check": "node scripts/built-check.mjs"
   },
   "devDependencies": {
     "@vitejs/plugin-basic-ssl": "^1.2.0",
