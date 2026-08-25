@@ -78,3 +78,35 @@ for (const [file, midi] of names) writeFileSync(join(DIR, file), toWav(pluck(mid
 writeFileSync(join(DIR, "녹음본.wav"), toWav(pluck(64)));
 
 console.log(`${DIR} — WAV ${names.length + 1}개 (그중 1개는 이름으로 음높이를 알 수 없음)`);
+
+/**
+ * 부는 악기 흉내 — 끝까지 음량이 유지되는 소리.
+ *
+ * 뜯는 소리와 다르게 다뤄져야 한다. 뜯는 건 손을 떼도 울리고, 부는 건 멎는다.
+ * 그 판정이 맞는지 보려면 두 종류가 다 있어야 한다.
+ */
+function sustained(midi, seconds = 3.0) {
+  const n = Math.floor(SR * seconds);
+  const f = noteToFreq(midi);
+  const data = new Float32Array(n);
+  for (let i = 0; i < n; i += 1) {
+    const t = i / SR;
+    // 살짝 흔들리지만 잦아들지는 않는다
+    const vib = 1 + 0.004 * Math.sin(2 * Math.PI * 5 * t);
+    data[i] = Math.sin(2 * Math.PI * f * vib * t) * 0.45;
+  }
+  const fade = Math.floor(SR * 0.03);
+  for (let i = 0; i < fade; i += 1) {
+    data[i] *= i / fade;
+    data[n - 1 - i] *= i / fade;
+  }
+  return data;
+}
+
+const SUS = "fixtures/sustained";
+rmSync(SUS, { recursive: true, force: true });
+mkdirSync(SUS, { recursive: true });
+for (const [file, midi] of [["대금_C5.wav", 72], ["대금_E5.wav", 76], ["대금_G5.wav", 79]]) {
+  writeFileSync(join(SUS, file), toWav(sustained(midi)));
+}
+console.log(`${SUS} — 지속음 WAV 3개 (여운 판정이 갈리는지 보려고)`);

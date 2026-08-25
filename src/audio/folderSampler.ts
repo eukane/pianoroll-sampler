@@ -11,12 +11,26 @@
  * 속도를 바꾸면 음색도 같이 변하니까(반음 몇 개까지가 한계다) 가장 가까운
  * 것을 고르는 게 중요하다.
  *
- * ## 릴리즈 꼬리를 남긴다
+ * ## 여운을 자를지 말지를 **재서** 정한다
  *
- * 뜯는 악기(가야금)는 손을 떼도 소리가 바로 안 끊긴다. 노트 길이에서 딱 잘라
- * 버리면 "툭" 하고 끊겨서 악기 소리로 안 들린다. 그래서 노트가 끝난 뒤에도
- * 샘플을 조금 더 흘려보내며 서서히 줄인다. 샘플에 이미 여운이 녹음돼 있으면
- * 그게 그대로 들린다.
+ * 뜯는 악기(가야금)는 손을 떼도 소리가 안 끊긴다. 뜯으면 알아서 1~2초 울리다
+ * 잦아든다. 그런데 처음엔 노트 길이 + 0.35초에서 무조건 잘랐다. 1/16 노트
+ * (120BPM 에서 0.125초)에 1.2초짜리 샘플이면 **0.475초에서 끊고 여운 0.7초를
+ * 버린다.** 가야금다움이 통째로 사라지는 자리다.
+ *
+ * 그렇다고 항상 끝까지 울리게 두면 부는 악기(대금·해금)가 이상해진다. 3초짜리
+ * 지속음이 1/16 노트에서도 3초를 다 울린다.
+ *
+ * 둘을 가르는 건 **샘플 자체**다. 뜯는 소리는 뒤로 갈수록 작아지고, 부는 소리는
+ * 유지된다. 그래서 파일을 읽을 때 앞뒤 음량을 재서 정한다.
+ *
+ *     앞 10% 구간 RMS 대비 뒤쪽 60% 지점 RMS 가 크게 떨어지면 → 뜯는 소리
+ *
+ * 뜯는 소리로 판정되면 노트 길이와 무관하게 **샘플이 다 울리게 둔다**(원샷).
+ * 지속음으로 판정되면 예전처럼 노트 길이를 따르고 짧은 여운을 붙인다.
+ *
+ * 추측으로 숫자를 바꾸지 않고 샘플에서 재는 쪽을 골랐다. 국악기 음원은 악기마다
+ * 성질이 달라서 하나로 정할 수가 없다.
  *
  * ## 세기 층
  *
@@ -34,13 +48,45 @@ export type SampleEntry = {
   /** 이 샘플이 원래 어느 음인지. null 이면 아직 사람이 정해 주지 않은 것. */
   pitch: number | null;
   layer: Layer | null;
+  /** 뒤로 갈수록 작아지는 소리인가 (뜯기·치기). 파일을 읽을 때 재서 정한다. */
+  decaying: boolean;
 };
 
 /** 재생 속도로 밀어낼 수 있는 한계(반음). 이보다 멀면 음색이 너무 망가진다. */
 const MAX_STRETCH = 12;
 
-/** 손을 뗀 뒤 남기는 여운(초). 뜯는 악기가 자연스럽게 들리는 최소치다. */
+/** 지속음에서 손을 뗀 뒤 남기는 여운(초). */
 const RELEASE = 0.35;
+
+/** 동시에 울릴 수 있는 샘플 수. 뜯는 소리는 길게 남아서 금방 쌓인다. */
+const MAX_VOICES = 32;
+
+/**
+ * 뒤로 갈수록 작아지는 소리인지 잰다.
+ *
+ * 앞부분(어택 직후)과 뒤쪽 60% 지점의 RMS 를 비교한다. 뜯거나 친 소리는 그때쯤
+ * 이미 많이 잦아들어 있고, 활로 켜거나 부는 소리는 비슷하게 유지된다.
+ */
+function looksDecaying(buffer: AudioBuffer): boolean {
+  const data = buffer.getChannelData(0);
+  const n = data.length;
+  if (n < 4410) return true; // 아주 짧은 건 원샷으로 봐도 무방하다
+
+  const rms = (from: number, to: number) => {
+    let sum = 0;
+    const a = Math.max(0, Math.floor(from));
+    const b = Math.min(n, Math.floor(to));
+    for (let i = a; i < b; i += 1) sum += data[i] * data[i];
+    return Math.sqrt(sum / Math.max(1, b - a));
+  };
+
+  // 어택 자체를 피해 5~15% 구간을 '앞' 으로 본다.
+  const head = rms(n * 0.05, n * 0.15);
+  const tail = rms(n * 0.55, n * 0.65);
+  if (head <= 1e-6) return true;
+  // 절반 아래로 떨어졌으면 잦아드는 소리로 본다 (-6dB).
+  return tail / head < 0.5;
+}
 
 export class SampleFolder {
   readonly id: string;
@@ -138,6 +184,7 @@ export class FolderSampler implements Instrument {
           buffer,
           pitch: parsed.pitch,
           layer: parsed.layer,
+          decaying: looksDecaying(buffer),
         });
       } catch {
         failed.push(file.name);
@@ -181,20 +228,32 @@ export class FolderSampler implements Instrument {
     const scale = entry.layer ? 0.55 + (velocity / 127) * 0.35 : (velocity / 127) * 0.9;
     const peak = Math.max(0.02, scale);
 
+    const sampleSeconds = entry.buffer.duration / source.playbackRate.value;
     const hold = Math.max(0.05, durationSec);
-    gain.gain.setValueAtTime(peak, when);
-    gain.gain.setValueAtTime(peak, when + hold);
-    // 여운. 지수 곡선이라야 사람 귀에 자연스럽게 잦아든다.
-    gain.gain.exponentialRampToValueAtTime(0.0001, when + hold + RELEASE);
+    let stopAt: number;
+
+    if (entry.decaying) {
+      // 뜯거나 친 소리 — 노트 길이와 무관하게 다 울리게 둔다.
+      // 실제 가야금이 그렇다. 손을 떼도 줄은 계속 울린다.
+      gain.gain.setValueAtTime(peak, when);
+      stopAt = when + sampleSeconds + 0.02;
+    } else {
+      // 활·입으로 내는 소리 — 손을 떼면 멎어야 한다.
+      gain.gain.setValueAtTime(peak, when);
+      gain.gain.setValueAtTime(peak, when + hold);
+      // 지수 곡선이라야 사람 귀에 자연스럽게 잦아든다.
+      gain.gain.exponentialRampToValueAtTime(0.0001, when + hold + RELEASE);
+      stopAt = when + Math.min(sampleSeconds, hold + RELEASE) + 0.02;
+    }
 
     source.connect(gain);
     gain.connect(this.mixer.input(channel));
 
-    // 샘플이 노트보다 짧으면 그냥 끝난다. 길면 여운까지만 흘리고 끊는다.
-    const sampleSeconds = entry.buffer.duration / source.playbackRate.value;
-    const stopAt = when + Math.min(sampleSeconds, hold + RELEASE) + 0.02;
     source.start(when);
     source.stop(stopAt);
+
+    // 여운을 길게 남기면 보이스가 금방 쌓인다. 상한을 두고 오래된 것부터 뺏는다.
+    if (this.playing.length >= MAX_VOICES) this.steal();
 
     const voice = { source, gain };
     this.playing.push(voice);
@@ -203,6 +262,21 @@ export class FolderSampler implements Instrument {
       const i = this.playing.indexOf(voice);
       if (i >= 0) this.playing.splice(i, 1);
     };
+  }
+
+  /** 가장 오래된 보이스를 짧게 페이드아웃시키고 자리를 넘긴다. */
+  private steal(): void {
+    const v = this.playing.shift();
+    if (!v) return;
+    const now = this.ctx.currentTime;
+    try {
+      v.gain.gain.cancelScheduledValues(now);
+      v.gain.gain.setValueAtTime(Math.max(0.0001, v.gain.gain.value), now);
+      v.gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.02);
+      v.source.stop(now + 0.03);
+    } catch {
+      /* 이미 끝난 노드 */
+    }
   }
 
   stopAll(): void {

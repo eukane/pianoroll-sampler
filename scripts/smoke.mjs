@@ -21,6 +21,7 @@
  *   · 되돌리기가 제스처 단위로 돌아가는가
  *   · 손가락을 대는 순간 소리가 나는가 (떼는 순간이 아니라)
  *   · 렌더 경로가 둘로 갈리는데 서로 정렬돼 있는가
+ *   · 뜯는 소리의 여운을 자르지 않는가 (부는 소리는 자르는가)
  *   · 콘솔 오류가 하나도 없는가
  *
  * 쓰는 법: 다른 창에서 `npm run dev` 를 띄워 두고 `npm run smoke`.
@@ -841,6 +842,58 @@ check(
   "SF2 트랙과 폴더 트랙이 같은 자리에서 소리 난다 (렌더 퀀텀 1개 이내)",
   alignment.skipped || Math.abs(alignment.gapMs) < 3.0,
   alignment,
+);
+
+// ---- 뜯는 악기의 여운 ----
+//
+// 가야금은 손을 떼도 줄이 계속 울린다. 노트 길이에서 자르면 가야금다움이
+// 통째로 사라진다. 그렇다고 늘 끝까지 두면 부는 악기가 늘어진다.
+// 샘플 자체를 재서 가른다 (audio/folderSampler.ts 의 looksDecaying).
+await page.locator("#instrument").click();
+await page.waitForTimeout(150);
+await page.locator("#sample-files").setInputFiles(
+  readdirSync("fixtures/sustained").map((f) => ({
+    name: f, mimeType: "audio/wav", buffer: readFileSync(`fixtures/sustained/${f}`),
+  })),
+);
+await page.waitForFunction(() => window.__app.registry.folders.list.length > 1, null, { timeout: 30000 });
+await page.waitForTimeout(400);
+await page.locator("#map-close").click().catch(() => {});
+
+const decay = await page.evaluate(async () => {
+  const { renderProject } = await import("/src/export/render.ts");
+  const app = window.__app;
+  const [pluck, sus] = app.registry.folders.list;
+  const lastSound = async (folderId) => {
+    const p = {
+      bpm: 120, bars: 2, timeSig: [4, 4],
+      tracks: [{ id: "t", name: "t", source: { kind: "sampleFolder", folderId },
+        notes: [{ id: "n", pitch: 72, start: 0, length: 0.25, velocity: 110 }],
+        volume: 1, pan: 0, muted: false, reverbSend: 0 }],
+    };
+    const b = await renderProject(p, async () => null, app.registry.folders.list, app.mixerState);
+    const d = b.getChannelData(0);
+    let last = 0;
+    for (let i = 0; i < d.length; i++) if (Math.abs(d[i]) > 1e-4) last = i;
+    return +(last / b.sampleRate).toFixed(3);
+  };
+  return {
+    뜯는판정: pluck.entries.every((e) => e.decaying),
+    부는판정: sus.entries.every((e) => !e.decaying),
+    뜯는끝초: await lastSound(pluck.id),
+    부는끝초: await lastSound(sus.id),
+  };
+});
+check("뜯는 소리와 부는 소리를 샘플에서 재서 가른다", decay.뜯는판정 && decay.부는판정, decay);
+check(
+  "짧은 노트여도 뜯는 소리는 여운이 그대로 남는다 (1.2초 샘플)",
+  decay.뜯는끝초 > 1.0,
+  { 노트길이초: 0.125, 실제끝초: decay.뜯는끝초 },
+);
+check(
+  "부는 소리는 노트 길이를 따른다 (3초 샘플이 늘어지지 않는다)",
+  decay.부는끝초 < 0.6,
+  { 노트길이초: 0.125, 실제끝초: decay.부는끝초 },
 );
 
 check("콘솔 오류 없음", errors.length === 0, errors);
