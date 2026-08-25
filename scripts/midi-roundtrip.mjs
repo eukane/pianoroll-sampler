@@ -107,6 +107,29 @@ for (let i = 0; i < manyBytes.length - 2; i++) {
 }
 check("트랙이 12개여도 드럼 채널(9)에 노트를 쓰지 않는다", !channels.has(9), [...channels].sort((a, b) => a - b));
 
+// --- 셋잇단음이 MIDI 에서 정확히 살아남는가 ---
+const triplet = {
+  bpm: 120, bars: 2, timeSig: [4, 4],
+  tracks: [{
+    id: "t", name: "셋잇단", source: { kind: "sf2", presetId: 0 },
+    notes: [0, 1/3, 2/3, 1, 1+1/6, 1+2/6].map((start, i) => ({
+      id: "x" + i, pitch: 60 + i, start, length: 1/6, velocity: 100,
+    })),
+    volume: 0.8, pan: 0, muted: false,
+  }],
+};
+const tBytes = projectToMidi(triplet);
+const tBack = midiToProject(tBytes);
+const wantStarts = triplet.tracks[0].notes.map((n) => +n.start.toFixed(6));
+const gotStarts = tBack.tracks[0].notes.map((n) => +n.start.toFixed(6));
+check("셋잇단음이 MIDI 왕복에서 그대로 살아남는다",
+  JSON.stringify(wantStarts) === JSON.stringify(gotStarts), { wantStarts, gotStarts });
+
+// PPQ 480 은 3으로 나누어떨어지므로 정수 틱이어야 한다
+check("셋잇단이 정수 틱으로 떨어진다 (다른 DAW 와 안 어긋난다)",
+  Number.isInteger((1 / 3) * PPQ) && Number.isInteger((1 / 6) * PPQ),
+  { "1/3박": (1 / 3) * PPQ, "1/6박": (1 / 6) * PPQ });
+
 // --- 드럼은 9번 채널로 나가고, 다시 읽어도 드럼이다 ---
 const withDrum = {
   bpm: 100, bars: 2, timeSig: [4, 4],

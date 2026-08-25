@@ -627,6 +627,35 @@ check(
 );
 await page.evaluate(() => window.__app.mixerState.clearSolo());
 
+// ---- 재생과 렌더가 같은 음량인가 ----
+// 렌더는 MIDI 를 거치는데 거기에 CC7(볼륨)을 실으면 신스가 한 번 더 줄인다.
+// GM 의 CC7 은 제곱 곡선이라 결과가 **세제곱**으로 줄어들었다 (실측 0.5→0.127).
+// 기본값 볼륨 0.8 에서 WAV 가 재생의 절반 음량으로 나갔다.
+const linearity = await page.evaluate(async () => {
+  const { renderProject } = await import("/src/export/render.ts");
+  const { peakOf } = await import("/src/export/wav.ts");
+  const p = window.__app.project;
+  p.bars = 1;
+  p.tracks.length = 1;
+  p.tracks[0].source = { kind: "sf2", presetId: 0 };
+  p.tracks[0].pan = 0; p.tracks[0].muted = false; p.tracks[0].reverbSend = 0;
+  p.tracks[0].notes = [{ id: "v", pitch: 60, start: 0, length: 1, velocity: 100 }];
+  const at = async (v) => {
+    p.tracks[0].volume = v;
+    const b = await renderProject(p, () => window.__app.registry.soundfont.bankBuffer(),
+      [], window.__app.mixerState);
+    return peakOf(b);
+  };
+  const full = await at(1.0);
+  const half = await at(0.5);
+  return { ratio: +(half / full).toFixed(3) };
+});
+check(
+  "음량이 렌더에 한 번만 걸린다 (재생과 같은 크기)",
+  Math.abs(linearity.ratio - 0.5) < 0.03,
+  { "볼륨0.5일때비율": linearity.ratio, 기대: 0.5 },
+);
+
 // ---- 리버브 센드 ----
 await page.evaluate(() => {
   const p = window.__app.project;

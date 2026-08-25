@@ -143,8 +143,15 @@ async function renderWithSoundFont(
   // 안 들리는 트랙은 아예 빼고 MIDI 를 만든다. 믹서에서 0 으로 눌러도 되지만,
   // 소리를 만들지 않는 쪽이 렌더가 빠르다.
   const audible = part.tracks.filter((t) => mixerState.isAudible(t));
+  // 음량·팬은 싣지 않는다. 믹서가 이미 걸고 있어서 여기서 또 실으면 두 번
+  // 줄어든다 (export/midi.ts 의 MidiOptions 참고).
   const midi = BasicMIDI.fromArrayBuffer(
-    toArrayBuffer(projectToMidi({ ...full, tracks: full.tracks.map((t) => (audible.includes(t) ? t : { ...t, notes: [] })) })),
+    toArrayBuffer(
+      projectToMidi(
+        { ...full, tracks: full.tracks.map((t) => (audible.includes(t) ? t : { ...t, notes: [] })) },
+        { includeMixer: false },
+      ),
+    ),
   );
   // 문서 경고: 신스를 만든 직후, 다른 걸 부르기 전에 이걸 불러야 한다.
   await synth.startOfflineRender({

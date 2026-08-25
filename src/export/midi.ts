@@ -88,13 +88,33 @@ function chunk(id: string, body: Uint8Array): Uint8Array {
 
 type Event = { tick: number; order: number; data: number[] };
 
+export type MidiOptions = {
+  /**
+   * 트랙 음량·팬을 CC7/CC10 으로 실어 보낼지.
+   *
+   * **파일로 내보낼 때는 실어야 하고, 우리 렌더에 먹일 때는 실으면 안 된다.**
+   *
+   * 우리 렌더는 신스 출력을 믹서로 받아서 거기서 음량·팬을 건다. 그런데 MIDI 에
+   * CC7 을 같이 실으면 신스가 **한 번 더** 줄인다. 게다가 GM 의 CC7 은 제곱
+   * 곡선이라 결과가 세제곱으로 줄어든다. 실측이 정확히 그랬다.
+   *
+   *     볼륨 0.5 → 렌더 피크가 0.127배   (0.5³ = 0.125)
+   *     볼륨 0.25 → 0.016배              (0.25³ = 0.0156)
+   *
+   * 기본값인 볼륨 0.8 에서 WAV 가 재생의 절반 음량으로 나갔다. "들을 때는
+   * 괜찮았는데 파일로 뽑으니 다르다" 가 되는 전형적인 자리다.
+   */
+  includeMixer?: boolean;
+};
+
 /**
  * 프로젝트를 SMF 포맷 1 로 쓴다.
  *
  * 포맷 1 은 "트랙 여러 개를 동시에 재생" 이라는 뜻이고, 첫 트랙에 템포·박자를
  * 몰아 넣는 게 관례다. FL Studio Mobile 을 포함해 대부분의 DAW 가 이걸 기대한다.
  */
-export function projectToMidi(project: Project): Uint8Array {
+export function projectToMidi(project: Project, options: MidiOptions = {}): Uint8Array {
+  const includeMixer = options.includeMixer !== false;
   const tracks: Uint8Array[] = [];
 
   // 0번 트랙: 템포와 박자만. 노트는 없다.
@@ -112,7 +132,7 @@ export function projectToMidi(project: Project): Uint8Array {
 
   const channels = assignChannels(project);
   project.tracks.forEach((track, index) => {
-    tracks.push(chunk("MTrk", writeTrack(track, channels[index])));
+    tracks.push(chunk("MTrk", writeTrack(track, channels[index], includeMixer)));
   });
 
   const header = new ByteWriter();
@@ -131,7 +151,7 @@ export function projectToMidi(project: Project): Uint8Array {
   return out;
 }
 
-function writeTrack(track: Track, channel: number): Uint8Array {
+function writeTrack(track: Track, channel: number, includeMixer: boolean): Uint8Array {
   const events: Event[] = [];
 
   // 트랙 이름 (다른 DAW 에서 트랙 목록에 뜬다)
@@ -148,9 +168,13 @@ function writeTrack(track: Track, channel: number): Uint8Array {
     events.push({ tick: 0, order: 3, data: [0xc0 | channel, program] });
   }
 
-  // 볼륨·팬도 함께 내보낸다. 다른 DAW 에서 열었을 때 균형이 유지된다.
-  events.push({ tick: 0, order: 4, data: [0xb0 | channel, 7, clamp7(track.volume * 127)] });
-  events.push({ tick: 0, order: 5, data: [0xb0 | channel, 10, clamp7((track.pan + 1) * 63.5)] });
+  // 볼륨·팬은 **파일로 내보낼 때만** 싣는다. 다른 DAW 에서 열었을 때 균형이
+  // 유지되어야 하기 때문이다. 우리 렌더에 먹일 때는 믹서가 이미 걸고 있어서
+  // 여기서 또 실으면 두 번 줄어든다 (MidiOptions 주석 참고).
+  if (includeMixer) {
+    events.push({ tick: 0, order: 4, data: [0xb0 | channel, 7, clamp7(track.volume * 127)] });
+    events.push({ tick: 0, order: 5, data: [0xb0 | channel, 10, clamp7((track.pan + 1) * 63.5)] });
+  }
 
   for (const note of track.notes) {
     const on = Math.round(note.start * PPQ);

@@ -63,7 +63,19 @@ export function sortNotes(track: Track): void {
   track.notes.sort((a, b) => a.start - b.start || a.pitch - b.pitch);
 }
 
-/** 그리드 스냅. unit 은 박 단위 (1/4음표=1, 1/8=0.5, 1/16=0.25). */
+/**
+ * 그리드 스냅. unit 은 박 단위.
+ *
+ *     1/4 = 1      1/8 = 0.5      1/16 = 0.25
+ *     1/8 셋잇단 = 1/3            1/16 셋잇단 = 1/6
+ *
+ * 셋잇단은 한 박을 셋으로 나눈 것이라 1/16 격자로는 **절대 못 찍는다.**
+ * 0.25 격자에 0.333… 을 올릴 방법이 없다.
+ *
+ * 소수점이 딱 떨어지지 않지만 MIDI 로 나갈 때는 정확하다. 4분음표를 480틱으로
+ * 쓰는데(PPQ) 480 은 3으로 나누어떨어져서, 1/3박 = 160틱, 1/6박 = 80틱으로
+ * 정수가 된다. 다른 DAW 에서 열어도 어긋나지 않는다.
+ */
 export function snap(beat: number, unit: number): number {
   if (unit <= 0) return beat;
   return Math.round(beat / unit) * unit;

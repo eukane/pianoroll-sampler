@@ -18,7 +18,8 @@
     "names": "node scripts/samplename-test.mjs",
     "dev:https": "vite --mode https",
     "predev:https": "npm run copy-worklet",
-    "built-check": "node scripts/built-check.mjs"
+    "built-check": "node scripts/built-check.mjs",
+    "gen-big-sf2": "node --max-old-space-size=4096 scripts/gen-big-sf2.mjs"
   },
   "devDependencies": {
     "@vitejs/plugin-basic-ssl": "^1.2.0",
