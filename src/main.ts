@@ -10,6 +10,7 @@ import { AudioEngine } from "./audio/engine";
 import { Mixer } from "./audio/mixer";
 import { MixerState } from "./audio/mixerState";
 import { InstrumentRegistry } from "./audio/registry";
+import { canUseSoundFont, INSECURE_HINT } from "./audio/soundfont";
 import type { Waveform } from "./audio/oscInstrument";
 import { Scheduler } from "./audio/scheduler";
 import { beatsPerBar, emptyProject, totalBeats } from "./model/project";
@@ -342,3 +343,9 @@ window.addEventListener("keydown", (e) => {
 
 refreshHistoryButtons();
 mixerState.apply(project, mixer);
+
+// 폰에서 와이파이로 붙었을 때 미리 알려 준다. 사운드폰트를 넣어 보고 나서
+// 안 된다는 걸 알면 이미 파일을 고르느라 시간을 쓴 뒤다.
+if (!canUseSoundFont()) {
+  showStatus(INSECURE_HINT, "error");
+}

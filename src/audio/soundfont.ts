@@ -50,6 +50,27 @@ export function looksLikeSoundBank(buffer: ArrayBuffer): boolean {
 /** 워크렛이 응답 없이 멈추는 경우를 대비한 상한. 큰 파일도 이 안에는 끝난다. */
 const LOAD_TIMEOUT_MS = 60_000;
 
+/**
+ * 이 주소에서 사운드폰트를 쓸 수 있는가.
+ *
+ * AudioWorklet 은 **보안 컨텍스트**에서만 있다. `localhost` 는 예외로 쳐 주지만
+ * `http://192.168.0.5:5173` 처럼 IP 로 붙으면 없다. 폰에서 같은 와이파이의
+ * 컴퓨터에 접속하는 게 정확히 그 경우라, 아무 처리도 안 하면
+ *
+ *     Cannot read properties of undefined (reading 'addModule')
+ *
+ * 이 뜬다. 사용자가 알아들을 수 없는 말이고, 무엇을 하면 되는지도 알 수 없다.
+ * 미리 확인해서 사람 말로 알려 준다.
+ */
+export function canUseSoundFont(): boolean {
+  return typeof AudioWorkletNode !== "undefined" && window.isSecureContext;
+}
+
+export const INSECURE_HINT =
+  "이 주소에서는 사운드폰트(.sf2)를 쓸 수 없습니다. 브라우저가 https 나 localhost 에서만" +
+  " 허용하는 기능을 씁니다. 폰에서 쓰려면 `npm run dev:https` 로 띄운 https 주소로 접속하거나," +
+  " 폰 안에서 직접 실행하세요. (낱개 WAV 폴더와 임시 신스는 지금도 됩니다)";
+
 export class SoundFontInstrument implements Instrument {
   private synth: WorkletSynthesizer | null = null;
   /**
@@ -112,6 +133,9 @@ export class SoundFontInstrument implements Instrument {
     const fileName = file.name;
     if (!looksLikeSoundBank(buffer)) {
       throw new Error("사운드폰트 파일이 아니거나 파일이 깨졌습니다 (RIFF/sfbk 헤더가 없습니다)");
+    }
+    if (!canUseSoundFont()) {
+      throw new Error(INSECURE_HINT);
     }
 
     if (!this.synth) {

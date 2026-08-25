@@ -15,9 +15,12 @@
     "presmoke": "npm run gen-fixture && npm run gen-samples",
     "midi": "node scripts/midi-roundtrip.mjs",
     "gen-samples": "node scripts/gen-samples.mjs",
-    "names": "node scripts/samplename-test.mjs"
+    "names": "node scripts/samplename-test.mjs",
+    "dev:https": "vite --mode https",
+    "predev:https": "npm run copy-worklet"
   },
   "devDependencies": {
+    "@vitejs/plugin-basic-ssl": "^1.2.0",
     "playwright": "^1.49.0",
     "typescript": "^5.6.3",
     "vite": "^5.4.10"
