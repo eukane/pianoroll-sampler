@@ -21,6 +21,7 @@ import { InstrumentPanel } from "./ui/instrumentPanel";
 import { ExportPanel } from "./ui/exportPanel";
 import { MixerPanel } from "./ui/mixerPanel";
 import { History } from "./history";
+import { copyRegion, pasteAt, lastBeat, type Clipboard } from "./model/clipboard";
 
 const project = emptyProject();
 
@@ -223,6 +224,81 @@ redoBtn.addEventListener("click", () => {
     applyProject(next);
     showStatus("다시 실행했습니다");
   }
+});
+
+// ------------------------------------------------------- 복사 / 붙여넣기
+
+const copyBtn = $<HTMLButtonElement>("copy");
+const pasteBtn = $<HTMLButtonElement>("paste");
+let clipboard: Clipboard | null = null;
+
+/**
+ * 무엇을 복사할지.
+ *
+ * 루프 구간이 잡혀 있으면 그것, 아니면 **재생 헤드가 있는 마디**. 마디마다
+ * 같은 코드를 찍는 게 원래 불편했던 일이라, 아무것도 안 잡아도 한 마디가
+ * 잡히는 게 맞다.
+ */
+function copyRange(): { start: number; end: number } {
+  const bpb = beatsPerBar(project);
+  if (scheduler.loopEnabled && scheduler.loopEnd - scheduler.loopStart > 0.01) {
+    return { start: scheduler.loopStart, end: scheduler.loopEnd };
+  }
+  const bar = Math.floor(scheduler.positionBeats() / bpb);
+  return { start: bar * bpb, end: (bar + 1) * bpb };
+}
+
+copyBtn.addEventListener("click", () => {
+  const track = project.tracks[panel.activeTrack];
+  if (!track) return;
+  const { start, end } = copyRange();
+  const copied = copyRegion(track, start, end);
+  if (copied.notes.length === 0) {
+    showStatus("복사할 노트가 없습니다. 루프 구간을 잡거나 노트가 있는 마디로 옮겨 주세요.", "error");
+    return;
+  }
+  clipboard = copied;
+  pasteBtn.disabled = false;
+
+  // 복사한 구간 **끝으로** 헤드를 옮긴다.
+  //
+  // 안 그러면 헤드가 복사한 자리에 그대로 있어서, 붙여넣기를 누르는 순간
+  // 원본 위에 똑같은 노트가 겹쳐 쌓인다. 같은 코드를 이어 붙이려는 게 목적이니
+  // 다음 자리에서 시작하는 게 맞다.
+  scheduler.seek(end);
+  roll.followPlayhead(scheduler.positionBeats());
+  const bars = (copied.lengthBeats / beatsPerBar(project)).toFixed(
+    copied.lengthBeats % beatsPerBar(project) === 0 ? 0 : 1,
+  );
+  showStatus(`${copied.notes.length}개 음을 복사했습니다 (${bars}마디). 붙여넣기를 연달아 누르면 계속 채워집니다.`);
+});
+
+pasteBtn.addEventListener("click", () => {
+  const track = project.tracks[panel.activeTrack];
+  if (!clipboard || !track) return;
+
+  history.begin();
+  const at = scheduler.positionBeats();
+  const added = pasteAt(track, clipboard, at);
+
+  // 곡 끝을 넘겨 붙였으면 마디를 늘린다. 조용히 잘라내면 붙인 게 사라진다.
+  const bpb = beatsPerBar(project);
+  const needed = Math.ceil(lastBeat(added) / bpb);
+  if (needed > project.bars) {
+    project.bars = Math.min(64, needed);
+    barsInput.value = String(project.bars);
+  }
+
+  // **헤드를 붙인 만큼 민다.** 이게 없으면 마디마다 헤드를 옮겨야 해서
+  // 손이 두 배로 간다. 이걸로 붙여넣기 연타만으로 마디가 채워진다.
+  scheduler.seek(at + clipboard.lengthBeats);
+
+  history.commit();
+  refreshHistoryButtons();
+  mixerState.apply(project, mixer);
+  scheduler.invalidate();
+  roll.followPlayhead(scheduler.positionBeats());
+  showStatus(`${added.length}개 음을 붙여넣었습니다 → 다음 자리로 이동`);
 });
 
 // ---------------------------------------------------------------- 믹서

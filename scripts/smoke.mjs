@@ -22,6 +22,7 @@
  *   · 손가락을 대는 순간 소리가 나는가 (떼는 순간이 아니라)
  *   · 렌더 경로가 둘로 갈리는데 서로 정렬돼 있는가
  *   · 뜯는 소리의 여운을 자르지 않는가 (부는 소리는 자르는가)
+ *   · 복사 한 번 + 붙여넣기 연타로 마디가 채워지는가
  *   · 콘솔 오류가 하나도 없는가
  *
  * 쓰는 법: 다른 창에서 `npm run dev` 를 띄워 두고 `npm run smoke`.
@@ -950,6 +951,76 @@ await page.waitForTimeout(200);
 check(
   "헤드에서 떨어진 곳을 끌면 루프 구간이 잡힌다",
   await page.evaluate(() => window.__app.scheduler.loopEnabled),
+);
+
+// ---- 복사 / 붙여넣기 ----
+// 마디마다 같은 코드를 다시 찍는 게 번거롭다는 요청에서 나왔다. 그 일이
+// **복사 한 번 + 붙여넣기 연타**로 끝나야 의미가 있다.
+await page.evaluate(() => {
+  const p = window.__app.project;
+  p.bpm = 120; p.bars = 8; p.timeSig = [4, 4];
+  p.tracks.length = 1;
+  p.tracks[0].source = { kind: "sf2", presetId: 0 };
+  p.tracks[0].notes = [60, 64, 67].map((pitch, i) => ({
+    id: "ch" + i, pitch, start: 0, length: 1, velocity: 100,
+  }));
+  window.__app.panel.activeTrack = 0;
+  window.__app.roll.activeTrack = 0;
+  window.__app.scheduler.loopEnabled = false;
+  window.__app.scheduler.seek(0);
+});
+await page.waitForTimeout(150);
+
+await page.locator("#copy").click();
+await page.waitForTimeout(150);
+check(
+  "루프를 안 잡아도 헤드가 있는 마디가 복사된다",
+  (await page.locator("#status").textContent())?.includes("3개 음을 복사") &&
+    !(await page.locator("#paste").isDisabled()),
+  await page.locator("#status").textContent(),
+);
+
+// 붙여넣기를 세 번 연달아 — 헤드가 알아서 밀려야 한다
+for (let i = 0; i < 3; i += 1) {
+  await page.locator("#paste").click();
+  await page.waitForTimeout(150);
+}
+const filled = await page.evaluate(() => {
+  const notes = window.__app.project.tracks[0].notes;
+  return {
+    총노트: notes.length,
+    시작점들: [...new Set(notes.map((n) => n.start))].sort((a, b) => a - b),
+    헤드: +window.__app.scheduler.positionBeats().toFixed(2),
+  };
+});
+check(
+  "붙여넣기 연타만으로 마디가 하나씩 채워진다",
+  filled.총노트 === 12 &&
+    JSON.stringify(filled.시작점들) === JSON.stringify([0, 4, 8, 12]),
+  filled,
+);
+check("붙여넣을 때마다 헤드가 다음 마디로 간다", Math.abs(filled.헤드 - 16) < 0.01, filled.헤드);
+
+// 되돌리기가 붙여넣기 한 번을 통째로 되돌리는가
+await page.locator("#undo").click();
+await page.waitForTimeout(200);
+check(
+  "붙여넣기 한 번이 되돌리기 한 번으로 사라진다",
+  (await page.evaluate(() => window.__app.project.tracks[0].notes.length)) === 9,
+  await page.evaluate(() => window.__app.project.tracks[0].notes.length),
+);
+
+// 곡 끝을 넘겨 붙이면 마디가 늘어나는가
+await page.evaluate(() => {
+  window.__app.project.bars = 2;
+  window.__app.scheduler.seek(20);
+});
+await page.locator("#paste").click();
+await page.waitForTimeout(200);
+check(
+  "곡 끝을 넘겨 붙이면 마디가 늘어난다 (조용히 잘리지 않는다)",
+  (await page.evaluate(() => window.__app.project.bars)) >= 6,
+  await page.evaluate(() => window.__app.project.bars),
 );
 
 check("콘솔 오류 없음", errors.length === 0, errors);

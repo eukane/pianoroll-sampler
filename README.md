@@ -59,10 +59,11 @@ AudioWorklet 이 보안 컨텍스트(https 나 localhost)에서만 동작하는�
 
 ```bash
 npm run build      # 타입 검사 + 프로덕션 빌드
-npm run smoke      # 브라우저 자동 점검 58가지 (dev 서버를 띄워 둔 상태에서)
+npm run smoke      # 브라우저 자동 점검 63가지 (dev 서버를 띄워 둔 상태에서)
 npm run midi       # MIDI 왕복 점검 20가지 (브라우저 없이, 1초)
 npm run names      # 샘플 파일명 읽기 점검 19가지 (브라우저 없이)
 npm run audit      # 고치다 옆엣것을 깨뜨리지 않았는지 9가지 (브라우저 없이)
+npm run clipboard  # 복사·붙여넣기 점검 15가지 (브라우저 없이)
 ```
 
 `npm run smoke` 는 테스트용 SF2 를 직접 만들어 쓴다(`scripts/gen-fixture.mjs`).
