@@ -12,7 +12,7 @@
 
 import { WorkletSynthesizer } from "spessasynth_lib";
 import type { Instrument } from "./instrument";
-import type { Mixer } from "./mixer";
+import { MAX_CHANNELS, type Mixer } from "./mixer";
 import { packPresetId, unpackPresetId } from "../model/preset";
 
 /** 화면에 뿌리는 프리셋 한 줄. */
@@ -91,6 +91,14 @@ export class SoundFontInstrument implements Instrument {
   private presets: Preset[] = [];
   /** 채널에 지금 걸려 있는 프리셋. 같은 값을 또 보내지 않으려고 들고 있는다. */
   private channelPreset = new Map<number, number>();
+  /**
+   * 신스 안쪽 시계가 AudioContext 시계보다 얼마나 뒤처져 있는가(초).
+   * `calibrate()` 가 실측해서 넣는다. 자세한 사연은 아래 calibrate() 주석.
+   */
+  private clockOffset = 0;
+  /** 지금 돌고 있는 보정 작업. 끝나야 값이 확정된다. */
+  private calibration: Promise<number> = Promise.resolve(0);
+  private calibrating = false;
 
   constructor(
     private ctx: AudioContext,
@@ -195,6 +203,174 @@ export class SoundFontInstrument implements Instrument {
     this.channelPreset.clear();
     this.loaded = true;
     this.sourceFile = file;
+
+    // 실제로 소리가 나는 시각을 재서 어긋난 만큼을 보정한다.
+    // **기다리지 않는다.** 재는 데 2초쯤 걸리는데, 그동안 악기 목록을 못 보고
+    // 있으면 "멈춘 줄 알았다" 가 된다. 목록은 지금 바로 주고 보정은 뒤에서 한다.
+    // 실패해도 0 으로 두고 넘어간다 — 박자가 조금 밀릴 뿐 소리는 난다.
+    void this.calibrate();
+  }
+
+  /** 보정이 끝나기를 기다린다. 끝난 뒤의 보정값(ms)을 돌려준다. */
+  async whenCalibrated(): Promise<number> {
+    await this.calibration;
+    return this.clockOffsetMs;
+  }
+
+  /**
+   * 신스가 예약을 얼마나 늦게 지키는지 **실측**해서 `clockOffset` 에 넣는다.
+   *
+   * 왜 필요한가. 우리는 노트를 `noteOn(..., { time: 절대시각 })` 으로 미리
+   * 예약한다. 그런데 그 시각을 판정하는 시계는 AudioContext 의 시계가 아니라
+   * **워크렛 안에서 따로 세는 시계**다 (spessasynth 는 프로세서가 만들어진
+   * 순간의 시각을 시작점으로 잡고, 그 뒤로는 렌더한 샘플 수만큼 더한다).
+   *
+   * 프로세서가 만들어진 시점과 그래프가 실제로 그 노드를 돌리기 시작한 시점
+   * 사이의 틈이 그대로 **영구 오차**로 남는다. 헤드리스 크로미움에서 재 보니
+   * 70.9ms 였고, 27초 동안 한 샘플도 안 변했다 — 흘러가는 게 아니라 처음에
+   * 한 번 어긋난 채로 고정되는 종류다.
+   *
+   *     임시 신스 / 낱개 WAV : 정확히 제시간   (AudioBufferSourceNode 가 지킨다)
+   *     사운드폰트          : 70.9ms 늦음
+   *
+   * 120BPM 에서 한 박의 14% 다. 두 트랙을 같이 들으면 바로 어긋나게 들린다.
+   *
+   * 값이 기기마다 다르므로 상수로 박을 수 없다. 그래서 잰다.
+   *
+   * 재는 법: 채널 하나(15번)를 믹서에서 잠깐 떼어 **분석기에만** 물리고, 같은
+   * 시각에 예약한 기준 오실레이터(역시 분석기에만 연결)와 비교한다. 둘 다
+   * 스피커로 가지 않으므로 **소리가 나지 않는다.** 분석기 두 개를 같은 틱에
+   * 읽으면 버퍼 끝 시각이 같아서, 두 파형의 시작 샘플 차이가 곧 어긋난 양이다.
+   */
+  calibrate(): Promise<number> {
+    // 두 번 겹쳐 돌면 채널을 떼었다 붙였다 하는 게 엉킨다. 돌고 있으면 그걸 준다.
+    if (this.calibrating) return this.calibration;
+    this.calibrating = true;
+    this.calibration = this.runCalibration().finally(() => {
+      this.calibrating = false;
+    });
+    return this.calibration;
+  }
+
+  private async runCalibration(): Promise<number> {
+    const synth = this.synth;
+    // 드럼 킷을 15번 채널(타악기 채널이 아니다)에 걸면 소리가 안 날 수 있다.
+    const preset = this.presets.find((p) => !p.isDrum) ?? this.presets[0];
+    if (!synth || !preset) return this.clockOffset;
+
+    // 소리가 아직 잠겨 있으면(첫 터치 전) 잴 수가 없다. 잠깐 기다려 본다.
+    const running = () => this.ctx.state === "running";
+    if (!running()) {
+      await Promise.race([
+        new Promise<void>((resolve) => {
+          this.ctx.addEventListener("statechange", () => {
+            if (running()) resolve();
+          });
+        }),
+        new Promise<void>((resolve) => setTimeout(resolve, 3000)),
+      ]);
+      if (!running()) return this.clockOffset;
+    }
+
+    // 15번 채널을 잠깐 빌린다. 드럼 채널(9)이 아니고, 트랙이 15개를 넘지 않는
+    // 한 비어 있다. 보정하는 2초 동안만 믹서에서 떨어져 있다.
+    const CH = MAX_CHANNELS - 1;
+    const mixerInput = this.mixer.inputs[CH];
+    const measured: number[] = [];
+
+    try {
+      synth.disconnectChannel(mixerInput, CH);
+      // 프리셋 캐시를 비워 두지 않으면 아래 setPreset 이 걸러진다.
+      this.channelPreset.delete(CH);
+      this.setPreset(CH, preset.id);
+
+      // 3회. 첫 회는 버린다 — 프로그램 체인지 뒤 **첫 음**은 워크렛이 샘플을
+      // 처음 만지느라 따로 늦다(같은 조건에서 123ms 대 55ms). 그건 매번 생기는
+      // 지연이 아니라서 보정값으로 삼으면 나머지가 전부 당겨진다.
+      for (let round = 0; round < 3; round += 1) {
+        const value = await this.measureOnce(synth, CH);
+        if (round > 0 && value !== null && value > 0.002 && value < 0.4) measured.push(value);
+      }
+    } catch {
+      /* 못 재면 보정하지 않는다 */
+    } finally {
+      try {
+        synth.connectChannel(mixerInput, CH);
+      } catch {
+        /* 이미 연결돼 있으면 그만이다 */
+      }
+      this.channelPreset.delete(CH);
+    }
+
+    // 가장 작은 값. 측정 오차는 늦는 쪽으로만 생긴다.
+    // 말이 되는 범위를 벗어난 회차는 위에서 이미 버렸다 — 잘못 잰 값으로
+    // 박자를 밀면 안 고친 것보다 나쁘다.
+    if (measured.length > 0) this.clockOffset = Math.min(...measured);
+    return this.clockOffset;
+  }
+
+  /** calibrate() 한 회차. 실패하면 null. */
+  private async measureOnce(synth: WorkletSynthesizer, channel: number): Promise<number | null> {
+    const FFT = 32768; // 743ms 창. 노트가 이 안에 들어와야 잡힌다
+    const ctx = this.ctx;
+
+    // 앞 회차의 여운이 창(743ms) 안에 남아 있으면 그걸 시작점으로 잡아
+    // 말도 안 되는 값이 나온다. 끊고, 잦아들 때까지 기다린 뒤에 분석기를 단다.
+    //
+    // stopAll 이 아니라 **이 채널만** 끈다(CC120). 보정은 뒤에서 도는 작업이라,
+    // 그 사이 사용자가 재생을 눌렀으면 stopAll 은 그 소리까지 잘라 버린다.
+    synth.controllerChange(channel, 120, 0);
+    await new Promise((r) => setTimeout(r, 180));
+
+    const tap = () => {
+      const a = ctx.createAnalyser();
+      a.fftSize = FFT;
+      return a;
+    };
+    const refTap = tap();
+    const synthTap = tap();
+    synth.connectChannel(synthTap, channel);
+
+    // 기준음. 분석기에만 연결하므로 스피커로 나가지 않는다.
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    gain.gain.value = 0.5;
+    osc.connect(gain);
+    gain.connect(refTap);
+
+    const when = ctx.currentTime + 0.15;
+    osc.start(when);
+    osc.stop(when + 0.12);
+    synth.noteOn(channel, 69, 100, { time: when });
+    synth.noteOff(channel, 69, { time: when + 0.12 });
+
+    await new Promise((r) => setTimeout(r, 430));
+
+    const refBuf = new Float32Array(FFT);
+    const synthBuf = new Float32Array(FFT);
+    // 같은 틱에 연달아 읽어야 두 버퍼의 끝 시각이 같다.
+    refTap.getFloatTimeDomainData(refBuf);
+    synthTap.getFloatTimeDomainData(synthBuf);
+
+    osc.disconnect();
+    gain.disconnect();
+    refTap.disconnect();
+    try {
+      synth.disconnectChannel(synthTap, channel);
+    } catch {
+      /* 무시 */
+    }
+    synthTap.disconnect();
+
+    const refAt = firstAudible(refBuf);
+    const synthAt = firstAudible(synthBuf);
+    if (refAt < 0 || synthAt < 0) return null;
+    return (synthAt - refAt) / ctx.sampleRate;
+  }
+
+  /** 실측한 어긋남(밀리초). 화면에 보여 주거나 시험에서 확인할 때 쓴다. */
+  get clockOffsetMs(): number {
+    return this.clockOffset * 1000;
   }
 
   /** 채널에 프리셋을 건다. 악기 교체가 실제로 일어나는 곳. */
@@ -204,7 +380,7 @@ export class SoundFontInstrument implements Instrument {
     this.channelPreset.set(channel, presetId);
 
     const { bankMSB, program, isDrum } = unpackPresetId(presetId);
-    const options = when === undefined ? undefined : { time: when };
+    const options = when === undefined ? undefined : { time: when - this.clockOffset };
     // 드럼은 9번 채널에 놓기 때문에(model/channels.ts) 뱅크를 따로 보내지 않는다.
     // 신스가 그 채널을 알아서 타악기로 다룬다.
     if (!isDrum) {
@@ -217,13 +393,21 @@ export class SoundFontInstrument implements Instrument {
 
   play(pitch: number, velocity: number, when: number, durationSec: number, channel: number): void {
     if (!this.synth) return;
-    this.synth.noteOn(channel, pitch, Math.max(1, Math.round(velocity)), { time: when });
-    this.synth.noteOff(channel, pitch, { time: when + durationSec });
+    // 신스 안쪽 시계가 뒤처져 있는 만큼 당겨서 준다 (calibrate() 참고).
+    const at = when - this.clockOffset;
+    this.synth.noteOn(channel, pitch, Math.max(1, Math.round(velocity)), { time: at });
+    this.synth.noteOff(channel, pitch, { time: at + durationSec });
   }
 
   stopAll(): void {
     this.synth?.stopAll(true);
   }
+}
+
+/** 파형에서 소리가 시작한 샘플 번호. 없으면 -1. */
+function firstAudible(data: Float32Array): number {
+  for (let i = 0; i < data.length; i += 1) if (Math.abs(data[i]) > 1e-4) return i;
+  return -1;
 }
 
 function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {

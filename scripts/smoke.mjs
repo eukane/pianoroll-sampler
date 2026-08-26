@@ -21,6 +21,7 @@
  *   · 되돌리기가 제스처 단위로 돌아가는가
  *   · 손가락을 대는 순간 소리가 나는가 (떼는 순간이 아니라)
  *   · 렌더 경로가 둘로 갈리는데 서로 정렬돼 있는가
+ *   · 재생에서 사운드폰트가 임시 신스와 같은 시각에 울리는가 (워크렛 시계 보정)
  *   · 뜯는 소리의 여운을 자르지 않는가 (부는 소리는 자르는가)
  *   · 복사 한 번 + 붙여넣기 연타로 마디가 채워지는가
  *   · 내보내기가 조용히 실패하지 않는가 (무음 · 곡 밖 노트 · 음소거 트랙)
@@ -845,6 +846,61 @@ check(
   alignment.skipped || Math.abs(alignment.gapMs) < 3.0,
   alignment,
 );
+
+// ---- 실시간 재생에서도 정렬돼 있는가 ----
+//
+// 위 검사는 **내보내기** 경로다. 화면에서 듣는 재생은 noteOn(..., {time}) 으로
+// 예약하는 다른 경로이고, 여기가 실제로 밀려 있었다 — 사운드폰트만 70.9ms 늦게
+// 울렸다(임시 신스·폴더 샘플러는 정확). 워크렛이 자기 시계를 따로 세는데 그
+// 시작점이 어긋나서 생긴 고정 오차라, 재서 당겨 주는 수밖에 없다
+// (audio/soundfont.ts 의 calibrate).
+//
+// 재는 법: 채널 0(임시 신스)과 1(사운드폰트)에 분석기를 하나씩 물리고 같은
+// 시각에 예약한 뒤, 한 틱 안에서 두 파형의 시작 샘플을 비교한다.
+const livePlay = await page.evaluate(async () => {
+  const app = window.__app;
+  const ctx = app.engine.ctx;
+  const tap = (ch) => {
+    const a = ctx.createAnalyser();
+    a.fftSize = 32768;
+    app.mixer.inputs[ch].connect(a);
+    return a;
+  };
+  const a0 = tap(0);
+  const a1 = tap(1);
+  app.registry.soundfont.setPreset(1, app.registry.soundfont.presetList[0].id);
+  for (const ch of [0, 1]) app.mixer.set(ch, { volume: 1, pan: 0, muted: false, send: 0 });
+  await new Promise((r) => setTimeout(r, 200));
+
+  const T = ctx.currentTime + 0.3;
+  app.registry.osc.play(69, 110, T, 0.4, 0);
+  app.registry.soundfont.play(69, 110, T, 0.4, 1);
+  await new Promise((r) => setTimeout(r, 600));
+
+  const b0 = new Float32Array(a0.fftSize);
+  const b1 = new Float32Array(a1.fftSize);
+  a0.getFloatTimeDomainData(b0);
+  a1.getFloatTimeDomainData(b1);
+  a0.disconnect();
+  a1.disconnect();
+  const onset = (x) => {
+    for (let i = 0; i < x.length; i += 1) if (Math.abs(x[i]) > 1e-4) return i;
+    return -1;
+  };
+  const i0 = onset(b0);
+  const i1 = onset(b1);
+  return {
+    ok: i0 >= 0 && i1 >= 0,
+    gapMs: +(((i1 - i0) / ctx.sampleRate) * 1000).toFixed(1),
+    offsetMs: +app.registry.soundfont.clockOffsetMs.toFixed(1),
+  };
+});
+check(
+  "재생에서 사운드폰트가 임시 신스와 같은 시각에 울린다 (10ms 이내)",
+  livePlay.ok && Math.abs(livePlay.gapMs) < 10,
+  livePlay,
+);
+check("사운드폰트 지연을 실제로 재서 보정했다", livePlay.offsetMs > 0, livePlay.offsetMs);
 
 // ---- 뜯는 악기의 여운 ----
 //

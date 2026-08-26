@@ -120,9 +120,14 @@ export class InstrumentPanel {
       this.cb.onSourceChange();
       this.renderTracks();
       this.renderInstrumentButton();
-      this.cb.onStatus(
-        `${this.registry.soundfont.name} — 악기 ${this.registry.soundfont.presetList.length}개`,
-      );
+      const summary = `${this.registry.soundfont.name} — 악기 ${this.registry.soundfont.presetList.length}개`;
+      this.cb.onStatus(summary);
+      // 박자 보정은 뒤에서 2초쯤 걸린다. 다 재고 나면 숫자를 덧붙인다.
+      // 폰마다 다른 값이라, 박자가 이상할 때 사용자가 제일 먼저 볼 수 있는
+      // 곳에 숫자를 남겨 둔다.
+      void this.registry.soundfont.whenCalibrated().then((off) => {
+        if (off > 0) this.cb.onStatus(`${summary} · 박자 ${off.toFixed(0)}ms 보정`);
+      });
     } catch (err) {
       this.cb.onStatus(
         `사운드폰트를 읽지 못했습니다: ${err instanceof Error ? err.message : String(err)}`,
