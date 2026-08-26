@@ -20,6 +20,9 @@
  *   · 음소거·솔로·음량이 재생과 렌더 양쪽에 같이 먹히는가
  *   · 되돌리기가 제스처 단위로 돌아가는가
  *   · 손가락을 대는 순간 소리가 나는가 (떼는 순간이 아니라)
+ *   · 건반을 길게 누르면 누르는 내내 소리가 나는가 (톡 치면 짧게)
+ *   · 붙잡기가 뜯는 소리의 여운을 잘라 먹지 않는가
+ *   · ⏮ 이 재생 위치를 맨 앞으로 되돌리는가 (재생 중에 눌러도 버튼이 안 뒤집히는가)
  *   · 렌더 경로가 둘로 갈리는데 서로 정렬돼 있는가
  *   · 재생에서 사운드폰트가 임시 신스와 같은 시각에 울리는가 (워크렛 시계 보정)
  *   · 뜯는 소리의 여운을 자르지 않는가 (부는 소리는 자르는가)
@@ -780,8 +783,9 @@ check(
 await page.evaluate(() => {
   window.__previewAt = [];
   const s = window.__app.scheduler;
-  const orig = s.preview.bind(s);
-  s.preview = (...a) => { window.__previewAt.push(performance.now()); return orig(...a); };
+  // 소리를 실제로 내는 자리는 previewHold 다 (preview 도 이걸 부른다).
+  const orig = s.previewHold.bind(s);
+  s.previewHold = (...a) => { window.__previewAt.push(performance.now()); return orig(...a); };
   const canvas = document.getElementById("roll");
   window.__downAt = 0;
   canvas.addEventListener("pointerdown", () => (window.__downAt = performance.now()), true);
@@ -800,6 +804,71 @@ check(
   "누른 뒤 곧바로 소리가 난다 (떼는 순간이 아니라)",
   latency !== null && latency < 90,
   { 누른뒤ms: latency, 손가락댄시간ms: 150, 예전동작: "떼는 순간 = 150ms+" },
+);
+
+
+// ---- 길게 누르면 길게 소리 나는가 ----
+//
+// 예전에는 건반을 누르면 무조건 0.25초짜리 한 방이었다. 가야금·색소폰처럼 길게
+// 끄는 음원은 0.25초로는 무슨 소리인지 알 수가 없다 — 음원을 고르려고 누르는
+// 자리인데 정작 그 판단을 못 했다.
+//
+// 함수가 불렸는지가 아니라 **소리가 계속 났는지**를 본다. 마스터에 분석기를
+// 물려 놓고 누르고 있는 동안의 음량을 기록한다.
+const holdTrace = async (holdMs) => {
+  await page.evaluate(() => {
+    const app = window.__app;
+    const ctx = app.engine.ctx;
+    const an = ctx.createAnalyser();
+    an.fftSize = 2048;
+    app.engine.master.connect(an);
+    const buf = new Float32Array(an.fftSize);
+    window.__rms = [];
+    window.__rmsStop = () => {
+      clearInterval(timer);
+      an.disconnect();
+    };
+    const t0 = performance.now();
+    const timer = setInterval(() => {
+      an.getFloatTimeDomainData(buf);
+      let sum = 0;
+      for (const v of buf) sum += v * v;
+      window.__rms.push({ t: performance.now() - t0, v: Math.sqrt(sum / buf.length) });
+    }, 25);
+  });
+  const box = await page.locator("#roll").boundingBox();
+  await page.mouse.move(box.x + 20, box.y + box.height * 0.55); // 왼쪽 건반(GUTTER 46px 안쪽)
+  await page.mouse.down();
+  await page.waitForTimeout(holdMs);
+  await page.mouse.up();
+  await page.waitForTimeout(700);
+  const trace = await page.evaluate(() => {
+    window.__rmsStop();
+    return window.__rms;
+  });
+  // 손가락을 댄 시각을 0 으로 잡는다. 기록은 대기 직전에 시작했으니 거의 같다.
+  const at = (ms) => trace.find((r) => r.t >= ms)?.v ?? 0;
+  const peak = Math.max(...trace.map((r) => r.v));
+  return { at, peak, trace };
+};
+
+const longHold = await holdTrace(1200);
+check(
+  "건반을 길게 누르면 누르는 내내 소리가 난다",
+  longHold.at(1000) > longHold.peak * 0.2,
+  { "1000ms 음량": +longHold.at(1000).toFixed(4), 최대: +longHold.peak.toFixed(4) },
+);
+check(
+  "손을 떼면 소리가 멎는다",
+  longHold.at(1700) < longHold.peak * 0.1,
+  { "뗀 뒤 500ms": +longHold.at(1700).toFixed(4), 최대: +longHold.peak.toFixed(4) },
+);
+
+const quickTap = await holdTrace(40);
+check(
+  "톡 치고 떼도 소리는 들린다 (최소 250ms)",
+  quickTap.at(200) > quickTap.peak * 0.2,
+  { "200ms 음량": +quickTap.at(200).toFixed(4), 최대: +quickTap.peak.toFixed(4) },
 );
 
 // ---- 렌더 경로 둘이 정렬돼 있는가 ----
@@ -954,6 +1023,46 @@ check(
   { 노트길이초: 0.125, 실제끝초: decay.부는끝초 },
 );
 
+// ---- 붙잡기가 여운 규칙을 어기지 않는가 ----
+//
+// "길게 누르면 길게" 를 넣으면서 뜯는 소리까지 붙잡아 버리면, 손을 뗄 때
+// 가야금 여운을 잘라 먹게 된다. 위에서 어렵게 살려 놓은 그 여운이다.
+// 뜯는 소리는 붙잡지 않고 그냥 울리게 두고, 부는 소리만 붙잡는다.
+const holdKinds = await page.evaluate(async () => {
+  const app = window.__app;
+  const ctx = app.engine.ctx;
+  const [pluck, sus] = app.registry.folders.list;
+  const measure = async (folderId, channel) => {
+    const an = ctx.createAnalyser();
+    an.fftSize = 2048;
+    app.mixer.inputs[channel].connect(an);
+    const buf = new Float32Array(an.fftSize);
+    const rms = () => {
+      an.getFloatTimeDomainData(buf);
+      let sum = 0;
+      for (const v of buf) sum += v * v;
+      return Math.sqrt(sum / buf.length);
+    };
+    app.mixer.set(channel, { volume: 1, pan: 0, muted: false, send: 0 });
+    app.registry.folders.setChannelFolder(channel, folderId);
+    app.registry.folders.hold(72, 110, channel);
+    await new Promise((r) => setTimeout(r, 120));
+    app.registry.folders.release(72, channel); // 아주 짧게 누르고 뗀다
+    await new Promise((r) => setTimeout(r, 500));
+    const after = rms();
+    await new Promise((r) => setTimeout(r, 900));
+    an.disconnect();
+    return +after.toFixed(4);
+  };
+  return { 뜯기: await measure(pluck.id, 4), 불기: await measure(sus.id, 5) };
+});
+check(
+  "짧게 눌렀다 떼도 뜯는 소리의 여운은 남는다",
+  holdKinds.뜯기 > 0.001,
+  holdKinds,
+);
+check("부는 소리는 떼면 멎는다", holdKinds.불기 < 0.001, holdKinds);
+
 // ---- 확대·화면 밀기에서는 소리가 나지 않는가 ----
 // 지연을 없애려고 "대는 즉시" 로 바꿨더니 확대할 때마다 소리가 났다.
 // 핀치도 밀기도 손가락 하나가 닿는 것으로 시작하기 때문이다.
@@ -998,6 +1107,63 @@ check(
   headEnd.pos > headStart + 0.5 && !headEnd.loopOn,
   { 시작: headStart, 끝: headEnd.pos, 루프가켜졌나: headEnd.loopOn },
 );
+
+// ---- ⏮ 맨 앞으로 ----
+// 12마디쯤 보고 있다가 처음부터 다시 들으려면 빨간 줄을 정확히 0박에 맞혀야
+// 했다. 화면도 같이 앞으로 밀어 준다 — 안 그러면 빨간 줄이 화면 밖에 있어서
+// 아무 일도 안 일어난 것처럼 보인다.
+await page.evaluate(() => {
+  window.__app.scheduler.loopEnabled = false;
+  window.__app.scheduler.seek(9);
+  window.__app.roll.scrollX = 400;
+});
+await page.locator("#rewind").click();
+await page.waitForTimeout(150);
+const rewound = await page.evaluate(() => ({
+  pos: window.__app.scheduler.positionBeats(),
+  scrollX: window.__app.roll.scrollX,
+}));
+check("⏮ 이 재생 위치를 맨 앞으로 되돌린다", rewound.pos === 0 && rewound.scrollX === 0, rewound);
+
+// 루프가 켜져 있으면 루프 시작으로 간다 — 재생도 어차피 거기서 시작한다
+await page.evaluate(() => {
+  const s = window.__app.scheduler;
+  s.loopStart = 4;
+  s.loopEnd = 8;
+  s.loopEnabled = true;
+  s.seek(7);
+});
+await page.locator("#rewind").click();
+await page.waitForTimeout(150);
+const rewoundLoop = await page.evaluate(() => window.__app.scheduler.positionBeats());
+check("루프가 켜져 있으면 ⏮ 이 루프 시작으로 간다", rewoundLoop === 4, rewoundLoop);
+
+// 재생 중에 ⏮ 을 눌러도 재생은 이어져야 하고, 버튼도 그렇게 보여야 한다.
+// 안에서 stop → play 를 하는데 그때 onStop 이 불려서 버튼만 "재생" 으로
+// 되돌아가 있었다. 재생 위치를 끌 때도, 루프를 켤 때도 같이 나던 증상이다.
+await page.evaluate(() => {
+  window.__app.scheduler.loopEnabled = false;
+  window.__app.scheduler.seek(0);
+});
+await page.locator("#play").click();
+await page.waitForTimeout(250);
+await page.locator("#rewind").click();
+await page.waitForTimeout(150);
+const afterRewind = await page.evaluate(() => ({
+  playing: window.__app.scheduler.isPlaying,
+  label: document.getElementById("play").textContent.trim(),
+}));
+check(
+  "재생 중에 ⏮ 을 눌러도 재생이 이어지고 버튼이 거짓말하지 않는다",
+  afterRewind.playing && afterRewind.label.includes("정지"),
+  afterRewind,
+);
+await page.locator("#play").click();
+await page.waitForTimeout(100);
+await page.evaluate(() => {
+  window.__app.scheduler.loopEnabled = false;
+  window.__app.scheduler.seek(0);
+});
 
 // 헤드에서 떨어진 곳을 끌면 여전히 루프 구간이 잡혀야 한다
 await page.mouse.move(zoomBox.x + headX + 320, zoomBox.y + 14);

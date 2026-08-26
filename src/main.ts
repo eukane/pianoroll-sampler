@@ -39,6 +39,7 @@ const $ = <T extends HTMLElement>(id: string): T => {
 };
 
 const canvas = $<HTMLCanvasElement>("roll");
+const rewindBtn = $<HTMLButtonElement>("rewind");
 const playBtn = $<HTMLButtonElement>("play");
 const loopBtn = $<HTMLButtonElement>("loop");
 const posLabel = $<HTMLSpanElement>("pos");
@@ -61,6 +62,10 @@ const roll = new PianoRoll(canvas, () => project, {
   onPreview: (pitch, trackIndex) => {
     if (engine.isUnlocked) scheduler.preview(pitch, trackIndex);
   },
+  onPreviewHold: (pitch, trackIndex) => {
+    if (engine.isUnlocked) scheduler.previewHold(pitch, trackIndex);
+  },
+  onPreviewRelease: () => scheduler.previewRelease(),
   onSeek: (beat) => scheduler.seek(beat),
   onLoopChange: (start, end) => {
     scheduler.loopStart = start;
@@ -114,13 +119,27 @@ scheduler.onStop = () => {
 
 playBtn.addEventListener("click", () => setPlaying(!scheduler.isPlaying));
 
+/**
+ * 맨 앞으로.
+ *
+ * 루프가 켜져 있으면 **루프 시작**으로 간다. 재생도 어차피 거기서 시작하니까,
+ * 0박으로 보내면 빨간 줄이 있지도 않을 자리를 가리키게 된다.
+ *
+ * 재생 중에 눌러도 된다 — `seek` 이 알아서 그 자리부터 다시 튼다.
+ * 화면도 같이 앞으로 밀어 준다. 12마디쯤 보고 있다가 눌렀는데 빨간 줄이
+ * 화면 밖으로 가 버리면 "아무 일도 안 일어났다" 로 보인다.
+ */
+function rewind(): void {
+  const to = scheduler.loopEnabled ? scheduler.loopStart : 0;
+  scheduler.seek(to);
+  roll.scrollToBeat(to);
+}
+rewindBtn.addEventListener("click", rewind);
+
 function setLoop(on: boolean): void {
   scheduler.loopEnabled = on;
   loopBtn.classList.toggle("on", on);
-  if (scheduler.isPlaying) {
-    scheduler.stop();
-    scheduler.play();
-  }
+  scheduler.restart();
 }
 loopBtn.addEventListener("click", () => setLoop(!scheduler.loopEnabled));
 
@@ -409,6 +428,11 @@ window.addEventListener("keydown", (e) => {
   if (mod && e.key.toLowerCase() === "y") {
     e.preventDefault();
     redoBtn.click();
+    return;
+  }
+  if (e.key === "Home" && !mod) {
+    e.preventDefault();
+    rewind();
     return;
   }
   if (e.key === "Escape") {

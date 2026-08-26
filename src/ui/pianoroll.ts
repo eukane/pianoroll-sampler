@@ -5,6 +5,7 @@
  * 기능을 숨기지 않는다. 폰에서 되는 것과 PC 에서 되는 것이 같아야 한다.
  *
  *   탭            노트 찍기
+ *   건반 누르고 있기 누른 만큼 소리 (위아래로 밀면 음이 따라온다)
  *   노트 드래그    옮기기 (그리드에 붙음)
  *   오른쪽 끝 드래그 길이 조절
  *   길게 누르기    삭제
@@ -45,6 +46,7 @@ type Drag =
   | { mode: "resize"; note: Note; startLength: number; downBeat: number }
   | { mode: "loop"; anchorBeat: number }
   | { mode: "scrub" }
+  | { mode: "key"; pitch: number }
   | { mode: "pinch"; startDist: number; startPx: number; anchorBeat: number; startMidY: number; startScrollY: number };
 
 export type PianoRollCallbacks = {
@@ -54,6 +56,9 @@ export type PianoRollCallbacks = {
   onAfterChange: () => void;
   onEdit: () => void;
   onPreview: (pitch: number, trackIndex: number) => void;
+  /** 누르는 순간 소리를 내고 뗄 때까지 붙잡는다. 반드시 onPreviewRelease 로 끝낸다. */
+  onPreviewHold: (pitch: number, trackIndex: number) => void;
+  onPreviewRelease: () => void;
   onSeek: (beat: number) => void;
   onLoopChange: (startBeat: number, endBeat: number) => void;
   getPlayheadBeat: () => number;
@@ -76,6 +81,8 @@ export class PianoRoll {
   private drag: Drag = { mode: "none" };
   private longPressTimer: number | null = null;
   private previewTimer: number | null = null;
+  /** 지금 미리듣기가 붙잡혀 있는가. 손을 뗄 때 끝내야 한다. */
+  private previewHeld = false;
   private draggingNoteId: string | null = null;
 
   constructor(
@@ -454,10 +461,11 @@ export class PianoRoll {
     }
 
     if (p.x < GUTTER) {
-      // 건반을 누르면 그 음을 들려준다. 소리 확인용.
+      // 건반은 **누르고 있는 동안** 울린다. 음원을 고르려고 누르는 자리라,
+      // 0.25초로 끊으면 가야금인지 색소폰인지 판단할 수가 없다.
       const pitch = clampPitch(this.yToPitch(p.y));
-      this.cb.onPreview(pitch, this.activeTrack);
-      this.drag = { mode: "none" };
+      this.holdPreview(pitch);
+      this.drag = { mode: "key", pitch };
       return;
     }
 
@@ -497,7 +505,7 @@ export class PianoRoll {
     const pitch = clampPitch(this.yToPitch(p.y));
     this.previewTimer = window.setTimeout(() => {
       this.previewTimer = null;
-      this.cb.onPreview(pitch, this.activeTrack);
+      this.holdPreview(pitch);
     }, PREVIEW_DELAY);
     this.drag = { mode: "pan", scrollX: this.scrollX, scrollY: this.scrollY, moved: false };
   };
@@ -551,6 +559,17 @@ export class PianoRoll {
         break;
       }
 
+      case "key": {
+        // 건반 위에서 손가락을 위아래로 미끄러뜨리면 그 음으로 갈아탄다.
+        // 실제 건반에서 손가락을 미는 것과 같다.
+        const pitch = clampPitch(this.yToPitch(p.y));
+        if (pitch !== this.drag.pitch) {
+          this.drag.pitch = pitch;
+          this.holdPreview(pitch);
+        }
+        break;
+      }
+
       case "scrub": {
         this.cb.onSeek(Math.max(0, snap(this.xToBeat(p.x), this.snapUnit)));
         break;
@@ -573,6 +592,9 @@ export class PianoRoll {
     const ptr = this.pointers.get(e.pointerId);
     this.pointers.delete(e.pointerId);
     this.cancelLongPress();
+    // 손을 뗐으니 붙잡고 있던 소리를 끝낸다. 예약만 해 두고 아직 안 낸
+    // 소리라면 그대로 취소한다.
+    this.cancelPreview();
 
     if (this.drag.mode === "pinch") {
       // 손가락 하나가 떨어지면 핀치 종료. 남은 손가락은 새 제스처로 치지 않는다.
@@ -654,6 +676,12 @@ export class PianoRoll {
     this.clampScroll();
   }
 
+  /** 그 박이 화면 왼쪽에 오도록 가로 스크롤을 옮긴다. */
+  scrollToBeat(beat: number): void {
+    this.scrollX = Math.max(0, beat * this.pxPerBeat - 40);
+    this.clampScroll();
+  }
+
   private startLongPress(note: Note): void {
     this.cancelLongPress();
     this.longPressTimer = window.setTimeout(() => {
@@ -671,10 +699,21 @@ export class PianoRoll {
     }, LONG_PRESS_MS);
   }
 
+  /** 소리를 내고 손을 뗄 때까지 붙잡는다. */
+  private holdPreview(pitch: number): void {
+    this.previewHeld = true;
+    this.cb.onPreviewHold(pitch, this.activeTrack);
+  }
+
+  /** 예약해 둔 미리듣기를 취소하고, 이미 울리고 있으면 끝낸다. */
   private cancelPreview(): void {
     if (this.previewTimer !== null) {
       clearTimeout(this.previewTimer);
       this.previewTimer = null;
+    }
+    if (this.previewHeld) {
+      this.previewHeld = false;
+      this.cb.onPreviewRelease();
     }
   }
 

@@ -58,6 +58,12 @@ const MAX_STRETCH = 12;
 /** 지속음에서 손을 뗀 뒤 남기는 여운(초). */
 const RELEASE = 0.35;
 
+/**
+ * 누르고 있는 소리의 상한(초). 손을 떼는 신호를 놓치는 경우가 있어서 끊는다.
+ * 어차피 샘플이 먼저 끝나는 경우가 대부분이다 — 루프 지점이 없으니 늘릴 수 없다.
+ */
+const MAX_HOLD = 10;
+
 /** 동시에 울릴 수 있는 샘플 수. 뜯는 소리는 길게 남아서 금방 쌓인다. */
 const MAX_VOICES = 32;
 
@@ -146,10 +152,14 @@ export class SampleFolder {
   }
 }
 
+type Voice = { source: AudioBufferSourceNode; gain: GainNode };
+
 export class FolderSampler implements Instrument {
   readonly name = "샘플 폴더";
   private folders = new Map<string, SampleFolder>();
-  private playing: { source: AudioBufferSourceNode; gain: GainNode }[] = [];
+  private playing: Voice[] = [];
+  /** 지금 눌려 있는 소리들. 보이스를 뺏길 수 있는 `playing` 과 따로 둔다. */
+  private held = new Map<string, Voice>();
   /** 트랙(채널)마다 어느 폴더를 쓰는지. */
   private channelFolder = new Map<number, string>();
 
@@ -210,13 +220,44 @@ export class FolderSampler implements Instrument {
   }
 
   play(pitch: number, velocity: number, when: number, durationSec: number, channel: number): void {
+    this.spawn(pitch, velocity, when, durationSec, channel);
+  }
+
+  /**
+   * 건반을 누르고 있는 동안 나는 소리.
+   *
+   * **뜯는 소리(가야금)는 붙잡지 않는다.** 실제로 줄을 뜯고 손가락을 계속
+   * 대고 있어 봐야 소리가 길어지지 않는다 — 뜯은 만큼 울리다 잦아든다.
+   * 그래서 여기서는 그냥 한 번 내고 놔둔다. 붙잡는 건 부는 소리(대금·해금)뿐이다.
+   */
+  hold(pitch: number, velocity: number, channel: number): void {
+    this.release(pitch, channel);
+    const spawned = this.spawn(pitch, velocity, this.ctx.currentTime, MAX_HOLD, channel);
+    if (spawned && !spawned.decaying) this.held.set(holdKey(pitch, channel), spawned.voice);
+  }
+
+  release(pitch: number, channel: number): void {
+    const key = holdKey(pitch, channel);
+    const v = this.held.get(key);
+    if (!v) return;
+    this.held.delete(key);
+    this.fadeOut(v, RELEASE);
+  }
+
+  private spawn(
+    pitch: number,
+    velocity: number,
+    when: number,
+    durationSec: number,
+    channel: number,
+  ): { voice: Voice; decaying: boolean } | null {
     const folderId = this.channelFolder.get(channel);
     const folder = folderId ? this.folders.get(folderId) : undefined;
     const entry = folder?.pick(pitch, velocity);
-    if (!entry || entry.pitch === null) return;
+    if (!entry || entry.pitch === null) return null;
 
     const semitones = pitch - entry.pitch;
-    if (Math.abs(semitones) > MAX_STRETCH) return; // 너무 멀면 소리를 내지 않는다
+    if (Math.abs(semitones) > MAX_STRETCH) return null; // 너무 멀면 소리를 내지 않는다
 
     const source = this.ctx.createBufferSource();
     source.buffer = entry.buffer;
@@ -255,42 +296,44 @@ export class FolderSampler implements Instrument {
     // 여운을 길게 남기면 보이스가 금방 쌓인다. 상한을 두고 오래된 것부터 뺏는다.
     if (this.playing.length >= MAX_VOICES) this.steal();
 
-    const voice = { source, gain };
+    const voice: Voice = { source, gain };
     this.playing.push(voice);
     source.onended = () => {
       gain.disconnect();
       const i = this.playing.indexOf(voice);
       if (i >= 0) this.playing.splice(i, 1);
     };
+    return { voice, decaying: entry.decaying };
   }
 
   /** 가장 오래된 보이스를 짧게 페이드아웃시키고 자리를 넘긴다. */
   private steal(): void {
     const v = this.playing.shift();
     if (!v) return;
+    this.fadeOut(v, 0.02);
+  }
+
+  /** 소리를 부드럽게 줄이고 끈다. 뚝 끊으면 '틱' 소리가 난다. */
+  private fadeOut(v: Voice, seconds: number): void {
     const now = this.ctx.currentTime;
     try {
       v.gain.gain.cancelScheduledValues(now);
       v.gain.gain.setValueAtTime(Math.max(0.0001, v.gain.gain.value), now);
-      v.gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.02);
-      v.source.stop(now + 0.03);
+      v.gain.gain.exponentialRampToValueAtTime(0.0001, now + seconds);
+      v.source.stop(now + seconds + 0.01);
     } catch {
       /* 이미 끝난 노드 */
     }
   }
 
   stopAll(): void {
-    const now = this.ctx.currentTime;
-    for (const v of this.playing) {
-      try {
-        v.gain.gain.cancelScheduledValues(now);
-        v.gain.gain.setValueAtTime(Math.max(0.0001, v.gain.gain.value), now);
-        v.gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.03);
-        v.source.stop(now + 0.04);
-      } catch {
-        /* 이미 끝난 노드 */
-      }
-    }
+    for (const v of this.held.values()) this.fadeOut(v, 0.03);
+    this.held.clear();
+    for (const v of this.playing) this.fadeOut(v, 0.03);
     this.playing = [];
   }
+}
+
+function holdKey(pitch: number, channel: number): string {
+  return `${channel}:${pitch}`;
 }

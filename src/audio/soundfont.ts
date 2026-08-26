@@ -399,6 +399,25 @@ export class SoundFontInstrument implements Instrument {
     this.synth.noteOff(channel, pitch, { time: at + durationSec });
   }
 
+  /**
+   * 건반을 누르고 있는 동안 나는 소리. 신스는 원래 MIDI 대로 noteOn/noteOff 를
+   * 따로 받는 물건이라 여기서는 그대로 흘려 보내면 된다.
+   *
+   * 시각은 `clockOffset` 만큼 당긴다 — 신스 시계가 그만큼 뒤처져 있어서, 빼 주지
+   * 않으면 "지금" 이 신스에게는 미래가 되어 늦게 울린다 (calibrate() 참고).
+   */
+  hold(pitch: number, velocity: number, channel: number): void {
+    if (!this.synth) return;
+    this.synth.noteOn(channel, pitch, Math.max(1, Math.round(velocity)), {
+      time: this.ctx.currentTime - this.clockOffset,
+    });
+  }
+
+  release(pitch: number, channel: number): void {
+    if (!this.synth) return;
+    this.synth.noteOff(channel, pitch, { time: this.ctx.currentTime - this.clockOffset });
+  }
+
   stopAll(): void {
     this.synth?.stopAll(true);
   }

@@ -19,6 +19,13 @@ export type Waveform = "sine" | "sawtooth" | "square" | "triangle";
 
 const MAX_VOICES = 24;
 
+/**
+ * 누르고 있는 소리의 상한(초). 손가락을 떼는 신호를 놓치는 경우가 있다
+ * (브라우저가 pointercancel 을 안 주거나, 화면이 꺼지거나). 그때 소리가
+ * 영원히 남으면 끌 방법이 없어서 여기서 끊는다.
+ */
+const MAX_HOLD = 10;
+
 type Voice = {
   osc: OscillatorNode;
   gain: GainNode;
@@ -28,6 +35,11 @@ type Voice = {
 export class OscInstrument implements Instrument {
   readonly name = "임시 신스";
   private voices: Voice[] = [];
+  /**
+   * 지금 눌려 있는 소리들. `voices` 와 따로 둔다 — 저기에 섞어 두면 보이스가
+   * 모자랄 때 뺏겨 나가는데, 그러면 손을 떼도 끌 대상이 없어진다.
+   */
+  private held = new Map<string, Voice>();
 
   constructor(
     private ctx: BaseAudioContext,
@@ -72,7 +84,45 @@ export class OscInstrument implements Instrument {
     };
   }
 
+  hold(pitch: number, velocity: number, channel: number): void {
+    this.release(pitch, channel);
+    const now = this.ctx.currentTime;
+    const peak = Math.max(0.02, (velocity / 127) * 0.22);
+
+    const osc = this.ctx.createOscillator();
+    osc.type = this.waveform;
+    osc.frequency.setValueAtTime(midiToFreq(pitch), now);
+
+    const gain = this.ctx.createGain();
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(peak, now + 0.006);
+    // 여기서 끝나는 예약을 걸지 않는다. 손을 뗄 때까지 이 크기를 유지한다.
+
+    osc.connect(gain);
+    gain.connect(this.mixer.input(channel));
+    osc.start(now);
+    osc.stop(now + MAX_HOLD);
+
+    const voice: Voice = { osc, gain, endsAt: now + MAX_HOLD };
+    const key = holdKey(pitch, channel);
+    this.held.set(key, voice);
+    osc.onended = () => {
+      gain.disconnect();
+      if (this.held.get(key) === voice) this.held.delete(key);
+    };
+  }
+
+  release(pitch: number, channel: number): void {
+    const key = holdKey(pitch, channel);
+    const v = this.held.get(key);
+    if (!v) return;
+    this.held.delete(key);
+    this.fadeOut(v, 0.09);
+  }
+
   stopAll(): void {
+    for (const v of this.held.values()) this.fadeOut(v, 0.02);
+    this.held.clear();
     const now = this.ctx.currentTime;
     for (const v of this.voices) {
       try {
@@ -85,6 +135,19 @@ export class OscInstrument implements Instrument {
       }
     }
     this.voices = [];
+  }
+
+  /** 소리를 부드럽게 줄이고 끈다. 뚝 끊으면 '틱' 소리가 난다. */
+  private fadeOut(v: Voice, seconds: number): void {
+    const now = this.ctx.currentTime;
+    try {
+      v.gain.gain.cancelScheduledValues(now);
+      v.gain.gain.setValueAtTime(Math.max(0.0001, v.gain.gain.value), now);
+      v.gain.gain.exponentialRampToValueAtTime(0.0001, now + seconds);
+      v.osc.stop(now + seconds + 0.01);
+    } catch {
+      /* 이미 끝난 노드 */
+    }
   }
 
   /** 이미 끝난 보이스를 목록에서 치운다. */
@@ -106,4 +169,8 @@ export class OscInstrument implements Instrument {
       /* 무시 */
     }
   }
+}
+
+function holdKey(pitch: number, channel: number): string {
+  return `${channel}:${pitch}`;
 }

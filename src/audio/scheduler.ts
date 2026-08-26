@@ -18,6 +18,7 @@
  */
 
 import type { Project } from "../model/types";
+import type { Instrument } from "./instrument";
 import type { AudioEngine } from "./engine";
 import type { InstrumentRegistry } from "./registry";
 import type { Mixer } from "./mixer";
@@ -27,6 +28,15 @@ import { assignChannels, channelForTrack } from "../model/channels";
 
 const TICK_MS = 25;
 const LOOKAHEAD_SEC = 0.12;
+
+/**
+ * 미리듣기가 최소한 이만큼은 울린다(ms).
+ *
+ * 손가락을 톡 대었다 떼면 5ms 만에 떼는 신호가 온다. 그대로 끊으면 '틱' 하고
+ * 말지 소리를 확인할 수가 없다. 짧게 누르면 예전처럼 한 번 울리고, 길게 누르면
+ * 누른 만큼 울린다.
+ */
+const MIN_PREVIEW_MS = 250;
 
 type Event = {
   trackIndex: number;
@@ -57,11 +67,26 @@ export class Scheduler {
 
   private stoppedAt = 0; // 정지 상태에서 헤드를 그릴 위치(박)
 
+  /** 지금 손가락에 눌려 있는 미리듣기. 뗄 때 이걸 끝낸다. */
+  private heldPreview:
+    | { instrument: Instrument; pitch: number; channel: number; startedAt: number; token: number }
+    | null = null;
+  private previewToken = 0;
+  private previewOffTimer: number | null = null;
+
   loopEnabled = false;
   loopStart = 0;
   loopEnd = 4;
 
   onStop: (() => void) | null = null;
+  /**
+   * 지금 멈추는 게 **곧바로 다시 트는 중**인가.
+   *
+   * 재생 위치를 옮기거나 루프를 켜면 안에서 stop → play 를 한다. 그때도
+   * onStop 을 부르면 화면의 버튼이 "▶︎ 재생" 으로 바뀐다 — 실제로는 재생 중인데
+   * 버튼이 거짓말을 한다. 재시작 중에는 알리지 않는다.
+   */
+  private restarting = false;
 
   constructor(
     private engine: AudioEngine,
@@ -121,17 +146,27 @@ export class Scheduler {
       clearInterval(this.timer);
       this.timer = null;
     }
+    this.endPreview();
     this.registry.stopAll();
-    this.onStop?.();
+    if (!this.restarting) this.onStop?.();
   }
 
-  /** 정지 상태에서 헤드 위치만 옮긴다 (룰러를 탭했을 때). */
+  /** 헤드 위치를 옮긴다. 재생 중이면 그 자리부터 다시 튼다. */
   seek(beat: number): void {
     this.stoppedAt = Math.max(0, beat);
-    if (this.playing) {
-      this.stop();
-      this.play(this.stoppedAt);
-    }
+    if (this.playing) this.replay(this.stoppedAt);
+  }
+
+  /** 재생 중이면 지금 위치에서 다시 시작한다 (루프를 켜고 끌 때 등). */
+  restart(): void {
+    if (this.playing) this.replay(this.positionBeats());
+  }
+
+  private replay(from: number): void {
+    this.restarting = true;
+    this.stop();
+    this.play(from);
+    this.restarting = false;
   }
 
   /**
@@ -238,11 +273,22 @@ export class Scheduler {
     this.registry.forTrack(track).play(ev.pitch, ev.velocity, when, durationSec, channel);
   }
 
-  /** 노트를 찍거나 끌 때 한 번 들려주는 미리듣기. */
-  preview(pitch: number, trackIndex = 0, velocity = 100): void {
+  /**
+   * 건반을 누르는 순간 소리를 내고, **뗄 때까지 붙잡는다.**
+   *
+   * 예전에는 무조건 0.25초짜리 한 방이었다. 가야금이나 색소폰처럼 길게 끄는
+   * 음원은 0.25초로는 무슨 소리인지 알 수가 없다 — 음원을 고르려고 누르는
+   * 건데 정작 그 판단을 못 하는 셈이었다.
+   *
+   * 같은 미리듣기를 겹쳐 쌓지 않는다. 새 건반을 누르면 앞엣것을 끝낸다.
+   */
+  previewHold(pitch: number, trackIndex = 0, velocity = 100): void {
     const project = this.getProject();
     const track = project.tracks[trackIndex];
     if (!track) return;
+
+    this.endPreview();
+
     // 재생 중이 아니면 채널 배치가 아직 없다. 탭할 때마다 부르는 자리라 매번 계산해도 된다.
     const channel = assignChannels(project)[trackIndex] ?? channelForTrack(trackIndex);
     // 미리듣기는 뮤트여도 들려준다 — 사용자가 방금 그 건반을 누른 것이다.
@@ -253,7 +299,60 @@ export class Scheduler {
       send: track.reverbSend ?? 0,
     });
     this.registry.prepare(track, channel);
-    const when = this.engine.currentTime + 0.005;
-    this.registry.forTrack(track).play(pitch, velocity, when, 0.25, channel);
+
+    // 악기 객체를 들고 있는다. 누르고 있는 사이에 트랙 음원이 바뀌어도
+    // **소리를 낸 그 악기**에게 끝내라고 해야 한다.
+    const instrument = this.registry.forTrack(track);
+    this.previewToken += 1;
+    this.heldPreview = {
+      instrument,
+      pitch,
+      channel,
+      startedAt: this.engine.currentTime,
+      token: this.previewToken,
+    };
+    instrument.hold(pitch, velocity, channel);
+  }
+
+  /**
+   * 손가락을 뗐다. 다만 너무 빨리 뗐으면 최소 시간은 채우고 끝낸다
+   * (MIN_PREVIEW_MS) — 톡 치고 마는 탭에서도 소리가 들려야 한다.
+   */
+  previewRelease(): void {
+    const held = this.heldPreview;
+    if (!held) return;
+    const soundedMs = (this.engine.currentTime - held.startedAt) * 1000;
+    if (soundedMs >= MIN_PREVIEW_MS) {
+      this.endPreview();
+      return;
+    }
+    const token = held.token;
+    this.clearPreviewTimer();
+    this.previewOffTimer = window.setTimeout(() => {
+      this.previewOffTimer = null;
+      // 그 사이 다른 건반을 눌렀으면 그건 아직 눌려 있는 것이다. 건드리지 않는다.
+      if (this.heldPreview?.token === token) this.endPreview();
+    }, MIN_PREVIEW_MS - soundedMs);
+  }
+
+  /** 노트를 끌 때처럼 한 번만 들려주면 되는 자리. */
+  preview(pitch: number, trackIndex = 0, velocity = 100): void {
+    this.previewHold(pitch, trackIndex, velocity);
+    this.previewRelease();
+  }
+
+  private endPreview(): void {
+    this.clearPreviewTimer();
+    const held = this.heldPreview;
+    if (!held) return;
+    this.heldPreview = null;
+    held.instrument.release(held.pitch, held.channel);
+  }
+
+  private clearPreviewTimer(): void {
+    if (this.previewOffTimer !== null) {
+      clearTimeout(this.previewOffTimer);
+      this.previewOffTimer = null;
+    }
   }
 }
