@@ -23,6 +23,7 @@
  *   · 렌더 경로가 둘로 갈리는데 서로 정렬돼 있는가
  *   · 뜯는 소리의 여운을 자르지 않는가 (부는 소리는 자르는가)
  *   · 복사 한 번 + 붙여넣기 연타로 마디가 채워지는가
+ *   · 내보내기가 조용히 실패하지 않는가 (무음 · 곡 밖 노트 · 음소거 트랙)
  *   · 콘솔 오류가 하나도 없는가
  *
  * 쓰는 법: 다른 창에서 `npm run dev` 를 띄워 두고 `npm run smoke`.
@@ -1021,6 +1022,77 @@ check(
   "곡 끝을 넘겨 붙이면 마디가 늘어난다 (조용히 잘리지 않는다)",
   (await page.evaluate(() => window.__app.project.bars)) >= 6,
   await page.evaluate(() => window.__app.project.bars),
+);
+
+// ---- 내보내기가 조용히 실패하지 않는가 ----
+//
+// 셋 다 실제로 조용히 넘어가고 있었다.
+//   · 전부 음소거하고 뽑으면 무음 WAV 가 나오는데 "저장했습니다" 만 떴다
+//     (경고를 띄운 바로 다음 줄에서 성공 메시지로 덮어쓰고 있었다)
+//   · 곡 길이 뒤의 노트는 WAV 에서 빠지는데 아무 말이 없었다
+//   · 음소거한 트랙도 스템 파일을 만들었는데 속이 완전히 비어 있었다
+const exportSetup = () => page.evaluate(() => {
+  const p = window.__app.project;
+  p.bpm = 120; p.bars = 2; p.tracks.length = 1;
+  p.tracks[0].source = { kind: "sf2", presetId: 0 };
+  p.tracks[0].notes = [{ id: "e1", pitch: 60, start: 0, length: 1, velocity: 110 }];
+  p.tracks[0].volume = 1; p.tracks[0].muted = false; p.tracks[0].reverbSend = 0;
+  p.tracks.push({ id: "e2", name: "둘째", source: { kind: "sf2", presetId: 0 },
+    notes: [{ id: "e3", pitch: 48, start: 0, length: 1, velocity: 110 }],
+    volume: 1, pan: 0, muted: false, reverbSend: 0 });
+  window.__app.mixerState.clearSolo();
+  window.__app.panel.refresh();
+});
+
+const runExport = async (buttonId, waitMs = 20000) => {
+  await page.locator("#export").click();
+  await page.waitForTimeout(150);
+  const seen = [];
+  const on = (d) => seen.push(d.suggestedFilename());
+  page.on("download", on);
+  await page.locator(`#${buttonId}`).click();
+  await page.waitForFunction(
+    () => /저장했습니다|없습니다|빠졌습니다|못했습니다/.test(
+      document.getElementById("status")?.textContent ?? ""),
+    null, { timeout: waitMs },
+  ).catch(() => {});
+  await page.waitForTimeout(500);
+  page.off("download", on);
+  return { status: await page.locator("#status").textContent(), files: seen };
+};
+
+// 전부 음소거 → 무음인데 성공 메시지가 뜨면 안 된다
+await exportSetup();
+await page.evaluate(() => window.__app.project.tracks.forEach((t) => (t.muted = true)));
+const silent = await runExport("save-wav");
+check(
+  "무음 WAV 가 나오면 성공 메시지 대신 안내가 뜬다",
+  silent.status?.includes("소리가 없는"),
+  silent.status,
+);
+
+// 곡 길이 뒤에 노트가 있으면 알려 준다
+await exportSetup();
+await page.evaluate(() => {
+  const p = window.__app.project;
+  p.bars = 1;
+  p.tracks[0].notes.push({ id: "far", pitch: 72, start: 12, length: 1, velocity: 110 });
+});
+const beyond = await runExport("save-wav");
+check(
+  "곡 길이 뒤의 노트가 빠지면 그 사실을 알려 준다",
+  beyond.status?.includes("빠졌습니다"),
+  beyond.status,
+);
+
+// 음소거한 트랙은 빈 스템 파일을 만들지 않는다
+await exportSetup();
+await page.evaluate(() => (window.__app.project.tracks[1].muted = true));
+const mutedStems = await runExport("save-stems", 90000);
+check(
+  "음소거한 트랙은 빈 스템 파일을 만들지 않는다",
+  mutedStems.files.length === 1 && mutedStems.status?.includes("음소거된 1개는 뺐습니다"),
+  mutedStems,
 );
 
 check("콘솔 오류 없음", errors.length === 0, errors);

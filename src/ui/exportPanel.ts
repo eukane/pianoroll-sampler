@@ -10,6 +10,7 @@
 
 import type { Project } from "../model/types";
 import { projectToMidi, midiToProject } from "../export/midi";
+import { totalBeats, beatsPerBar } from "../model/project";
 import { projectToJson, projectFromJson } from "../export/projectFile";
 import { audioBufferToWav, peakOf } from "../export/wav";
 import { onlyTrack, projectSeconds, renderProject } from "../export/render";
@@ -94,9 +95,18 @@ export class ExportPanel {
       this.cb.onStatus(`WAV 만드는 중… (${seconds.toFixed(1)}초 분량)`);
       await nextFrame();
       const buffer = await renderProject(project, this.bankSource, this.registry.folders.list, this.mixerState);
-      this.warnIfSilent(buffer);
       download(audioBufferToWav(buffer), `${this.baseName()}.wav`);
-      this.cb.onStatus(`${this.baseName()}.wav 를 저장했습니다`);
+
+      // 안내는 **저장 메시지보다 나중에** 낸다.
+      //
+      // 예전에는 warnIfSilent() 로 경고를 띄운 바로 다음 줄에서 "저장했습니다" 로
+      // 덮어써 버렸다. 무음 WAV 가 나와도 사용자는 성공 메시지만 봤다.
+      // 조용한 실패다.
+      const problem = this.problemWith(project, buffer);
+      this.cb.onStatus(
+        problem ?? `${this.baseName()}.wav 를 저장했습니다`,
+        problem ? "error" : "info",
+      );
     } catch (err) {
       this.fail("WAV", err);
     } finally {
@@ -122,9 +132,20 @@ export class ExportPanel {
     this.busy = true;
     this.close();
     try {
+      // 음소거한 트랙은 빼고 뽑는다.
+      //
+      // 예전에는 음소거된 트랙도 파일을 만들었는데 **속이 완전히 빈 WAV** 가
+      // 나왔다. 다른 앱에 얹으려고 뽑는 파일인데 아무 소리도 없으면 쓸모가
+      // 없고, 왜 비었는지도 알 수가 없다.
+      const muted = project.tracks.filter((t) => t.notes.length > 0 && t.muted).length;
       const usable = project.tracks
         .map((track, index) => ({ track, index }))
-        .filter(({ track }) => track.notes.length > 0);
+        .filter(({ track }) => track.notes.length > 0 && !track.muted);
+
+      if (usable.length === 0) {
+        this.cb.onStatus("뽑을 트랙이 없습니다. 음소거를 풀거나 노트를 찍어 주세요.", "error");
+        return;
+      }
 
       const bankMB = Math.round(this.registry.soundfont.bankSizeBytes / 1024 / 1024);
       const hint = bankMB > 20 ? ` · 음원 ${bankMB}MB` : "";
@@ -150,7 +171,11 @@ export class ExportPanel {
         // 브라우저가 연속 다운로드를 막지 않게 한 박자 쉰다.
         await sleep(350);
       }
-      this.cb.onStatus(`트랙별 WAV ${usable.length}개를 저장했습니다`);
+      this.cb.onStatus(
+        muted > 0
+          ? `트랙별 WAV ${usable.length}개를 저장했습니다 (음소거된 ${muted}개는 뺐습니다)`
+          : `트랙별 WAV ${usable.length}개를 저장했습니다`,
+      );
     } catch (err) {
       this.fail("트랙별 WAV", err);
     } finally {
@@ -218,12 +243,34 @@ export class ExportPanel {
     return false;
   }
 
-  private warnIfSilent(buffer: AudioBuffer): void {
-    if (peakOf(buffer) > 0.0001) return;
-    this.cb.onStatus(
-      "소리가 없는 WAV 가 나왔습니다. 음원이 제대로 올라왔는지 확인해 주세요.",
-      "error",
+  /**
+   * 뽑은 WAV 에 문제가 있으면 사람 말로. 없으면 null.
+   *
+   * 조용히 넘어가면 안 되는 것 둘을 본다.
+   *   · 소리가 하나도 없는 파일
+   *   · **곡 길이 뒤에 있는 노트** — WAV 에는 안 들어가는데 화면에는 보인다
+   */
+  private problemWith(project: Project, buffer: AudioBuffer): string | null {
+    if (peakOf(buffer) <= 0.0001) {
+      return "소리가 없는 WAV 가 나왔습니다. 트랙이 전부 음소거는 아닌지, 음원이 올라왔는지 확인해 주세요.";
+    }
+
+    const end = totalBeats(project);
+    const beyond = project.tracks.reduce(
+      (n, t) => n + t.notes.filter((note) => note.start >= end - 1e-6).length,
+      0,
     );
+    if (beyond > 0) {
+      const bpb = beatsPerBar(project);
+      const last = Math.max(
+        ...project.tracks.flatMap((t) => t.notes.map((n) => n.start + n.length)),
+      );
+      return (
+        `저장했지만 ${beyond}개 음이 빠졌습니다. 곡 길이가 ${project.bars}마디인데` +
+        ` ${Math.ceil(last / bpb)}마디까지 노트가 있습니다 — 마디 수를 늘리고 다시 뽑으세요.`
+      );
+    }
+    return null;
   }
 
   private fail(what: string, err: unknown): void {
