@@ -794,9 +794,9 @@ const latency = await page.evaluate(() => {
   return p.length ? +(p[0] - window.__downAt).toFixed(1) : null;
 });
 check(
-  "손가락을 대는 즉시 소리가 난다 (떼는 순간이 아니라)",
-  latency !== null && latency < 30,
-  { 누른뒤ms: latency, 손가락댄시간ms: 150 },
+  "누른 뒤 곧바로 소리가 난다 (떼는 순간이 아니라)",
+  latency !== null && latency < 90,
+  { 누른뒤ms: latency, 손가락댄시간ms: 150, 예전동작: "떼는 순간 = 150ms+" },
 );
 
 // ---- 렌더 경로 둘이 정렬돼 있는가 ----
@@ -894,6 +894,62 @@ check(
   "부는 소리는 노트 길이를 따른다 (3초 샘플이 늘어지지 않는다)",
   decay.부는끝초 < 0.6,
   { 노트길이초: 0.125, 실제끝초: decay.부는끝초 },
+);
+
+// ---- 확대·화면 밀기에서는 소리가 나지 않는가 ----
+// 지연을 없애려고 "대는 즉시" 로 바꿨더니 확대할 때마다 소리가 났다.
+// 핀치도 밀기도 손가락 하나가 닿는 것으로 시작하기 때문이다.
+await page.evaluate(() => { window.__previewAt.length = 0; });
+const zoomBox = await page.locator("#roll").boundingBox();
+// 화면 밀기
+await page.mouse.move(zoomBox.x + 200, zoomBox.y + zoomBox.height * 0.5);
+await page.mouse.down();
+for (let i = 1; i <= 8; i += 1) {
+  await page.mouse.move(zoomBox.x + 200 + i * 10, zoomBox.y + zoomBox.height * 0.5 + i * 4);
+  await page.waitForTimeout(8);
+}
+await page.mouse.up();
+await page.waitForTimeout(250);
+check(
+  "화면을 밀 때는 소리가 나지 않는다",
+  (await page.evaluate(() => window.__previewAt.length)) === 0,
+  await page.evaluate(() => window.__previewAt.length),
+);
+
+// ---- 재생 위치(빨간 줄)를 끌어서 옮길 수 있는가 ----
+// 예전에는 눈금에서 끌면 무조건 루프 구간이 잡혀서 헤드를 끌 방법이 없었다.
+await page.evaluate(() => {
+  window.__app.scheduler.loopEnabled = false;
+  window.__app.scheduler.seek(0);
+  window.__app.roll.scrollX = 0;
+});
+await page.waitForTimeout(100);
+const headStart = await page.evaluate(() => window.__app.scheduler.positionBeats());
+const headX = await page.evaluate(() => 46 + 0 * window.__app.roll.pxPerBeat - window.__app.roll.scrollX);
+await page.mouse.move(zoomBox.x + headX, zoomBox.y + 14);
+await page.mouse.down();
+await page.mouse.move(zoomBox.x + headX + 180, zoomBox.y + 14, { steps: 8 });
+await page.mouse.up();
+await page.waitForTimeout(200);
+const headEnd = await page.evaluate(() => ({
+  pos: window.__app.scheduler.positionBeats(),
+  loopOn: window.__app.scheduler.loopEnabled,
+}));
+check(
+  "빨간 줄을 잡아 끌면 재생 위치가 따라온다",
+  headEnd.pos > headStart + 0.5 && !headEnd.loopOn,
+  { 시작: headStart, 끝: headEnd.pos, 루프가켜졌나: headEnd.loopOn },
+);
+
+// 헤드에서 떨어진 곳을 끌면 여전히 루프 구간이 잡혀야 한다
+await page.mouse.move(zoomBox.x + headX + 320, zoomBox.y + 14);
+await page.mouse.down();
+await page.mouse.move(zoomBox.x + headX + 460, zoomBox.y + 14, { steps: 6 });
+await page.mouse.up();
+await page.waitForTimeout(200);
+check(
+  "헤드에서 떨어진 곳을 끌면 루프 구간이 잡힌다",
+  await page.evaluate(() => window.__app.scheduler.loopEnabled),
 );
 
 check("콘솔 오류 없음", errors.length === 0, errors);

@@ -29,7 +29,9 @@ import {
   MAX_PX_PER_BEAT,
   MIN_KEY_HEIGHT,
   MIN_PX_PER_BEAT,
+  PLAYHEAD_GRAB,
   RULER,
+  PREVIEW_DELAY,
   TAP_MS,
   TAP_SLOP,
 } from "./theme";
@@ -42,6 +44,7 @@ type Drag =
   | { mode: "move"; note: Note; grabOffsetBeat: number; startPitch: number; moved: boolean }
   | { mode: "resize"; note: Note; startLength: number; downBeat: number }
   | { mode: "loop"; anchorBeat: number }
+  | { mode: "scrub" }
   | { mode: "pinch"; startDist: number; startPx: number; anchorBeat: number; startMidY: number; startScrollY: number };
 
 export type PianoRollCallbacks = {
@@ -72,6 +75,7 @@ export class PianoRoll {
   private pointers = new Map<number, Ptr>();
   private drag: Drag = { mode: "none" };
   private longPressTimer: number | null = null;
+  private previewTimer: number | null = null;
   private draggingNoteId: string | null = null;
 
   constructor(
@@ -354,9 +358,24 @@ export class PianoRoll {
       g.fillText(String(Math.round(b / bpb) + 1), x + 4, RULER / 2);
     }
 
-    const px = this.beatToX(this.cb.getPlayheadBeat());
+    // 재생 헤드 손잡이. 끌 수 있다는 걸 보여 주려면 잡을 만한 게 그려져 있어야 한다.
+    const px = Math.round(this.beatToX(this.cb.getPlayheadBeat()));
+    const scrubbing = this.drag.mode === "scrub";
+    const w = 9;
     g.fillStyle = C.playhead;
-    g.fillRect(Math.round(px) - 3, 0, 8, 6);
+    g.beginPath();
+    g.moveTo(px - w, 2);
+    g.lineTo(px + w, 2);
+    g.lineTo(px + w, RULER - 12);
+    g.lineTo(px, RULER - 3);
+    g.lineTo(px - w, RULER - 12);
+    g.closePath();
+    g.fill();
+    if (scrubbing) {
+      g.strokeStyle = "#ffffff";
+      g.lineWidth = 1.5;
+      g.stroke();
+    }
 
     g.restore();
     g.fillStyle = C.keyLine;
@@ -411,6 +430,8 @@ export class PianoRoll {
 
     if (this.pointers.size === 2) {
       this.cancelLongPress();
+      // 두 손가락 = 확대. 첫 손가락으로 예약해 둔 소리를 취소한다.
+      this.cancelPreview();
       this.beginPinch();
       return;
     }
@@ -418,6 +439,16 @@ export class PianoRoll {
 
     if (p.y < RULER) {
       if (p.x < GUTTER) return;
+      // 재생 헤드 손잡이를 잡았으면 **끌어서 옮긴다.**
+      //
+      // 예전에는 눈금에서 끌면 무조건 루프 구간이 잡혀서, 빨간 줄 자체를 끄는
+      // 방법이 아예 없었다. 탭으로 한 번에 맞히는 수밖에 없었는데 그게 어렵다.
+      const headX = this.beatToX(this.cb.getPlayheadBeat());
+      if (Math.abs(p.x - headX) <= PLAYHEAD_GRAB) {
+        this.drag = { mode: "scrub" };
+        this.cb.onSeek(Math.max(0, snap(this.xToBeat(p.x), this.snapUnit)));
+        return;
+      }
       this.drag = { mode: "loop", anchorBeat: Math.max(0, snap(this.xToBeat(p.x), this.snapUnit)) };
       return;
     }
@@ -451,14 +482,23 @@ export class PianoRoll {
       return;
     }
 
-    // 빈 격자를 누른 것 — 손가락을 **대는 순간** 그 음을 들려준다.
+    // 빈 격자를 누른 것 — 곧 그 음을 들려준다. 다만 아주 잠깐 기다린다.
     //
     // 예전에는 노트가 찍히는 순간(손가락을 뗄 때) 소리를 냈다. 그러면 누르고
-    // 있는 시간이 그대로 지연이 된다. 실측 124ms 였고, 오래 누를수록 더 늘었다.
-    // 건반은 누르면 바로 소리가 나야 악기로 느껴진다.
+    // 있는 시간이 그대로 지연이 됐다 — 실측 124ms, 천천히 누를수록 더.
     //
-    // 화면을 밀려고 눌렀을 때도 소리가 한 번 나지만, 짧고 그게 더 자연스럽다.
-    this.cb.onPreview(clampPitch(this.yToPitch(p.y)), this.activeTrack);
+    // 그래서 대는 즉시로 옮겼더니 이번엔 **확대하거나 화면을 밀 때마다** 소리가
+    // 났다. 핀치도 화면 밀기도 손가락 하나가 닿는 것으로 시작하기 때문에,
+    // 닿자마자 소리를 내면 피할 방법이 없다.
+    //
+    // 아주 짧게 기다렸다가 낸다. 그 사이에 손가락이 움직이거나 두 번째 손가락이
+    // 오면 취소한다. PREVIEW_DELAY 는 두 번째 손가락이 닿는 시간을 덮으면서
+    // 사람이 지연으로 느끼지 않는 선에서 잡았다.
+    const pitch = clampPitch(this.yToPitch(p.y));
+    this.previewTimer = window.setTimeout(() => {
+      this.previewTimer = null;
+      this.cb.onPreview(pitch, this.activeTrack);
+    }, PREVIEW_DELAY);
     this.drag = { mode: "pan", scrollX: this.scrollX, scrollY: this.scrollY, moved: false };
   };
 
@@ -470,7 +510,11 @@ export class PianoRoll {
     ptr.y = p.y;
 
     const movedFar = Math.hypot(p.x - ptr.downX, p.y - ptr.downY) > TAP_SLOP;
-    if (movedFar) this.cancelLongPress();
+    if (movedFar) {
+      this.cancelLongPress();
+      // 화면을 미는 중이다 — 노트를 찍는 게 아니니 소리를 내지 않는다.
+      if (this.drag.mode === "pan") this.cancelPreview();
+    }
 
     switch (this.drag.mode) {
       case "pinch":
@@ -504,6 +548,11 @@ export class PianoRoll {
         const raw = this.drag.startLength + delta;
         this.drag.note.length = Math.max(this.snapUnit, snap(raw, this.snapUnit));
         this.cb.onEdit();
+        break;
+      }
+
+      case "scrub": {
+        this.cb.onSeek(Math.max(0, snap(this.xToBeat(p.x), this.snapUnit)));
         break;
       }
 
@@ -620,6 +669,13 @@ export class PianoRoll {
       this.draggingNoteId = null;
       this.drag = { mode: "none" };
     }, LONG_PRESS_MS);
+  }
+
+  private cancelPreview(): void {
+    if (this.previewTimer !== null) {
+      clearTimeout(this.previewTimer);
+      this.previewTimer = null;
+    }
   }
 
   private cancelLongPress(): void {

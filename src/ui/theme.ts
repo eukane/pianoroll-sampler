@@ -1,7 +1,16 @@
 /** 화면 치수·색. 폰 기준으로 잡았다. */
 
 export const GUTTER = 46; // 왼쪽 건반 폭
-export const RULER = 26; // 위쪽 마디 눈금 높이
+/**
+ * 위쪽 마디 눈금 높이.
+ *
+ * 26px 이었는데 손가락으로 재생 위치를 잡기가 어려웠다. 손끝이 닿는 면적이
+ * 보통 40px 언저리라 26px 짜리 띠는 조준해서 눌러야 한다. 36px 로 올렸다.
+ */
+export const RULER = 36;
+
+/** 재생 헤드 손잡이를 잡았다고 볼 거리(px). 손가락 굵기를 감안한 값. */
+export const PLAYHEAD_GRAB = 26;
 
 export const MIN_PX_PER_BEAT = 18;
 export const MAX_PX_PER_BEAT = 320;
@@ -13,6 +22,18 @@ export const EDGE_GRAB = 20;
 export const TAP_SLOP = 8; // 이만큼 움직이면 탭이 아니라 드래그
 export const TAP_MS = 400;
 export const LONG_PRESS_MS = 480;
+
+/**
+ * 빈 격자를 눌렀을 때 소리를 내기까지 기다리는 시간(ms).
+ *
+ * 0 으로 두면 확대·화면 밀기에도 소리가 난다. 핀치는 손가락 하나가 닿는 것으로
+ * 시작하기 때문이다. 이 사이에 두 번째 손가락이 오거나 손가락이 움직이면
+ * 취소한다.
+ *
+ * 왼쪽 건반을 누르는 건 이 지연이 없다. 거기서는 확대도 밀기도 안 하니
+ * 기다릴 이유가 없다.
+ */
+export const PREVIEW_DELAY = 45;
 
 export const C = {
   bg: "#12141a",
