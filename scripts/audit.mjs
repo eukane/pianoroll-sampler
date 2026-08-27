@@ -8,12 +8,14 @@
  *   · 드럼 때문에 presetId 인코딩을 넓혔는데 **예전 프로젝트 파일**이 아직 열리나
  *   · 채널 배치를 바꿨는데 **드럼이 없을 때** 예전과 같은가
  *   · 셋잇단음을 넣었는데 **1/16 격자**가 여전히 정확한가
+ *   · 예제 곡이 헤더에 적어 둔 대로 되어 있는가 (격자·음계·겹침)
  *
  *     node scripts/audit.mjs
  */
 import { projectToMidi, midiToProject } from "../src/export/midi.ts";
 import { packPresetId, unpackPresetId, isDrumPreset } from "../src/model/preset.ts";
 import { assignChannels, channelForTrack } from "../src/model/channels.ts";
+import { demoSong } from "../src/model/demoSong.ts";
 
 const out = [];
 const ok = (n, pass, d) => out.push({ n, pass: !!pass, d });
@@ -78,6 +80,63 @@ ok("1/16 격자 노트가 여전히 정확히 왕복한다",
 let empty = true;
 try { projectToMidi({ bpm: 120, bars: 1, timeSig: [4, 4], tracks: [] }); } catch { empty = false; }
 ok("트랙이 없어도 MIDI 생성이 터지지 않는다", empty);
+
+// ---- 6) 예제 곡이 스스로 적어 둔 규칙을 지키는가 ----
+//
+// demoSong.ts 헤더가 "1/8 격자에 딱 떨어진다 · 5음계만 쓴다" 고 약속한다.
+// 손으로 적은 음표 목록이라 고치다 한 줄 어긋나기 쉽고, 어긋나도 소리로는
+// 잘 안 들린다. 약속한 쪽을 검사로 남긴다.
+const demo = demoSong();
+const demoNotes = demo.tracks.flatMap((t) => t.notes);
+const onGrid = demoNotes.every(
+  (n) => Math.abs(n.start * 2 - Math.round(n.start * 2)) < 1e-9
+      && Math.abs(n.length * 2 - Math.round(n.length * 2)) < 1e-9,
+);
+ok("예제 곡이 전부 1/8 격자에 떨어진다", onGrid,
+   demoNotes.filter((n) => (n.start * 2) % 1 !== 0 || (n.length * 2) % 1 !== 0).slice(0, 3));
+
+const songBeats = demo.bars * 4;
+ok("예제 곡의 노트가 곡 길이 안에 있다",
+   demoNotes.every((n) => n.start >= 0 && n.start + n.length <= songBeats + 1e-9),
+   { 곡길이박: songBeats, 넘는것: demoNotes.filter((n) => n.start + n.length > songBeats + 1e-9).length });
+
+// D 장조 5음계 = 레·미·파#·라·시 → 12로 나눈 나머지가 2, 4, 6, 9, 11
+const PENTATONIC = new Set([2, 4, 6, 9, 11]);
+const strays = demoNotes.filter((n) => !PENTATONIC.has(((n.pitch % 12) + 12) % 12));
+ok("예제 곡에 5음계 밖의 음이 없다", strays.length === 0,
+   strays.slice(0, 5).map((n) => n.pitch));
+
+// 같은 트랙에서 같은 음이 겹치면 앞 음의 noteOff 가 뒤 음을 끊는다.
+// 소리로는 "가끔 한 음이 짧다" 정도로만 들려서 눈으로는 못 잡는다.
+let overlaps = 0;
+for (const t of demo.tracks) {
+  const byPitch = new Map();
+  for (const n of [...t.notes].sort((a, b) => a.start - b.start)) {
+    const end = byPitch.get(n.pitch);
+    if (end !== undefined && n.start < end - 1e-9) overlaps += 1;
+    byPitch.set(n.pitch, n.start + n.length);
+  }
+}
+ok("예제 곡에 같은 음이 겹치는 자리가 없다", overlaps === 0, { 겹침: overlaps });
+
+// 셋 다 다른 악기여야 "같은 노트를 다른 악기로" 를 보여 줄 수 있다.
+ok("예제 곡의 세 트랙이 서로 다른 악기다",
+   new Set(demo.tracks.map((t) => t.source.presetId)).size === demo.tracks.length,
+   demo.tracks.map((t) => t.source.presetId));
+
+// 두 번 부르면 노트 id 가 달라야 한다. 같은 객체를 돌려주면 사용자가 고친 게
+// 다음에 열 때도 남아서 예제가 예제 노릇을 못 한다.
+const again = demoSong();
+ok("예제 곡을 다시 부르면 새 노트로 온다",
+   again.tracks[0].notes[0].id !== demo.tracks[0].notes[0].id
+     && again.tracks[0].notes.length === demo.tracks[0].notes.length);
+
+// MIDI 로 내보내고 다시 읽어도 그대로여야 한다 (다른 DAW 로 넘길 때).
+const demoBack = midiToProject(projectToMidi(demo));
+ok("예제 곡이 MIDI 왕복을 견딘다",
+   demoBack.tracks.length === demo.tracks.length
+     && demoBack.tracks.every((t, i) => t.notes.length === demo.tracks[i].notes.length),
+   { 원본: demo.tracks.map((t) => t.notes.length), 왕복: demoBack.tracks.map((t) => t.notes.length) });
 
 let bad = 0;
 for (const r of out) { if (!r.pass) bad++; console.log(`${r.pass ? "✅" : "❌"} ${r.n}${r.pass ? "" : "  " + JSON.stringify(r.d)}`); }

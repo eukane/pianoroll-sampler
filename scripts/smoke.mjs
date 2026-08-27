@@ -28,6 +28,7 @@
  *   · 뜯는 소리의 여운을 자르지 않는가 (부는 소리는 자르는가)
  *   · 복사 한 번 + 붙여넣기 연타로 마디가 채워지는가
  *   · 내보내기가 조용히 실패하지 않는가 (무음 · 곡 밖 노트 · 음소거 트랙)
+ *   · 예제 곡이 열리고 실제로 소리가 나는가 (덮어쓰기 전에 물어보는가)
  *   · 콘솔 오류가 하나도 없는가
  *
  * 쓰는 법: 다른 창에서 `npm run dev` 를 띄워 두고 `npm run smoke`.
@@ -1315,6 +1316,61 @@ check(
   "음소거한 트랙은 빈 스템 파일을 만들지 않는다",
   mutedStems.files.length === 1 && mutedStems.status?.includes("음소거된 1개는 뺐습니다"),
   mutedStems,
+);
+
+// ---- 예제 곡 ----
+//
+// 맨 마지막에 한다 — 지금까지 만든 프로젝트를 통째로 덮어쓰기 때문이다.
+// 노트가 있으면 물어보고 열어야 한다(말없이 날리지 않는다). 그리고 열린
+// 결과가 **실제로 소리가 나야** 한다 — 사운드폰트 없이 임시 신스로도.
+let askedBeforeOverwrite = false;
+page.on("dialog", (d) => {
+  askedBeforeOverwrite = true;
+  void d.accept();
+});
+await page.locator("#export").click();
+await page.waitForTimeout(150);
+await page.locator("#open-demo").click();
+await page.waitForTimeout(400);
+const demo = await page.evaluate(() => {
+  const p = window.__app.project;
+  return {
+    bpm: p.bpm,
+    bars: p.bars,
+    tracks: p.tracks.length,
+    notes: p.tracks.map((t) => t.notes.length),
+    presets: p.tracks.map((t) => t.source.presetId),
+  };
+});
+check("덮어쓰기 전에 물어본다", askedBeforeOverwrite);
+check(
+  "예제 곡이 8마디 3트랙으로 들어온다",
+  demo.bars === 8 && demo.tracks === 3 && demo.notes.every((n) => n > 10),
+  demo,
+);
+// 악기가 셋 다 다른지는 audit 이 본다. 여기 시험용 SF2 에는 프리셋이 일곱
+// 개뿐이라 GM 번호(65·107·32)가 없고, 앱이 제대로 첫 악기로 떨어뜨린다.
+check(
+  "없는 악기 번호여도 있는 악기로 떨어져 들어온다",
+  demo.presets.every((id) => Number.isFinite(id)),
+  demo.presets,
+);
+const demoSound = await page.evaluate(async () => {
+  const { renderProject } = await import("/src/export/render.ts");
+  const { peakOf } = await import("/src/export/wav.ts");
+  const app = window.__app;
+  const buf = await renderProject(
+    app.project,
+    () => app.registry.soundfont.bankBuffer(),
+    app.registry.folders.list,
+    app.mixerState,
+  );
+  return { peak: peakOf(buf), seconds: +buf.duration.toFixed(1) };
+});
+check(
+  "예제 곡이 실제로 소리가 난다 (찌그러지지 않고)",
+  demoSound.peak > 0.02 && demoSound.peak < 0.99 && demoSound.seconds > 18,
+  demoSound,
 );
 
 check("콘솔 오류 없음", errors.length === 0, errors);

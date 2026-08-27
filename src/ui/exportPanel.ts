@@ -12,6 +12,7 @@ import type { Project } from "../model/types";
 import { projectToMidi, midiToProject } from "../export/midi";
 import { totalBeats, beatsPerBar } from "../model/project";
 import { projectToJson, projectFromJson } from "../export/projectFile";
+import { demoSong } from "../model/demoSong";
 import { audioBufferToWav, peakOf } from "../export/wav";
 import { onlyTrack, projectSeconds, renderProject } from "../export/render";
 import type { InstrumentRegistry } from "../audio/registry";
@@ -48,6 +49,7 @@ export class ExportPanel {
     this.on("save-stems", () => this.exportStems());
     this.on("save-midi", () => this.exportMidi());
     this.on("save-json", () => this.exportJson());
+    this.on("open-demo", () => this.openDemo());
 
     const importInput = document.getElementById("import-file") as HTMLInputElement;
     (document.getElementById("open-file") as HTMLButtonElement).addEventListener("click", () =>
@@ -204,6 +206,21 @@ export class ExportPanel {
   }
 
   // ------------------------------------------------------------ 가져오기
+
+  /**
+   * 예제 곡 열기.
+   *
+   * 지금 만들던 것을 **덮어쓴다.** 저장 안 한 걸 말없이 날리면 안 되니까,
+   * 노트가 하나라도 있으면 물어보고 연다. 빈 화면이면 그냥 연다 — 아무것도
+   * 없는데 물어보는 건 그냥 귀찮게 하는 것이다.
+   */
+  private openDemo(): void {
+    const hasNotes = this.getProject().tracks.some((t) => t.notes.length > 0);
+    if (hasNotes && !window.confirm("지금 만들던 것을 덮어씁니다. 예제 곡을 불러올까요?")) return;
+    this.close();
+    this.cb.onProjectReplaced(demoSong());
+    this.cb.onStatus("예제 곡 (8마디) — 트랙 이름을 눌러 악기를 바꿔 보세요");
+  }
 
   private async importFile(file: File): Promise<void> {
     this.close();
