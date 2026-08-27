@@ -9,6 +9,9 @@
  * **연주하기 전에 이미 알고 있다.** 미리 알고 예약하면 M3 의 오프라인 렌더에서
  * 실시간 이벤트 루프 없이 같은 코드로 렌더할 수 있다.
  *
+ * 꾸밈(`expr`)은 **음마다** 온다. 트랙에 걸린 기본값과 그 음의 꾸밈을 합치는
+ * 일은 `audio/expression.ts` 가 하고, 악기는 합쳐진 결과만 받는다.
+ *
  * `hold`/`release` 는 **미리듣기 전용**이다. 건반을 누르고 있는 동안 계속 나는
  * 소리는 길이를 미리 알 수 없어서 `play` 로는 낼 수가 없다. 반대로 오프라인
  * 렌더는 이 둘을 절대 쓰지 않는다 — 실시간 입력이 없으니 쓸 일도 없다.
@@ -18,7 +21,7 @@
  * 없다. 채널 번호로 통일하면 두 방식이 같은 인터페이스에 들어온다.
  */
 
-import type { VibratoSetting } from "./vibrato";
+import type { Expression } from "./expression";
 
 export interface Instrument {
   /** 화면에 보여 줄 이름. */
@@ -28,8 +31,16 @@ export interface Instrument {
    * @param when        AudioContext 시각(초). 지금이 아니라 **미래 시각**이다
    * @param durationSec 눌려 있는 길이(초). 릴리즈 꼬리는 이 뒤에 더 붙어도 된다
    * @param channel     트랙 번호 = MIDI 채널 (0~15)
+   * @param expr        이 음의 연주법 (떨림·음정 곡선). 없으면 밋밋하게 낸다
    */
-  play(pitch: number, velocity: number, when: number, durationSec: number, channel: number): void;
+  play(
+    pitch: number,
+    velocity: number,
+    when: number,
+    durationSec: number,
+    channel: number,
+    expr?: Expression,
+  ): void;
 
   /**
    * 누르고 있는 동안 계속 나는 소리를 시작한다. **지금** 낸다(미래 예약이 아니다).
@@ -38,16 +49,10 @@ export interface Instrument {
    * 샘플이 다 떨어지면 거기서 끝난다 — 루프 지점이 없는 음원을 억지로 늘리면
    * 뚝뚝 끊기는 소리가 난다. 짧은 음원은 짧게 울리는 게 정직하다.
    */
-  hold(pitch: number, velocity: number, channel: number): void;
+  hold(pitch: number, velocity: number, channel: number, expr?: Expression): void;
 
   /** `hold` 로 낸 소리를 끝낸다. 낸 적이 없으면 아무 일도 하지 않는다. */
   release(pitch: number, channel: number): void;
-
-  /**
-   * 이 채널의 떨림(비브라토)을 정한다. `prepare` 단계에서 한 번 걸어 둔다 —
-   * 노트마다 부를 자리가 아니다 (audio/vibrato.ts 참고).
-   */
-  setVibrato(channel: number, v: VibratoSetting): void;
 
   /** 정지 버튼. 예약해 둔 것까지 전부 끊는다. */
   stopAll(): void;

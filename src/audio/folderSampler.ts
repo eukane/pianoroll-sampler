@@ -41,7 +41,8 @@
 import type { Instrument } from "./instrument";
 import type { Mixer } from "./mixer";
 import { commonLabel, layerVelocity, parseSampleName, type Layer } from "../model/sampleNames";
-import { NO_VIBRATO, shakes, VIBRATO_FADE, VIBRATO_HZ, VIBRATO_MAX_CENTS, type VibratoSetting } from "./vibrato";
+import { shakes, VIBRATO_FADE, VIBRATO_HZ, VIBRATO_MAX_CENTS } from "./vibrato";
+import { PLAIN, type Expression } from "./expression";
 
 export type SampleEntry = {
   fileName: string;
@@ -163,7 +164,6 @@ export class FolderSampler implements Instrument {
   private held = new Map<string, Voice>();
   /** 트랙(채널)마다 어느 폴더를 쓰는지. */
   private channelFolder = new Map<number, string>();
-  private vibrato = new Map<number, VibratoSetting>();
 
   constructor(
     private ctx: BaseAudioContext,
@@ -221,8 +221,15 @@ export class FolderSampler implements Instrument {
     for (const folder of folders) this.folders.set(folder.id, folder);
   }
 
-  play(pitch: number, velocity: number, when: number, durationSec: number, channel: number): void {
-    this.spawn(pitch, velocity, when, durationSec, channel);
+  play(
+    pitch: number,
+    velocity: number,
+    when: number,
+    durationSec: number,
+    channel: number,
+    expr: Expression = PLAIN,
+  ): void {
+    this.spawn(pitch, velocity, when, durationSec, channel, expr);
   }
 
   /**
@@ -232,9 +239,9 @@ export class FolderSampler implements Instrument {
    * 대고 있어 봐야 소리가 길어지지 않는다 — 뜯은 만큼 울리다 잦아든다.
    * 그래서 여기서는 그냥 한 번 내고 놔둔다. 붙잡는 건 부는 소리(대금·해금)뿐이다.
    */
-  hold(pitch: number, velocity: number, channel: number): void {
+  hold(pitch: number, velocity: number, channel: number, expr: Expression = PLAIN): void {
     this.release(pitch, channel);
-    const spawned = this.spawn(pitch, velocity, this.ctx.currentTime, MAX_HOLD, channel);
+    const spawned = this.spawn(pitch, velocity, this.ctx.currentTime, MAX_HOLD, channel, expr);
     if (spawned && !spawned.decaying) this.held.set(holdKey(pitch, channel), spawned.voice);
   }
 
@@ -252,6 +259,7 @@ export class FolderSampler implements Instrument {
     when: number,
     durationSec: number,
     channel: number,
+    expr: Expression,
   ): { voice: Voice; decaying: boolean } | null {
     const folderId = this.channelFolder.get(channel);
     const folder = folderId ? this.folders.get(folderId) : undefined;
@@ -300,7 +308,11 @@ export class FolderSampler implements Instrument {
 
     // 재생 속도로 음정을 옮긴 위에 다시 흔든다. detune 은 센트 단위라
     // 어느 음을 어느 속도로 밀고 있든 흔들리는 폭이 같다.
-    const lfo = this.attachVibrato(source, channel, when, stopAt, hold);
+    if (expr.bend.length > 0) {
+      source.detune.setValueAtTime(expr.bend[0].cents, when);
+      for (const p of expr.bend.slice(1)) source.detune.linearRampToValueAtTime(p.cents, when + p.t);
+    }
+    const lfo = this.attachVibrato(source, expr, when, stopAt, hold);
     const voice: Voice = { source, gain, ...(lfo ? { lfo } : {}) };
     this.playing.push(voice);
     source.onended = () => {
@@ -318,19 +330,15 @@ export class FolderSampler implements Instrument {
     this.fadeOut(v, 0.02);
   }
 
-  setVibrato(channel: number, v: VibratoSetting): void {
-    this.vibrato.set(channel, v);
-  }
-
   /** 음정을 흔드는 LFO. 안 걸 거면 노드를 안 만든다. */
   private attachVibrato(
     source: AudioBufferSourceNode,
-    channel: number,
+    expr: Expression,
     when: number,
     stopAt: number,
     durationSec: number,
   ): OscillatorNode | undefined {
-    const v = this.vibrato.get(channel) ?? NO_VIBRATO;
+    const v = expr.vibrato;
     if (!shakes(v, durationSec)) return undefined;
 
     const lfo = this.ctx.createOscillator();

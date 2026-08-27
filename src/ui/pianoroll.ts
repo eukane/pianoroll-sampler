@@ -8,6 +8,7 @@
  *   건반 누르고 있기 누른 만큼 소리 (위아래로 밀면 음이 따라온다)
  *   노트 드래그    옮기기 (그리드에 붙음)
  *   오른쪽 끝 드래그 길이 조절
+ *   노트 탭        꾸밈 고르기 (시김새)
  *   길게 누르기    삭제
  *   빈 곳 드래그   화면 이동
  *   두 손가락 핀치 가로 확대 / 세로 이동
@@ -21,6 +22,7 @@
 import type { Note, Project } from "../model/types";
 import { beatsPerBar, makeNote, snap, snapFloor, sortNotes, totalBeats } from "../model/project";
 import { clampPitch, isBlackKey, isC, midiToName } from "../util/music";
+import type { Ornament } from "../model/ornament";
 import {
   C,
   EDGE_GRAB,
@@ -36,6 +38,15 @@ import {
   TAP_MS,
   TAP_SLOP,
 } from "./theme";
+
+/** 노트 오른쪽 끝에 찍는 표시. 글자 하나라 좁은 노트에서도 자리를 안 먹는다. */
+const ORNAMENT_MARK: Record<Ornament, string> = {
+  none: "",
+  vibrato: "〜",
+  scoop: "↗",
+  fall: "↘",
+  bend: "∧",
+};
 
 type Ptr = { x: number; y: number; downX: number; downY: number; downAt: number };
 
@@ -59,6 +70,8 @@ export type PianoRollCallbacks = {
   /** 누르는 순간 소리를 내고 뗄 때까지 붙잡는다. 반드시 onPreviewRelease 로 끝낸다. */
   onPreviewHold: (pitch: number, trackIndex: number) => void;
   onPreviewRelease: () => void;
+  /** 노트를 톡 쳤다 — 꾸밈을 고르는 창을 열라는 뜻. */
+  onNoteTap: (note: Note) => void;
   onSeek: (beat: number) => void;
   onLoopChange: (startBeat: number, endBeat: number) => void;
   getPlayheadBeat: () => number;
@@ -276,6 +289,20 @@ export class PianoRoll {
         g.font = `600 ${Math.min(11, h - 6)}px system-ui, sans-serif`;
         g.textBaseline = "middle";
         g.fillText(midiToName(n.pitch), x + 5, y + h / 2);
+      }
+
+      // 꾸밈이 걸린 음은 눈에 보여야 한다. 안 보이면 "어디에 걸었더라" 를
+      // 하나씩 눌러 확인해야 하고, 그건 조교가 아니라 수색이다.
+      const mark = ORNAMENT_MARK[n.ornament ?? "none"];
+      if (mark && h >= 10) {
+        g.globalAlpha = active ? 1 : 0.4;
+        g.fillStyle = "#0d1014";
+        g.font = `700 ${Math.min(12, h - 3)}px system-ui, sans-serif`;
+        g.textBaseline = "middle";
+        g.textAlign = "right";
+        g.fillText(mark, x + w - 4, y + h / 2);
+        g.textAlign = "left";
+        g.globalAlpha = 1;
       }
     }
   }
@@ -616,6 +643,10 @@ export class PianoRoll {
     } else if (this.drag.mode === "move" && this.drag.moved) {
       const track = this.track;
       if (track) sortNotes(track);
+    } else if (this.drag.mode === "move" && quick && still) {
+      // 노트를 톡 치면 꾸밈 창. 예전에는 이 동작에 아무 일도 안 일어났다.
+      // (길게 누르면 삭제, 끌면 이동 — 탭만 비어 있었다)
+      this.cb.onNoteTap(this.drag.note);
     }
 
     this.draggingNoteId = null;

@@ -9,6 +9,8 @@
  *   · 채널 배치를 바꿨는데 **드럼이 없을 때** 예전과 같은가
  *   · 셋잇단음을 넣었는데 **1/16 격자**가 여전히 정확한가
  *   · 떨림(CC1)은 볼륨과 달리 **렌더용 MIDI 에서도** 빠지지 않는가
+ *   · 꾸밈 곡선이 말한 모양대로 나오는가 (끌어올림은 아래에서 위로 …)
+ *   · 트랙 기본 떨림과 음의 꾸밈이 규칙대로 합쳐지는가
  *   · 예제 곡이 헤더에 적어 둔 대로 되어 있는가 (격자·음계·겹침)
  *
  *     node scripts/audit.mjs
@@ -18,6 +20,8 @@ import { packPresetId, unpackPresetId, isDrumPreset } from "../src/model/preset.
 import { assignChannels, channelForTrack } from "../src/model/channels.ts";
 import { demoSong } from "../src/model/demoSong.ts";
 import { shakes, vibratoOf } from "../src/audio/vibrato.ts";
+import { bendCurve, MAX_BEND_CENTS } from "../src/model/ornament.ts";
+import { expressionFor } from "../src/audio/expression.ts";
 
 const out = [];
 const ok = (n, pass, d) => out.push({ n, pass: !!pass, d });
@@ -100,7 +104,68 @@ ok("렌더용 MIDI 에도 떨림(CC1)이 실린다 (볼륨과 달리 빠지면 �
 ok("떨림이 0 이면 CC1 을 아예 안 보낸다", findCC(projectToMidi(proj), 1) === null,
    { CC1: findCC(projectToMidi(proj), 1) });
 
-// ---- 7) 예제 곡이 스스로 적어 둔 규칙을 지키는가 ----
+// ---- 7) 꾸밈 곡선이 말한 모양대로 나오는가 ----
+//
+// 손으로 그린 곡선이라 부호 하나 뒤집혀도 코드는 멀쩡히 돈다. 끌어올림이
+// 위에서 내려오고 있어도 "뭔가 휘긴 하네" 로 들려서 귀로도 잘 안 잡힌다.
+const bendAt = (points, t) => {
+  if (points.length === 0) return 0;
+  if (t <= points[0].t) return points[0].cents;
+  for (let i = 1; i < points.length; i++) {
+    if (t <= points[i].t) {
+      const a = points[i - 1], b = points[i];
+      const k = b.t === a.t ? 1 : (t - a.t) / (b.t - a.t);
+      return a.cents + (b.cents - a.cents) * k;
+    }
+  }
+  return points[points.length - 1].cents;
+};
+
+const scoop = bendCurve("scoop", 1, 1.0);
+ok("끌어올림은 아래에서 시작해 제 음정으로 온다",
+   scoop[0].cents < -100 && scoop[scoop.length - 1].cents === 0,
+   scoop);
+const fall = bendCurve("fall", 1, 1.0);
+ok("흘러내림은 제 음정으로 시작해 끝에서 떨어진다",
+   fall[0].cents === 0 && fall[fall.length - 1].cents < -100,
+   fall);
+const bend = bendCurve("bend", 1, 1.0);
+ok("꺾기는 위로 올라갔다 제자리로 돌아온다",
+   Math.max(...bend.map((p) => p.cents)) > 100 && bend[bend.length - 1].cents === 0,
+   bend);
+ok("어떤 꾸밈도 피치 벤드 범위(±200센트)를 넘지 않는다",
+   ["scoop", "fall", "bend"].every((o) =>
+     [0.3, 1].every((a) => bendCurve(o, a, 2).every((p) => Math.abs(p.cents) <= MAX_BEND_CENTS))));
+
+// 짧은 음에서도 모양이 음 안에서 끝나야 한다. 0.1초짜리에 0.13초짜리
+// 끌어올림을 붙이면 음이 끝날 때까지 제 음정에 도착하지 못한다.
+const shortScoop = bendCurve("scoop", 1, 0.1);
+ok("짧은 음에서도 끌어올림이 음 안에서 끝난다",
+   shortScoop[shortScoop.length - 1].t <= 0.1 + 1e-9,
+   shortScoop);
+const shortBend = bendCurve("bend", 1, 0.12);
+ok("짧은 음에서도 꺾기가 음 안에서 끝난다",
+   shortBend[shortBend.length - 1].t <= 0.12 + 1e-9,
+   shortBend);
+ok("세기 0 이면 아무 곡선도 안 나온다", bendCurve("bend", 0, 1).length === 0);
+
+// ---- 8) 트랙 기본 떨림과 음의 꾸밈이 어떻게 합쳐지는가 ----
+//
+// 규칙 한 줄: **꾸밈을 정하지 않은 음에만 트랙 기본 떨림이 걸린다.**
+// 여기가 어긋나면 "이 음만 밋밋하게" 가 안 되거나, 반대로 전부 떨어 버린다.
+const vibTrack = { ...proj.tracks[0], vibrato: 0.8, vibratoDelay: 0.2 };
+const exprOf = (note) => expressionFor(vibTrack, { pitch: 60, start: 0, length: 1, velocity: 100, ...note }, 1);
+ok("꾸밈을 안 정한 음은 트랙 기본 떨림을 따른다",
+   exprOf({}).vibrato.depth === 0.8 && exprOf({}).bend.length === 0);
+ok("「그냥」을 고르면 트랙 떨림도 안 걸린다",
+   exprOf({ ornament: "none" }).vibrato.depth === 0 && exprOf({ ornament: "none" }).bend.length === 0);
+ok("「떨림」을 고르면 그 음의 세기를 쓴다",
+   exprOf({ ornament: "vibrato", ornamentAmount: 0.3 }).vibrato.depth === 0.3);
+ok("음정 곡선 꾸밈은 떨림 없이 곡선만 온다",
+   exprOf({ ornament: "bend" }).vibrato.depth === 0
+     && exprOf({ ornament: "bend" }).bend.length > 0);
+
+// ---- 9) 예제 곡이 스스로 적어 둔 규칙을 지키는가 ----
 //
 // demoSong.ts 헤더가 "1/8 격자에 딱 떨어진다 · 5음계만 쓴다" 고 약속한다.
 // 손으로 적은 음표 목록이라 고치다 한 줄 어긋나기 쉽고, 어긋나도 소리로는
@@ -148,11 +213,21 @@ ok("예제 곡의 세 트랙이 서로 다른 악기다",
 const mel = demo.tracks[0];
 const melVib = vibratoOf(mel);
 const secPerBeat = 60 / demo.bpm;
-const shaking = mel.notes.filter((n) => shakes(melVib, n.length * secPerBeat));
+const melExpr = mel.notes.map((n) => expressionFor(mel, n, n.length * secPerBeat));
+const shaking = melExpr.filter((e, i) => shakes(e.vibrato, mel.notes[i].length * secPerBeat));
 ok("예제 곡 멜로디에 떨림이 걸려 있다", melVib.depth > 0 && melVib.delay > 0, melVib);
 ok("예제 곡에서 긴 음은 떨리고 짧은 음은 안 떨린다",
    shaking.length > 3 && shaking.length < mel.notes.length,
    { 떠는음: shaking.length, 전체: mel.notes.length });
+
+// 기교는 아껴 써야 기교다. 전부 꺾으면 트랙에 걸어 둔 것과 다를 게 없어진다.
+const ornamented = mel.notes.filter((n) => n.ornament !== undefined);
+ok("예제 곡에 음 하나씩 손본 자리가 있다 (많지 않게)",
+   ornamented.length >= 2 && ornamented.length <= 5,
+   { 손본음: ornamented.map((n) => `${n.start}박 ${n.ornament}`) });
+ok("손본 자리의 꾸밈이 실제로 음정 곡선을 만든다",
+   ornamented.every((n) => expressionFor(mel, n, n.length * secPerBeat).bend.length > 0),
+   ornamented.map((n) => n.ornament));
 ok("예제 곡의 반주·베이스에는 떨림이 없다",
    demo.tracks.slice(1).every((t) => (t.vibrato ?? 0) === 0));
 

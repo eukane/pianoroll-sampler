@@ -139,6 +139,13 @@ export class MixerPanel {
       this.list.appendChild(row);
     });
 
+    const tip = document.createElement("p");
+    tip.className = "note";
+    tip.textContent =
+      "기본 떨림은 꾸밈을 정하지 않은 음에만 걸립니다. 음 하나만 다르게 하려면 " +
+      "피아노롤에서 그 노트를 톡 치세요 (끌어올림·흘러내림·꺾기).";
+    this.list.appendChild(tip);
+
     if (this.state.hasSolo) {
       const note = document.createElement("p");
       note.className = "note";

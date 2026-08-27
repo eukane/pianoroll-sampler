@@ -9,6 +9,8 @@
  *
  *   · 트랙이 셋이다 — 멜로디 · 반주 · 베이스. 믹서에서 하나씩 꺼 보면 바로 안다
  *   · 멜로디에만 **떨림**이 걸려 있다. 긴 음만 떨리고 짧은 음은 안 떨린다
+ *   · 그 위에 **음 하나씩 손본 자리가 셋** 있다 (끌어올림 · 꺾기 · 흘러내림).
+ *     노트를 톡 치면 어떤 꾸밈이 걸렸는지 보이고 바꿔 볼 수 있다
  *   · 두 번째 트랙이 **바꿔 보라고 만든 자리**다. 가야금(Koto)으로 걸어 뒀는데
  *     색소폰이든 마림바든 눌러 바꾸면 같은 노트가 그대로 다른 악기로 난다
  *   · 전부 **1/8 격자에 딱 떨어진다.** 기본 스냅이 1/8 이라, 열자마자 손으로
@@ -42,6 +44,7 @@
 // (타입만 가져오는 줄은 지워지므로 상관없다). Vite 는 양쪽 다 받는다.
 import { makeNote, newId } from "./project.ts";
 import { packPresetId } from "./preset.ts";
+import type { Ornament } from "./ornament.ts";
 import type { Note, Project, Track } from "./types";
 
 /** GM 프로그램 번호(0부터). 어느 사운드폰트에나 같은 자리에 있다. */
@@ -128,11 +131,35 @@ function track(
  */
 const MELODY_VIBRATO_DELAY = 0.4;
 
+/**
+ * 음 하나씩 손본 자리. 시작 박 → 꾸밈.
+ *
+ * 세 군데뿐이다. 기교는 아껴 써야 기교다 — 전부 꺾으면 그냥 그 악기의
+ * 버릇이 되고, 트랙에 떨림을 걸어 둔 것과 다를 게 없어진다.
+ *
+ *     0박(첫 음)    끌어올림   관악기가 첫 음을 밑에서 붙여 올리는 소리
+ *     10박(제일 높은 자리) 꺾기  프레이즈 꼭대기에서 한 번 꺾는다
+ *     22박(구절 끝)  흘러내림   다음 구절로 내려가기 전에 흘린다
+ *
+ * 나머지 음은 꾸밈을 안 정해서 트랙 기본 떨림을 따른다 — 긴 음만 살짝 떤다.
+ */
+const MELODY_ORNAMENTS: Record<number, Ornament> = {
+  0: "scoop",
+  10: "bend",
+  22: "fall",
+};
+
 function melodyNotes(): Note[] {
-  return MELODY.map(([start, pitch, length]) =>
+  return MELODY.map(([start, pitch, length]) => {
     // 마디 첫 박은 조금 세게. 밋밋하게 나열된 것과 연주된 것의 차이가 여기서 난다.
-    makeNote(pitch, start, length, start % BEATS_PER_BAR === 0 ? 108 : 92),
-  );
+    const note = makeNote(pitch, start, length, start % BEATS_PER_BAR === 0 ? 108 : 92);
+    const o = MELODY_ORNAMENTS[start];
+    if (o) {
+      note.ornament = o;
+      note.ornamentAmount = 0.6;
+    }
+    return note;
+  });
 }
 
 function chordNotes(): Note[] {

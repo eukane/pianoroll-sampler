@@ -14,7 +14,8 @@
 import type { Instrument } from "./instrument";
 import type { Mixer } from "./mixer";
 import { midiToFreq } from "../util/music";
-import { NO_VIBRATO, shakes, VIBRATO_FADE, VIBRATO_HZ, VIBRATO_MAX_CENTS, type VibratoSetting } from "./vibrato";
+import { shakes, VIBRATO_FADE, VIBRATO_HZ, VIBRATO_MAX_CENTS } from "./vibrato";
+import { PLAIN, type Expression } from "./expression";
 
 export type Waveform = "sine" | "sawtooth" | "square" | "triangle";
 
@@ -43,7 +44,6 @@ export class OscInstrument implements Instrument {
    * 모자랄 때 뺏겨 나가는데, 그러면 손을 떼도 끌 대상이 없어진다.
    */
   private held = new Map<string, Voice>();
-  private vibrato = new Map<number, VibratoSetting>();
 
   constructor(
     private ctx: BaseAudioContext,
@@ -51,7 +51,14 @@ export class OscInstrument implements Instrument {
     public waveform: Waveform = "sawtooth",
   ) {}
 
-  play(pitch: number, velocity: number, when: number, durationSec: number, channel: number): void {
+  play(
+    pitch: number,
+    velocity: number,
+    when: number,
+    durationSec: number,
+    channel: number,
+    expr: Expression = PLAIN,
+  ): void {
     const dest = this.mixer.input(channel);
     this.prune(when);
     if (this.voices.length >= MAX_VOICES) this.steal();
@@ -79,7 +86,8 @@ export class OscInstrument implements Instrument {
     osc.start(when);
     osc.stop(endsAt + 0.01);
 
-    const lfo = this.attachVibrato(osc, channel, when, endsAt, hold);
+    this.drawBend(osc, expr, when);
+    const lfo = this.attachVibrato(osc, expr, when, endsAt, hold);
     const voice: Voice = { osc, gain, endsAt, ...(lfo ? { lfo } : {}) };
     this.voices.push(voice);
     osc.onended = () => {
@@ -89,7 +97,7 @@ export class OscInstrument implements Instrument {
     };
   }
 
-  hold(pitch: number, velocity: number, channel: number): void {
+  hold(pitch: number, velocity: number, channel: number, expr: Expression = PLAIN): void {
     this.release(pitch, channel);
     const now = this.ctx.currentTime;
     const peak = Math.max(0.02, (velocity / 127) * 0.22);
@@ -108,7 +116,8 @@ export class OscInstrument implements Instrument {
     osc.start(now);
     osc.stop(now + MAX_HOLD);
 
-    const lfo = this.attachVibrato(osc, channel, now, now + MAX_HOLD, MAX_HOLD);
+    this.drawBend(osc, expr, now);
+    const lfo = this.attachVibrato(osc, expr, now, now + MAX_HOLD, MAX_HOLD);
     const voice: Voice = { osc, gain, endsAt: now + MAX_HOLD, ...(lfo ? { lfo } : {}) };
     const key = holdKey(pitch, channel);
     this.held.set(key, voice);
@@ -144,8 +153,16 @@ export class OscInstrument implements Instrument {
     this.voices = [];
   }
 
-  setVibrato(channel: number, v: VibratoSetting): void {
-    this.vibrato.set(channel, v);
+  /**
+   * 음정 곡선을 그린다. 보이스마다 detune 을 직접 잡으므로 **겹친 음도 따로**
+   * 휜다 (사운드폰트는 채널 하나를 같이 써서 그게 안 된다).
+   */
+  private drawBend(osc: OscillatorNode, expr: Expression, when: number): void {
+    if (expr.bend.length === 0) return;
+    osc.detune.setValueAtTime(expr.bend[0].cents, when);
+    for (const p of expr.bend.slice(1)) {
+      osc.detune.linearRampToValueAtTime(p.cents, when + p.t);
+    }
   }
 
   /**
@@ -154,12 +171,12 @@ export class OscInstrument implements Instrument {
    */
   private attachVibrato(
     osc: OscillatorNode,
-    channel: number,
+    expr: Expression,
     when: number,
     endsAt: number,
     durationSec: number,
   ): OscillatorNode | undefined {
-    const v = this.vibrato.get(channel) ?? NO_VIBRATO;
+    const v = expr.vibrato;
     if (!shakes(v, durationSec)) return undefined;
 
     const lfo = this.ctx.createOscillator();

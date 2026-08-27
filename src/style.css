@@ -528,3 +528,74 @@ button:disabled {
   --bad: #f85149;
   --warn: #d29922;
 }
+
+/* ------------------------------------------------------------ 음 하나 조교 */
+
+#note-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 44;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  background: rgba(8, 10, 14, 0.62);
+}
+
+#note-modal.hidden {
+  display: none;
+}
+
+/* 손가락으로 고르는 자리라 두 칸씩 크게. 이름만으로는 무슨 소리인지 몰라서
+   설명을 한 줄씩 같이 붙인다. */
+.ornaments {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+button.orn {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  min-height: 52px;
+  padding: 8px 12px;
+  text-align: left;
+}
+
+button.orn b {
+  font-size: 15px;
+  font-weight: 700;
+}
+
+button.orn small {
+  color: var(--dim);
+  font-size: 11.5px;
+}
+
+button.orn.on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #06120f;
+}
+
+button.orn.on small {
+  color: rgba(6, 18, 15, 0.72);
+}
+
+.note-foot {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.note-foot button {
+  flex: 1 1 0;
+  min-height: 44px;
+}
+
+button.danger {
+  border-color: var(--bad);
+  color: var(--bad);
+}

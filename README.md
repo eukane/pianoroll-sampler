@@ -59,10 +59,10 @@ AudioWorklet 이 보안 컨텍스트(https 나 localhost)에서만 동작하는�
 
 ```bash
 npm run build      # 타입 검사 + 프로덕션 빌드
-npm run smoke      # 브라우저 자동 점검 87가지 (dev 서버를 띄워 둔 상태에서)
+npm run smoke      # 브라우저 자동 점검 96가지 (dev 서버를 띄워 둔 상태에서)
 npm run midi       # MIDI 왕복 점검 20가지 (브라우저 없이, 1초)
 npm run names      # 샘플 파일명 읽기 점검 19가지 (브라우저 없이)
-npm run audit      # 고치다 옆엣것을 깨뜨리지 않았는지 22가지 (브라우저 없이)
+npm run audit      # 고치다 옆엣것을 깨뜨리지 않았는지 35가지 (브라우저 없이)
 npm run clipboard  # 복사·붙여넣기 점검 15가지 (브라우저 없이)
 npm run latency    # 이 기기에서 사운드폰트가 몇 ms 늦는지 실측 (통과/실패 아님)
 ```
@@ -72,13 +72,17 @@ npm run latency    # 이 기기에서 사운드폰트가 몇 ms 늦는지 실측
 
 ## 진행 상황
 
-### 떨림 (비브라토) ✅
+### 음 하나씩 조교하기 (꾸밈) ✅
 
-- **이번에 된 것**: `🎚️ 믹서` 에 트랙마다 **떨림** 과 **떨림 시작** 이 생겼다.
-  트럼펫·해금처럼 긴 음을 흔드는 기교를 낼 수 있다.
-- **확인하는 법**: 예제 곡을 열고 믹서에서 멜로디 트랙의 떨림을 0 과 100 사이로
-  움직여 본다. **긴 음만 떨리고 8분음표는 안 떨린다** — 그게 "떨림 시작" 이
-  하는 일이다.
+- **이번에 된 것**: 피아노롤에서 **노트를 톡 치면** 그 음만 어떻게 연주할지
+  고를 수 있다 — 떨림 · 끌어올림 · 흘러내림 · 꺾기. 같은 음높이를 찍어도
+  하나는 밑에서 끌어올리고 하나는 끝에서 흘려 내릴 수 있다.
+- **확인하는 법**: 예제 곡을 열면 멜로디에 손본 자리가 셋 있다 (첫 음 끌어올림,
+  제일 높은 자리 꺾기, 구절 끝 흘러내림). 노트 오른쪽 끝의 `↗ ∧ ↘` 표시가
+  그것이다. 톡 쳐서 바꿔 보면 고르는 즉시 들려준다.
+- **믹서의 「기본 떨림」은 다른 것**: 그건 "이 악기는 긴 음을 으레 이렇게 분다"
+  는 설정이고, **꾸밈을 정하지 않은 음에만** 걸린다. 전부 떨면 기교가 아니라
+  버릇이다.
 - **빠르기는 없다**: 흔드는 속도(8.1Hz)는 사운드폰트가 정한다. 재 봤더니 CC76
   으로 바꿀 수가 없어서, 임시 신스와 낱개 WAV 도 같은 속도에 맞췄다. 자세한
   실측은 [`DECISIONS.md`](DECISIONS.md).
@@ -183,14 +187,16 @@ npm run latency    # 이 기기에서 사운드폰트가 몇 ms 늦는지 실측
 ```
 src/
   model/     Note · Track · Project (노트는 악기 정보를 갖지 않는다)
-             · demoSong(가이드용 예제 곡)
+             · ornament(음 하나에 붙는 꾸밈 — 시김새) · demoSong(예제 곡)
   audio/     engine(잠금해제) · scheduler(lookahead) · mixer(트랙별 배선)
              · instrument(인터페이스) · oscInstrument(음원 없을 때)
              · soundfont(SF2 샘플러) · folderSampler(낱개 WAV)
              · reverb(계산으로 만든 울림) · mixerState(뮤트·솔로 판단)
              · vibrato(떨림 — 왜 깊이만 있고 빠르기는 없는지)
+             · expression(트랙 기본값 + 음의 꾸밈 = 이 음의 연주법)
              · registry(악기 교체가 일어나는 유일한 지점)
-  ui/        pianoroll(캔버스 + 터치) · instrumentPanel(음원·프리셋·트랙)
+  ui/        pianoroll(캔버스 + 터치) · notePanel(음 하나 조교)
+             · instrumentPanel(음원·프리셋·트랙)
              · exportPanel(내보내기·가져오기) · mixerPanel(음량·팬·울림) · theme
   history.ts 실행 취소 (스냅숏 방식)
   export/    midi(SMF 읽기·쓰기) · wav(16bit PCM) · render(오프라인 렌더)

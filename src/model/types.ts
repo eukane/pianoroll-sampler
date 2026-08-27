@@ -12,12 +12,23 @@
  * 계산할 필요가 없어야 하기 때문이다. 초로의 환산은 재생/렌더 시점에만 한다.
  */
 
+import type { Ornament } from "./ornament";
+
 export type Note = {
   id: string;
   pitch: number; // MIDI 노트 번호 (60 = C4)
   start: number; // 곡 시작부터 몇 박인지 (소수 허용)
   length: number; // 길이(박)
   velocity: number; // 0..127
+  /**
+   * 꾸밈(시김새) — 이 음만 어떻게 연주할지. 없으면 트랙 기본값을 따른다.
+   *
+   * **악기 정보가 아니다.** 색소폰으로 찍어 둔 꺾는 음을 가야금으로 바꾸면
+   * 가야금이 그 자리를 꺾는다. 자세한 건 model/ornament.ts.
+   */
+  ornament?: Ornament;
+  /** 꾸밈의 세기 0~1. */
+  ornamentAmount?: number;
 };
 
 /**
@@ -47,11 +58,11 @@ export type Track = {
    */
   reverbSend?: number;
   /**
-   * 떨림(비브라토) 깊이 0~1. 없으면 0 — 안 떤다.
+   * **기본** 떨림 깊이 0~1. 없으면 0 — 안 떤다.
    *
-   * 노트마다가 아니라 **트랙마다** 붙는다. 트럼펫이 얼마나 떠는지는 그
-   * 트럼펫의 성질에 가깝고, 폰 화면에서 노트 하나씩 붙잡고 조절하는 건
-   * 현실적이지 않다. 짧은 음이 안 떨게 하는 건 아래 딜레이가 맡는다.
+   * 이건 "이 악기는 긴 음을 으레 이렇게 분다" 는 설정이고, **꾸밈을 정하지
+   * 않은 음에만** 걸린다. 음 하나만 다르게 하려면 `Note.ornament` 를 쓴다
+   * (model/ornament.ts). 둘을 합치는 규칙은 audio/expression.ts 한 곳에 있다.
    */
   vibrato?: number;
   /** 음이 시작하고 몇 초 뒤부터 떠는가. 긴 음만 떨게 만드는 장치다. */

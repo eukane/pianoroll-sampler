@@ -14,7 +14,9 @@ import { WorkletSynthesizer } from "spessasynth_lib";
 import type { Instrument } from "./instrument";
 import { MAX_CHANNELS, type Mixer } from "./mixer";
 import { packPresetId, unpackPresetId } from "../model/preset";
-import { NO_VIBRATO, shakes, VIBRATO_FADE, type VibratoSetting } from "./vibrato";
+import { shakes, VIBRATO_FADE } from "./vibrato";
+import { PLAIN, sampleBend, type Expression } from "./expression";
+import { MAX_BEND_CENTS } from "../model/ornament";
 
 /** 화면에 뿌리는 프리셋 한 줄. */
 export type Preset = {
@@ -100,9 +102,10 @@ export class SoundFontInstrument implements Instrument {
    * `calibrate()` 가 실측해서 넣는다. 자세한 사연은 아래 calibrate() 주석.
    */
   private clockOffset = 0;
-  /** 채널마다 걸린 떨림 설정과, 지금 채널에 실제로 보내 둔 CC1 값. */
-  private vibrato = new Map<number, VibratoSetting>();
+  /** 지금 채널에 실제로 보내 둔 CC1 값. 같은 값을 또 보내지 않으려고 들고 있다. */
   private channelMod = new Map<number, number>();
+  /** 피치 벤드를 한 번이라도 쓴 채널. 다 쓰고 가운데로 되돌릴지 판단한다. */
+  private bentChannels = new Set<number>();
   /**
    * 이 채널에서 마지막으로 예약한 음이 끝나는 시각.
    * 겹쳐 있는 동안에는 떨림을 0 으로 되돌리지 않는다 — 앞 음이 아직 떨고 있다.
@@ -215,6 +218,7 @@ export class SoundFontInstrument implements Instrument {
     this.channelPreset.clear();
     this.channelMod.clear();
     this.vibBusyUntil.clear();
+    this.bentChannels.clear();
     this.loaded = true;
     this.sourceFile = file;
 
@@ -405,18 +409,6 @@ export class SoundFontInstrument implements Instrument {
     this.synth.programChange(channel, program, options);
   }
 
-  /**
-   * 떨림을 건다. 실제로 음정을 흔드는 건 신스다 — CC1(모듈레이션 휠)을 보내면
-   * 사운드폰트 안의 비브라토 LFO 가 그만큼 열린다 (audio/vibrato.ts 참고).
-   *
-   * 딜레이가 0 이면 **여기서 한 번 보내고 끝난다.** 노트마다 보낼 이유가 없다.
-   * 딜레이가 있으면 음이 시작하고 나서 서서히 열어야 해서 play() 가 맡는다.
-   */
-  setVibrato(channel: number, v: VibratoSetting): void {
-    this.vibrato.set(channel, v);
-    if (v.delay === 0) this.sendMod(channel, Math.round(v.depth * 127));
-  }
-
   /** 같은 값을 또 보내지 않는다. 재생 중에는 이 자리가 자주 불린다. */
   private sendMod(channel: number, value: number, when?: number): void {
     if (when === undefined && this.channelMod.get(channel) === value) return;
@@ -424,13 +416,52 @@ export class SoundFontInstrument implements Instrument {
     this.synth?.controllerChange(channel, 1, value, when === undefined ? undefined : { time: when });
   }
 
-  play(pitch: number, velocity: number, when: number, durationSec: number, channel: number): void {
+  play(
+    pitch: number,
+    velocity: number,
+    when: number,
+    durationSec: number,
+    channel: number,
+    expr: Expression = PLAIN,
+  ): void {
     if (!this.synth) return;
     // 신스 안쪽 시계가 뒤처져 있는 만큼 당겨서 준다 (calibrate() 참고).
     const at = when - this.clockOffset;
-    this.scheduleVibrato(channel, at, durationSec);
+    this.scheduleVibrato(channel, at, durationSec, expr);
+    this.scheduleBend(channel, at, expr);
     this.synth.noteOn(channel, pitch, Math.max(1, Math.round(velocity)), { time: at });
     this.synth.noteOff(channel, pitch, { time: at + durationSec });
+  }
+
+  /**
+   * 음정 곡선을 피치 벤드로 그린다.
+   *
+   * **채널 전체가 같이 휜다.** MIDI 피치 벤드가 원래 그렇다. 사운드폰트
+   * 트랙에서 겹친 음 중 하나만 꺾는 건 불가능하다 (model/ornament.ts 참고).
+   * 임시 신스와 낱개 WAV 는 보이스마다 따로 휜다.
+   *
+   * 다 그리고 나면 반드시 가운데로 되돌린다. 안 그러면 그 다음 음들이 전부
+   * 휜 채로 난다 — 조용히 음정이 틀어지는, 제일 찾기 어려운 종류의 버그다.
+   */
+  private scheduleBend(channel: number, at: number, expr: Expression): void {
+    if (expr.bend.length === 0) {
+      // 앞 음이 휘어 놓고 갔으면 여기서 되돌린다.
+      if (this.bentChannels.delete(channel)) this.sendBend(channel, 0, at);
+      return;
+    }
+    this.bentChannels.add(channel);
+    // 계단으로만 표현되니 촘촘히 잘라 보낸다. 안 그러면 뚝뚝 끊겨 들린다.
+    for (const p of sampleBend(expr.bend)) this.sendBend(channel, p.cents, at + p.t);
+    const last = expr.bend[expr.bend.length - 1];
+    if (last.cents !== 0) this.sendBend(channel, 0, at + last.t + 0.005);
+    this.bentChannels.delete(channel);
+  }
+
+  /** 센트 → 피치 벤드 값. 기본 범위가 ±2반음(±200센트)이다. */
+  private sendBend(channel: number, cents: number, when: number): void {
+    const clamped = Math.max(-MAX_BEND_CENTS, Math.min(MAX_BEND_CENTS, cents));
+    const value = Math.round(8192 + (clamped / MAX_BEND_CENTS) * 8191);
+    this.synth?.pitchWheel(channel, Math.max(0, Math.min(16383, value)), { time: when });
   }
 
   /**
@@ -442,9 +473,13 @@ export class SoundFontInstrument implements Instrument {
    *
    * 뚝 켜지면 부자연스러워서 세 걸음에 걸쳐 연다.
    */
-  private scheduleVibrato(channel: number, at: number, durationSec: number): void {
-    const v = this.vibrato.get(channel) ?? NO_VIBRATO;
-    if (v.delay === 0) return; // setVibrato 가 이미 걸어 뒀다
+  private scheduleVibrato(channel: number, at: number, durationSec: number, expr: Expression): void {
+    const v = expr.vibrato;
+    if (v.delay === 0) {
+      // 기다릴 것 없이 바로 건다. 값이 그대로면 아무것도 안 나간다.
+      this.sendMod(channel, Math.round(v.depth * 127));
+      return;
+    }
 
     const busyUntil = this.vibBusyUntil.get(channel) ?? 0;
     const overlapping = at < busyUntil - 1e-6;
@@ -469,12 +504,13 @@ export class SoundFontInstrument implements Instrument {
    * 시각은 `clockOffset` 만큼 당긴다 — 신스 시계가 그만큼 뒤처져 있어서, 빼 주지
    * 않으면 "지금" 이 신스에게는 미래가 되어 늦게 울린다 (calibrate() 참고).
    */
-  hold(pitch: number, velocity: number, channel: number): void {
+  hold(pitch: number, velocity: number, channel: number, expr: Expression = PLAIN): void {
     if (!this.synth) return;
     const at = this.ctx.currentTime - this.clockOffset;
     // 눌러 보는 소리에도 떨림이 있어야 음원을 고를 수 있다. 언제 뗄지 모르니
     // 최대 길이로 잡아 예약해 둔다.
-    this.scheduleVibrato(channel, at, MAX_PREVIEW_SEC);
+    this.scheduleVibrato(channel, at, MAX_PREVIEW_SEC, expr);
+    this.scheduleBend(channel, at, expr);
     this.synth.noteOn(channel, pitch, Math.max(1, Math.round(velocity)), { time: at });
   }
 

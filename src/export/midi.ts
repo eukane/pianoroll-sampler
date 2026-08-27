@@ -21,7 +21,9 @@ import type { Note, Project, Track } from "../model/types";
 import { beatsPerBar, emptyTrack, makeNote, sortNotes } from "../model/project.ts";
 import { assignChannels, MAX_TRACKS } from "../model/channels.ts";
 import { packPresetId, unpackPresetId } from "../model/preset.ts";
-import { shakes, VIBRATO_FADE, vibratoOf } from "../audio/vibrato.ts";
+import { shakes, VIBRATO_FADE } from "../audio/vibrato.ts";
+import { expressionFor, sampleBend } from "../audio/expression.ts";
+import { MAX_BEND_CENTS } from "../model/ornament.ts";
 
 /** 4분음표 하나를 몇 틱으로 볼지. 480 은 DAW 들이 흔히 쓰는 값이다. */
 export const PPQ = 480;
@@ -182,35 +184,62 @@ function writeTrack(
     events.push({ tick: 0, order: 5, data: [0xb0 | channel, 10, clamp7((track.pan + 1) * 63.5)] });
   }
 
-  // 떨림(CC1)은 **언제나** 싣는다. 볼륨·팬과 달리 우리 렌더에서 따로 거는
-  // 데가 없어서, 여기서 빼면 뽑아낸 WAV 에만 떨림이 사라진다.
-  const vib = vibratoOf(track);
+  // 꾸밈(떨림 CC1 · 음정 곡선 피치 벤드)은 **언제나** 싣는다. 볼륨·팬과 달리
+  // 우리 렌더에서 따로 거는 데가 없어서, 여기서 빼면 뽑아낸 WAV 에만 꾸밈이
+  // 사라진다.
   const secToTick = (sec: number) => Math.round((sec * Math.max(1, bpm) * PPQ) / 60);
-  if (vib.depth > 0 && vib.delay === 0) {
-    events.push({ tick: 0, order: 4, data: [0xb0 | channel, 1, clamp7(vib.depth * 127)] });
-  }
+  const bendValue = (cents: number) => {
+    const c = Math.max(-MAX_BEND_CENTS, Math.min(MAX_BEND_CENTS, cents));
+    const v = Math.max(0, Math.min(16383, Math.round(8192 + (c / MAX_BEND_CENTS) * 8191)));
+    return [0xe0 | channel, v & 127, (v >> 7) & 127];
+  };
 
   let vibBusyUntil = -1;
+  // 채널의 CC1 은 원래 0 에서 시작한다. 0 을 굳이 한 번 더 보내지 않는다.
+  let modValue = 0;
+  let bent = false;
+  const setMod = (tick: number, value: number) => {
+    if (modValue === value) return;
+    modValue = value;
+    events.push({ tick, order: 5, data: [0xb0 | channel, 1, value] });
+  };
+
   for (const note of track.notes) {
     const on = Math.round(note.start * PPQ);
     const off = Math.round((note.start + note.length) * PPQ);
-    if (vib.delay > 0) {
+    const seconds = (note.length * 60) / Math.max(1, bpm);
+    const expr = expressionFor(track, note, seconds);
+    const vib = expr.vibrato;
+
+    if (vib.delay === 0) {
+      setMod(on, clamp7(vib.depth * 127));
+    } else {
       // 재생과 같은 규칙: 앞 음이 아직 울리는 중이면 0 으로 되돌리지 않는다
       // (audio/soundfont.ts 의 scheduleVibrato 와 짝이다).
       const overlapping = on < vibBusyUntil;
-      const seconds = (note.length * 60) / Math.max(1, bpm);
-      if (!overlapping) events.push({ tick: on, order: 5, data: [0xb0 | channel, 1, 0] });
+      if (!overlapping) setMod(on, 0);
       if (shakes(vib, seconds)) {
         const full = clamp7(vib.depth * 127);
         for (const step of [1 / 3, 2 / 3, 1]) {
-          events.push({
-            tick: on + secToTick(vib.delay + VIBRATO_FADE * step),
-            order: 5,
-            data: [0xb0 | channel, 1, clamp7(full * step)],
-          });
+          setMod(on + secToTick(vib.delay + VIBRATO_FADE * step), clamp7(full * step));
         }
       }
       vibBusyUntil = Math.max(vibBusyUntil, off);
+    }
+
+    if (expr.bend.length > 0) {
+      for (const p of sampleBend(expr.bend)) {
+        events.push({ tick: on + secToTick(p.t), order: 5, data: bendValue(p.cents) });
+      }
+      const last = expr.bend[expr.bend.length - 1];
+      // 반드시 가운데로 되돌린다. 안 그러면 그 뒤 음이 전부 휜 채로 난다.
+      if (last.cents !== 0) {
+        events.push({ tick: on + secToTick(last.t) + 1, order: 5, data: bendValue(0) });
+      }
+      bent = true;
+    } else if (bent) {
+      events.push({ tick: on, order: 5, data: bendValue(0) });
+      bent = false;
     }
     const velocity = clamp7(note.velocity);
     const pitch = Math.max(0, Math.min(127, Math.round(note.pitch)));

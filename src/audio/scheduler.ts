@@ -17,7 +17,7 @@
  * 나가 있어서 그걸로 위치를 그리면 헤드가 앞질러 간다.
  */
 
-import type { Project } from "../model/types";
+import type { Note, Project } from "../model/types";
 import type { Instrument } from "./instrument";
 import type { AudioEngine } from "./engine";
 import type { InstrumentRegistry } from "./registry";
@@ -25,6 +25,7 @@ import type { Mixer } from "./mixer";
 import type { MixerState } from "./mixerState";
 import { totalBeats } from "../model/project";
 import { assignChannels, channelForTrack } from "../model/channels";
+import { expressionFor } from "./expression";
 
 const TICK_MS = 25;
 const LOOKAHEAD_SEC = 0.12;
@@ -38,8 +39,13 @@ const LOOKAHEAD_SEC = 0.12;
  */
 const MIN_PREVIEW_MS = 250;
 
+/** 미리듣기의 최대 길이(초). 꾸밈 곡선을 그릴 때 음 길이 대신 쓴다. */
+const MAX_PREVIEW = 2;
+
 type Event = {
   trackIndex: number;
+  /** 원본 노트. 꾸밈을 읽으려면 필요하다. */
+  note: Note;
   pitch: number;
   velocity: number;
   start: number; // 박
@@ -208,6 +214,7 @@ export class Scheduler {
         if (n.start < this.regionStart) continue; // 구간 밖에서 시작한 음은 건너뛴다
         events.push({
           trackIndex,
+          note: n,
           pitch: n.pitch,
           velocity: n.velocity,
           start: n.start,
@@ -270,7 +277,9 @@ export class Scheduler {
     // 트랙 번호와 MIDI 채널은 같지 않다 (드럼은 9번, 나머지는 9번을 건너뛴다).
     // 음량·팬은 play() 에서 한 번 걸어 뒀다 — 노트마다 다시 걸 필요가 없다.
     const channel = this.channels[ev.trackIndex] ?? channelForTrack(ev.trackIndex);
-    this.registry.forTrack(track).play(ev.pitch, ev.velocity, when, durationSec, channel);
+    this.registry
+      .forTrack(track)
+      .play(ev.pitch, ev.velocity, when, durationSec, channel, expressionFor(track, ev.note, durationSec));
   }
 
   /**
@@ -282,7 +291,7 @@ export class Scheduler {
    *
    * 같은 미리듣기를 겹쳐 쌓지 않는다. 새 건반을 누르면 앞엣것을 끝낸다.
    */
-  previewHold(pitch: number, trackIndex = 0, velocity = 100): void {
+  previewHold(pitch: number, trackIndex = 0, velocity = 100, note?: Note): void {
     const project = this.getProject();
     const track = project.tracks[trackIndex];
     if (!track) return;
@@ -311,7 +320,8 @@ export class Scheduler {
       startedAt: this.engine.currentTime,
       token: this.previewToken,
     };
-    instrument.hold(pitch, velocity, channel);
+    // 음을 하나 넘기면 그 음의 꾸밈대로 들려준다 — 꾸밈을 고르고 바로 확인하는 자리.
+    instrument.hold(pitch, velocity, channel, note ? expressionFor(track, note, MAX_PREVIEW) : undefined);
   }
 
   /**
@@ -336,8 +346,8 @@ export class Scheduler {
   }
 
   /** 노트를 끌 때처럼 한 번만 들려주면 되는 자리. */
-  preview(pitch: number, trackIndex = 0, velocity = 100): void {
-    this.previewHold(pitch, trackIndex, velocity);
+  preview(pitch: number, trackIndex = 0, velocity = 100, note?: Note): void {
+    this.previewHold(pitch, trackIndex, velocity, note);
     this.previewRelease();
   }
 

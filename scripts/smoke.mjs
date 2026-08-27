@@ -24,6 +24,8 @@
  *   · 붙잡기가 뜯는 소리의 여운을 잘라 먹지 않는가
  *   · 떨림(비브라토)이 세 음원 경로에서 **전부** 실제로 흔들리는가
  *   · 떨림 시작을 늦추면 짧은 음이 안 떨리는가
+ *   · 음 하나에 건 꾸밈이 말한 방향으로 휘는가 (끌어올림 · 흘러내림)
+ *   · 노트를 톡 치면 꾸밈 창이 열리고, 고른 게 그 음에 남는가
  *   · ⏮ 이 재생 위치를 맨 앞으로 되돌리는가 (재생 중에 눌러도 버튼이 안 뒤집히는가)
  *   · 렌더 경로가 둘로 갈리는데 서로 정렬돼 있는가
  *   · 재생에서 사운드폰트가 임시 신스와 같은 시각에 울리는가 (워크렛 시계 보정)
@@ -1170,6 +1172,67 @@ const vibDelay = await page.evaluate(async () => {
     "0.6초뒤": window.__spread(await render(short(0.6))),
   };
 });
+// ---- 음 하나 조교 (꾸밈) ----
+//
+// 트랙에 떨림을 걸면 그 악기의 긴 음이 전부 똑같이 떤다 — 기교가 아니라 버릇이다.
+// 꾸밈은 **음마다** 붙어서, 같은 음높이를 찍어도 하나는 끌어올리고 하나는
+// 흘려 내릴 수 있어야 한다. 모양이 실제로 그 방향으로 나오는지 렌더해서 잰다.
+// (부호 하나만 뒤집혀도 "뭔가 휘긴 하네" 로 들려서 귀로는 안 잡힌다.)
+const ornamentShape = await page.evaluate(async () => {
+  const { renderProject } = await import("/src/export/render.ts");
+  const app = window.__app;
+  const one = (ornament) => ({
+    bpm: 100, bars: 2, timeSig: [4, 4],
+    tracks: [{
+      id: "o", name: "o", source: { kind: "sf2", presetId: 0 },
+      notes: [{ id: "n", pitch: 69, start: 0, length: 4, velocity: 110, ornament, ornamentAmount: 1 }],
+      volume: 1, pan: 0, muted: false, reverbSend: 0,
+    }],
+  });
+  const render = (p) => renderProject(p, () => app.registry.soundfont.bankBuffer(),
+    app.registry.folders.list, app.mixerState);
+  // 그 시각 근처의 음정(센트)을 하나만 집어 낸다.
+  const at = (buf, seconds) => {
+    const d = buf.getChannelData(0);
+    const sr = buf.sampleRate;
+    const SUB = 1024;
+    const minLag = Math.floor(sr / 1200);
+    const maxLag = Math.floor(sr / 200);
+    const s = Math.max(0, Math.min(d.length - SUB - maxLag - 1, Math.floor(seconds * sr)));
+    const r = [];
+    for (let lag = minLag; lag <= maxLag; lag++) {
+      let sum = 0;
+      for (let i = 0; i < SUB; i++) sum += d[s + i] * d[s + i + lag];
+      r.push(sum);
+    }
+    const peak = Math.max(...r);
+    if (peak <= 0) return null;
+    let idx = r.findIndex((v) => v >= peak * 0.92);
+    while (idx + 1 < r.length && r[idx + 1] > r[idx]) idx += 1;
+    return +(1200 * Math.log2(sr / (minLag + idx) / 440)).toFixed(0);
+  };
+  const shape = async (ornament) => {
+    const buf = await render(one(ornament));
+    return { 시작: at(buf, 0.02), 중간: at(buf, 1.2), 끝: at(buf, 2.3) };
+  };
+  return { 끌어올림: await shape("scoop"), 흘러내림: await shape("fall"), 그냥: await shape("none") };
+});
+check(
+  "꾸밈이 없으면 음정이 처음부터 끝까지 그대로다",
+  Math.abs(ornamentShape.그냥.시작) < 25 && Math.abs(ornamentShape.그냥.끝) < 25,
+  ornamentShape.그냥,
+);
+check(
+  "끌어올림은 아래에서 붙여 올린다",
+  ornamentShape.끌어올림.시작 < -80 && Math.abs(ornamentShape.끌어올림.중간) < 25,
+  ornamentShape.끌어올림,
+);
+check(
+  "흘러내림은 끝에서만 떨어진다",
+  Math.abs(ornamentShape.흘러내림.시작) < 25 && ornamentShape.흘러내림.끝 < -80,
+  ornamentShape.흘러내림,
+);
+
 check(
   "떨림 시작을 늦추면 짧은 음은 안 떨린다",
   vibDelay["0.6초뒤"] !== null && vibDelay["0.6초뒤"] < 12 && vibDelay.바로 > 40,
@@ -1266,6 +1329,59 @@ await page.evaluate(() => {
   window.__app.scheduler.loopEnabled = false;
   window.__app.scheduler.seek(0);
 });
+
+// ---- 노트를 톡 치면 꾸밈 창 ----
+//
+// 노트 위에서 탭은 원래 아무 일도 안 하던 동작이다 (끌면 이동, 끝을 끌면 길이,
+// 길게 누르면 삭제). 비어 있던 자리라 새 모드나 토글을 안 만들고 그대로 썼다.
+const notePos = await page.evaluate(() => {
+  const app = window.__app;
+  const roll = app.roll;
+  roll.scrollX = 0;
+  roll.scrollToPitch(72);
+  const t = app.project.tracks[roll.activeTrack];
+  t.notes.length = 0;
+  t.notes.push({ id: "orn-test", pitch: 72, start: 1, length: 2, velocity: 100 });
+  app.scheduler.invalidate();
+  return {
+    x: 46 + 1 * roll.pxPerBeat - roll.scrollX + roll.pxPerBeat * 0.4,
+    y: 36 + (127 - 72) * roll.keyHeight - roll.scrollY + roll.keyHeight / 2,
+  };
+});
+const ornBox = await page.locator("#roll").boundingBox();
+await page.touchscreen.tap(ornBox.x + notePos.x, ornBox.y + notePos.y);
+await page.waitForTimeout(250);
+check("노트를 톡 치면 꾸밈 창이 열린다", await page.locator("#note-modal").isVisible());
+await page.locator('button.orn[data-orn="bend"]').click();
+await page.waitForTimeout(200);
+const ornPicked = await page.evaluate(() => {
+  const n = window.__app.project.tracks[window.__app.roll.activeTrack].notes.find((x) => x.id === "orn-test");
+  return { ornament: n?.ornament, amount: n?.ornamentAmount, hasSlider: !!document.getElementById("note-amount") };
+});
+check("고른 꾸밈이 그 음에 남는다", ornPicked.ornament === "bend" && ornPicked.amount > 0, ornPicked);
+check("꾸밈을 고르면 세기 조절이 따라 나온다", ornPicked.hasSlider);
+await page.locator('button.orn[data-orn="none"]').click();
+await page.waitForTimeout(150);
+const ornPlain = await page.evaluate(() => ({
+  ornament: window.__app.project.tracks[window.__app.roll.activeTrack].notes.find((x) => x.id === "orn-test")?.ornament,
+  hasSlider: !!document.getElementById("note-amount"),
+}));
+// 「그냥」에는 세기가 없다. 아무 일도 안 하는 조절기를 띄워 두면 고장인 줄 안다.
+check("「그냥」을 고르면 세기 조절이 사라진다", ornPlain.ornament === "none" && !ornPlain.hasSlider, ornPlain);
+await page.locator("#note-delete").click();
+await page.waitForTimeout(200);
+const afterDelete = await page.evaluate(() => ({
+  gone: !window.__app.project.tracks[window.__app.roll.activeTrack].notes.some((x) => x.id === "orn-test"),
+  closed: document.getElementById("note-modal").classList.contains("hidden"),
+}));
+check("꾸밈 창에서 그 음을 지울 수 있다", afterDelete.gone && afterDelete.closed, afterDelete);
+await page.locator("#undo").click();
+await page.waitForTimeout(150);
+check(
+  "지운 것은 되돌리기 한 번에 돌아온다",
+  await page.evaluate(() =>
+    window.__app.project.tracks[window.__app.roll.activeTrack].notes.some((x) => x.id === "orn-test")),
+);
 await page.locator("#play").click();
 await page.waitForTimeout(250);
 await page.locator("#rewind").click();

@@ -20,6 +20,7 @@ import { PianoRoll } from "./ui/pianoroll";
 import { InstrumentPanel } from "./ui/instrumentPanel";
 import { ExportPanel } from "./ui/exportPanel";
 import { MixerPanel } from "./ui/mixerPanel";
+import { NotePanel } from "./ui/notePanel";
 import { History } from "./history";
 import { copyRegion, pasteAt, lastBeat, type Clipboard } from "./model/clipboard";
 
@@ -66,6 +67,7 @@ const roll = new PianoRoll(canvas, () => project, {
     if (engine.isUnlocked) scheduler.previewHold(pitch, trackIndex);
   },
   onPreviewRelease: () => scheduler.previewRelease(),
+  onNoteTap: (note) => notePanel.open(note),
   onSeek: (beat) => scheduler.seek(beat),
   onLoopChange: (start, end) => {
     scheduler.loopStart = start;
@@ -78,6 +80,29 @@ const roll = new PianoRoll(canvas, () => project, {
     start: scheduler.loopStart,
     end: scheduler.loopEnd,
   }),
+});
+
+const notePanel = new NotePanel(() => project, {
+  onBeforeChange: () => history.begin(),
+  onAfterChange: () => {
+    history.commit();
+    refreshHistoryButtons();
+  },
+  onEdit: () => scheduler.invalidate(),
+  onAudition: (note) => {
+    // 그 음의 꾸밈대로 들려준다. 음이 짧아도 꾸밈은 끝까지 들려야 고를 수 있다.
+    if (engine.isUnlocked) scheduler.preview(note.pitch, roll.activeTrack, note.velocity, note);
+  },
+  onDelete: (note) => {
+    history.begin();
+    for (const t of project.tracks) {
+      const i = t.notes.findIndex((n) => n.id === note.id);
+      if (i >= 0) t.notes.splice(i, 1);
+    }
+    scheduler.invalidate();
+    history.commit();
+    refreshHistoryButtons();
+  },
 });
 
 // ---------------------------------------------------------------- 오디오 잠금
@@ -225,6 +250,8 @@ function applyProject(loaded: Project, { keepHistory = true } = {}): void {
   roll.activeTrack = panel.activeTrack;
   panel.refresh();
   mixerPanel.render();
+  // 되돌리기로 노트가 사라졌으면 열려 있던 창도 닫는다.
+  notePanel.syncWithProject();
   mixerState.apply(project, mixer);
   scheduler.invalidate();
   refreshHistoryButtons();
@@ -436,7 +463,7 @@ window.addEventListener("keydown", (e) => {
     return;
   }
   if (e.key === "Escape") {
-    for (const id of ["preset-modal", "export-modal", "mixer-modal", "map-modal"]) {
+    for (const id of ["preset-modal", "export-modal", "mixer-modal", "map-modal", "note-modal"]) {
       document.getElementById(id)?.classList.add("hidden");
     }
   }
