@@ -35,6 +35,7 @@ import { BasicMIDI } from "spessasynth_core";
 import type { Project, Track } from "../model/types";
 import { totalBeats } from "../model/project";
 import { assignChannels } from "../model/channels";
+import { vibratoOf } from "../audio/vibrato";
 import { Mixer } from "../audio/mixer";
 import { MixerState } from "../audio/mixerState";
 import { OscInstrument } from "../audio/oscInstrument";
@@ -224,6 +225,9 @@ function renderLocally(
         instrument = sampler;
       }
     }
+    // 떨림은 화면에서 들은 대로 뽑혀야 한다. 사운드폰트 쪽은 MIDI 의 CC1 이
+    // 실어 나르고(export/midi.ts), 이쪽 두 악기는 여기서 직접 걸어 준다.
+    instrument.setVibrato(channel, vibratoOf(track));
 
     for (const note of track.notes) {
       instrument.play(

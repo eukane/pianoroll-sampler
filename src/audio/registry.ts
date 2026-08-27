@@ -16,6 +16,7 @@ import type { Mixer } from "./mixer";
 import { OscInstrument, type Waveform } from "./oscInstrument";
 import { SoundFontInstrument } from "./soundfont";
 import { FolderSampler } from "./folderSampler";
+import { vibratoOf } from "./vibrato";
 
 export class InstrumentRegistry {
   readonly osc: OscInstrument;
@@ -56,6 +57,10 @@ export class InstrumentRegistry {
    * `channel` 은 트랙 번호가 아니라 **MIDI 채널**이다 (model/channels.ts).
    */
   prepare(track: Track, channel: number): void {
+    // 떨림은 어느 음원을 쓰든 걸린다. 실제로 소리를 낼 악기에게만 걸어 준다
+    // (사운드폰트가 없으면 임시 신스가 대신 내므로 그쪽이 알아야 한다).
+    this.forTrack(track).setVibrato(channel, vibratoOf(track));
+
     if (track.source.kind === "sampleFolder") {
       this.folders.setChannelFolder(channel, track.source.folderId);
       return;

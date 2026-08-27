@@ -21,6 +21,7 @@ import type { Note, Project, Track } from "../model/types";
 import { beatsPerBar, emptyTrack, makeNote, sortNotes } from "../model/project.ts";
 import { assignChannels, MAX_TRACKS } from "../model/channels.ts";
 import { packPresetId, unpackPresetId } from "../model/preset.ts";
+import { shakes, VIBRATO_FADE, vibratoOf } from "../audio/vibrato.ts";
 
 /** 4분음표 하나를 몇 틱으로 볼지. 480 은 DAW 들이 흔히 쓰는 값이다. */
 export const PPQ = 480;
@@ -132,7 +133,7 @@ export function projectToMidi(project: Project, options: MidiOptions = {}): Uint
 
   const channels = assignChannels(project);
   project.tracks.forEach((track, index) => {
-    tracks.push(chunk("MTrk", writeTrack(track, channels[index], includeMixer)));
+    tracks.push(chunk("MTrk", writeTrack(track, channels[index], includeMixer, project.bpm)));
   });
 
   const header = new ByteWriter();
@@ -151,7 +152,12 @@ export function projectToMidi(project: Project, options: MidiOptions = {}): Uint
   return out;
 }
 
-function writeTrack(track: Track, channel: number, includeMixer: boolean): Uint8Array {
+function writeTrack(
+  track: Track,
+  channel: number,
+  includeMixer: boolean,
+  bpm: number,
+): Uint8Array {
   const events: Event[] = [];
 
   // 트랙 이름 (다른 DAW 에서 트랙 목록에 뜬다)
@@ -176,9 +182,36 @@ function writeTrack(track: Track, channel: number, includeMixer: boolean): Uint8
     events.push({ tick: 0, order: 5, data: [0xb0 | channel, 10, clamp7((track.pan + 1) * 63.5)] });
   }
 
+  // 떨림(CC1)은 **언제나** 싣는다. 볼륨·팬과 달리 우리 렌더에서 따로 거는
+  // 데가 없어서, 여기서 빼면 뽑아낸 WAV 에만 떨림이 사라진다.
+  const vib = vibratoOf(track);
+  const secToTick = (sec: number) => Math.round((sec * Math.max(1, bpm) * PPQ) / 60);
+  if (vib.depth > 0 && vib.delay === 0) {
+    events.push({ tick: 0, order: 4, data: [0xb0 | channel, 1, clamp7(vib.depth * 127)] });
+  }
+
+  let vibBusyUntil = -1;
   for (const note of track.notes) {
     const on = Math.round(note.start * PPQ);
     const off = Math.round((note.start + note.length) * PPQ);
+    if (vib.delay > 0) {
+      // 재생과 같은 규칙: 앞 음이 아직 울리는 중이면 0 으로 되돌리지 않는다
+      // (audio/soundfont.ts 의 scheduleVibrato 와 짝이다).
+      const overlapping = on < vibBusyUntil;
+      const seconds = (note.length * 60) / Math.max(1, bpm);
+      if (!overlapping) events.push({ tick: on, order: 5, data: [0xb0 | channel, 1, 0] });
+      if (shakes(vib, seconds)) {
+        const full = clamp7(vib.depth * 127);
+        for (const step of [1 / 3, 2 / 3, 1]) {
+          events.push({
+            tick: on + secToTick(vib.delay + VIBRATO_FADE * step),
+            order: 5,
+            data: [0xb0 | channel, 1, clamp7(full * step)],
+          });
+        }
+      }
+      vibBusyUntil = Math.max(vibBusyUntil, off);
+    }
     const velocity = clamp7(note.velocity);
     const pitch = Math.max(0, Math.min(127, Math.round(note.pitch)));
     // 같은 틱에서는 노트 오프가 먼저다. 안 그러면 같은 음을 이어 칠 때

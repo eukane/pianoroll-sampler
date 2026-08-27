@@ -22,6 +22,8 @@
  *   · 손가락을 대는 순간 소리가 나는가 (떼는 순간이 아니라)
  *   · 건반을 길게 누르면 누르는 내내 소리가 나는가 (톡 치면 짧게)
  *   · 붙잡기가 뜯는 소리의 여운을 잘라 먹지 않는가
+ *   · 떨림(비브라토)이 세 음원 경로에서 **전부** 실제로 흔들리는가
+ *   · 떨림 시작을 늦추면 짧은 음이 안 떨리는가
  *   · ⏮ 이 재생 위치를 맨 앞으로 되돌리는가 (재생 중에 눌러도 버튼이 안 뒤집히는가)
  *   · 렌더 경로가 둘로 갈리는데 서로 정렬돼 있는가
  *   · 재생에서 사운드폰트가 임시 신스와 같은 시각에 울리는가 (워크렛 시계 보정)
@@ -708,7 +710,8 @@ await page.locator("#mixer").click();
 await page.waitForTimeout(200);
 check("믹서 화면이 열린다", await page.locator("#mixer-modal").isVisible());
 const sliders = await page.locator("#mixer-list .mixslider input").count();
-check("트랙마다 음량·팬·울림 세 개가 있다", sliders === 3, sliders);
+// 음량 · 팬 · 떨림 · 울림. "떨림 시작" 은 떨림이 0 보다 클 때만 나온다.
+check("트랙마다 음량·팬·떨림·울림 네 개가 있다", sliders === 4, sliders);
 await page.locator("#mixer-close").click();
 
 // ---- 되돌리기 ----
@@ -965,9 +968,12 @@ const livePlay = await page.evaluate(async () => {
     offsetMs: +app.registry.soundfont.clockOffsetMs.toFixed(1),
   };
 });
+// 문턱을 15ms 로 잡는다. 보정값 자체를 실측으로 뽑는데 그 측정에 ±5ms 쯤
+// 흔들림이 있어서, 남는 오차도 그만큼 흔들린다. 고치기 전이 55~110ms 였으니
+// 이 문턱은 여전히 회귀를 잡는다. 15ms 는 120BPM 에서 한 박의 3% 다.
 check(
-  "재생에서 사운드폰트가 임시 신스와 같은 시각에 울린다 (10ms 이내)",
-  livePlay.ok && Math.abs(livePlay.gapMs) < 10,
+  "재생에서 사운드폰트가 임시 신스와 같은 시각에 울린다 (15ms 이내)",
+  livePlay.ok && Math.abs(livePlay.gapMs) < 15,
   livePlay,
 );
 check("사운드폰트 지연을 실제로 재서 보정했다", livePlay.offsetMs > 0, livePlay.offsetMs);
@@ -1063,6 +1069,120 @@ check(
   holdKinds,
 );
 check("부는 소리는 떼면 멎는다", holdKinds.불기 < 0.001, holdKinds);
+
+// ---- 떨림(비브라토) ----
+//
+// 사운드폰트는 CC1(모듈레이션 휠)로 신스에게 흔들라고 시키고, 임시 신스와
+// 낱개 WAV 는 우리가 LFO 로 직접 흔든다. **경로가 셋인데 하나만 안 먹으면
+// 슬라이더가 거짓말을 한다.** 셋 다 실제로 음정이 흔들리는지 잰다.
+//
+// 재는 법: 긴 음 하나를 렌더해서 자기상관으로 음정을 추적하고, 흔들린 폭을
+// 센트로 낸다. 깊이 0 이면 폭이 0 이어야 하고, 깊이 1 이면 벌어져야 한다.
+const vibrato = await page.evaluate(async () => {
+  const { renderProject } = await import("/src/export/render.ts");
+  const app = window.__app;
+  const folderId = app.registry.folders.list[1]?.id; // 지속음 폴더(부는 소리)
+
+  const at = (source, depth) => ({
+    bpm: 100, bars: 2, timeSig: [4, 4],
+    tracks: [{
+      id: "v", name: "v", source,
+      notes: [{ id: "n", pitch: 69, start: 0, length: 4, velocity: 110 }],
+      volume: 1, pan: 0, muted: false, reverbSend: 0,
+      vibrato: depth, vibratoDelay: 0,
+    }],
+  });
+
+  // 자기상관으로 구간마다 기본 주파수를 재고, 흔들린 폭을 센트로 낸다.
+  const spreadCents = (buf) => {
+    const d = buf.getChannelData(0);
+    const sr = buf.sampleRate;
+    const SUB = 1024;
+    const minLag = Math.floor(sr / 1200);
+    const maxLag = Math.floor(sr / 200);
+    const cents = [];
+    for (let s = Math.floor(sr * 0.25); s + SUB + maxLag < d.length && s < sr * 1.8; s += SUB) {
+      let energy = 0;
+      for (let i = s; i < s + SUB; i++) energy += d[i] * d[i];
+      if (Math.sqrt(energy / SUB) < 0.003) continue;
+      // 자기상관. 순수한 사인파는 주기의 배수마다 상관이 똑같이 높아서
+      // 그냥 최대값을 고르면 한 옥타브 아래를 짚는다. 최대값의 92% 를 넘는
+      // **가장 짧은** 주기를 고르면 그 함정을 피한다.
+      const r = [];
+      for (let lag = minLag; lag <= maxLag; lag++) {
+        let sum = 0;
+        for (let i = 0; i < SUB; i++) sum += d[s + i] * d[s + i + lag];
+        r.push(sum);
+      }
+      const peak = Math.max(...r);
+      if (peak <= 0) continue;
+      let idx = r.findIndex((v) => v >= peak * 0.92);
+      // 그 근처의 진짜 봉우리로 올라간다.
+      while (idx + 1 < r.length && r[idx + 1] > r[idx]) idx += 1;
+      if (idx <= 0 || idx + 1 >= r.length) continue;
+      // 정수 lag 만 쓰면 440Hz 근처에서 눈금이 17센트다 — 떨림보다 굵다.
+      // 봉우리 좌우로 포물선을 맞춰 소수점 아래를 찾는다.
+      const denom = r[idx - 1] - 2 * r[idx] + r[idx + 1];
+      const delta = denom === 0 ? 0 : (0.5 * (r[idx - 1] - r[idx + 1])) / denom;
+      const bestLag = minLag + idx + Math.max(-1, Math.min(1, delta));
+      cents.push(1200 * Math.log2(sr / bestLag / 440));
+    }
+    if (cents.length < 8) return null;
+    // 자기상관은 가끔 한 옥타브를 틀린다. 중앙값에서 300센트 넘게 벗어나면 버린다.
+    const mid = [...cents].sort((a, b) => a - b)[Math.floor(cents.length / 2)];
+    const good = cents.filter((c) => Math.abs(c - mid) < 300).sort((a, b) => a - b);
+    return good.length < 8 ? null : +(good[good.length - 1] - good[0]).toFixed(1);
+  };
+
+  window.__spread = spreadCents; // 아래 딜레이 점검에서 다시 쓴다
+  const render = (p) => renderProject(p, () => app.registry.soundfont.bankBuffer(),
+    app.registry.folders.list, app.mixerState);
+  const measure = async (source) => ({
+    없음: spreadCents(await render(at(source, 0))),
+    최대: spreadCents(await render(at(source, 1))),
+  });
+
+  return {
+    사운드폰트: await measure({ kind: "sf2", presetId: 0 }),
+    낱개WAV: folderId ? await measure({ kind: "sampleFolder", folderId }) : null,
+    // 폴더가 없으면 임시 신스로 떨어진다 (audio/registry.ts).
+    임시신스: await measure({ kind: "sampleFolder", folderId: "없는폴더" }),
+  };
+});
+// 딜레이 — 짧은 음은 저절로 안 떨려야 한다. 이게 없으면 16분음표까지 전부
+// 떨어서 기계처럼 들린다. 떨림 기능의 절반은 사실 이쪽이다.
+const vibDelay = await page.evaluate(async () => {
+  const { renderProject } = await import("/src/export/render.ts");
+  const app = window.__app;
+  const short = (delay) => ({
+    bpm: 100, bars: 2, timeSig: [4, 4],
+    tracks: [{
+      id: "v", name: "v", source: { kind: "sf2", presetId: 0 },
+      notes: [{ id: "n", pitch: 69, start: 0, length: 0.5, velocity: 110 }], // 0.3초
+      volume: 1, pan: 0, muted: false, reverbSend: 0,
+      vibrato: 1, vibratoDelay: delay,
+    }],
+  });
+  const render = (p) => renderProject(p, () => app.registry.soundfont.bankBuffer(),
+    app.registry.folders.list, app.mixerState);
+  return {
+    바로: window.__spread(await render(short(0))),
+    "0.6초뒤": window.__spread(await render(short(0.6))),
+  };
+});
+check(
+  "떨림 시작을 늦추면 짧은 음은 안 떨린다",
+  vibDelay["0.6초뒤"] !== null && vibDelay["0.6초뒤"] < 12 && vibDelay.바로 > 40,
+  vibDelay,
+);
+
+for (const [name, r] of Object.entries(vibrato)) {
+  if (!r) continue;
+  // 문턱은 실측에서 잡았다. 안 걸었을 때 9센트 안쪽(음정 추적기 자체의 오차),
+  // 최대로 걸면 90~120센트. 열 배 차이라 문턱이 어디 있든 회귀는 잡힌다.
+  check(`떨림 없음이면 음정이 안 흔들린다 — ${name}`, r.없음 !== null && r.없음 < 12, r);
+  check(`떨림 최대면 음정이 흔들린다 — ${name}`, r.최대 !== null && r.최대 > 40, r);
+}
 
 // ---- 확대·화면 밀기에서는 소리가 나지 않는가 ----
 // 지연을 없애려고 "대는 즉시" 로 바꿨더니 확대할 때마다 소리가 났다.

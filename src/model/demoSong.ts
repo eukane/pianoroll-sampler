@@ -8,6 +8,7 @@
  * 그래서 곡보다 **무엇을 보여 주는가**를 기준으로 짰다.
  *
  *   · 트랙이 셋이다 — 멜로디 · 반주 · 베이스. 믹서에서 하나씩 꺼 보면 바로 안다
+ *   · 멜로디에만 **떨림**이 걸려 있다. 긴 음만 떨리고 짧은 음은 안 떨린다
  *   · 두 번째 트랙이 **바꿔 보라고 만든 자리**다. 가야금(Koto)으로 걸어 뒀는데
  *     색소폰이든 마림바든 눌러 바꾸면 같은 노트가 그대로 다른 악기로 난다
  *   · 전부 **1/8 격자에 딱 떨어진다.** 기본 스냅이 1/8 이라, 열자마자 손으로
@@ -96,7 +97,14 @@ const BASS_BY_BAR: [number, number][] = [
 const BARS = 8;
 const BEATS_PER_BAR = 4;
 
-function track(name: string, program: number, notes: Note[], volume: number, pan: number): Track {
+function track(
+  name: string,
+  program: number,
+  notes: Note[],
+  volume: number,
+  pan: number,
+  vibrato = 0,
+): Track {
   return {
     id: newId("trk"),
     name,
@@ -106,8 +114,19 @@ function track(name: string, program: number, notes: Note[], volume: number, pan
     pan,
     muted: false,
     reverbSend: 0.18,
+    vibrato,
+    vibratoDelay: vibrato > 0 ? MELODY_VIBRATO_DELAY : 0,
   };
 }
+
+/**
+ * 멜로디에만 떨림을 건다. 관악기는 긴 음을 그냥 뻗지 않는다.
+ *
+ * 0.4초로 잡은 이유: 100BPM 에서 한 박이 0.6초다. 8분음표(0.3초)는 떨림이
+ * 시작하기도 전에 끝나고, 2박짜리 긴 음은 뒤쪽에서 충분히 떨린다. 실제 연주와
+ * 같은 모양이 되고, "떨림 시작" 슬라이더가 뭘 하는지도 이 한 트랙에서 보인다.
+ */
+const MELODY_VIBRATO_DELAY = 0.4;
 
 function melodyNotes(): Note[] {
   return MELODY.map(([start, pitch, length]) =>
@@ -161,7 +180,7 @@ export function demoSong(): Project {
     tracks: [
       // 이름은 사운드폰트를 넣는 순간 그 악기 이름으로 바뀐다(resnapTracks).
       // 그래서 이름에 안내를 넣지 않는다 — 사라질 자리에 적어 두면 거짓말이 된다.
-      track("멜로디", ALTO_SAX, melodyNotes(), 0.85, 0),
+      track("멜로디", ALTO_SAX, melodyNotes(), 0.85, 0, 0.55),
       track("반주", KOTO, chordNotes(), 0.6, -0.25),
       track("베이스", ACOUSTIC_BASS, bassNotes(), 0.75, 0.15),
     ],

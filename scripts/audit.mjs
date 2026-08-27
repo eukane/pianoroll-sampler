@@ -8,6 +8,7 @@
  *   · 드럼 때문에 presetId 인코딩을 넓혔는데 **예전 프로젝트 파일**이 아직 열리나
  *   · 채널 배치를 바꿨는데 **드럼이 없을 때** 예전과 같은가
  *   · 셋잇단음을 넣었는데 **1/16 격자**가 여전히 정확한가
+ *   · 떨림(CC1)은 볼륨과 달리 **렌더용 MIDI 에서도** 빠지지 않는가
  *   · 예제 곡이 헤더에 적어 둔 대로 되어 있는가 (격자·음계·겹침)
  *
  *     node scripts/audit.mjs
@@ -16,6 +17,7 @@ import { projectToMidi, midiToProject } from "../src/export/midi.ts";
 import { packPresetId, unpackPresetId, isDrumPreset } from "../src/model/preset.ts";
 import { assignChannels, channelForTrack } from "../src/model/channels.ts";
 import { demoSong } from "../src/model/demoSong.ts";
+import { shakes, vibratoOf } from "../src/audio/vibrato.ts";
 
 const out = [];
 const ok = (n, pass, d) => out.push({ n, pass: !!pass, d });
@@ -81,7 +83,24 @@ let empty = true;
 try { projectToMidi({ bpm: 120, bars: 1, timeSig: [4, 4], tracks: [] }); } catch { empty = false; }
 ok("트랙이 없어도 MIDI 생성이 터지지 않는다", empty);
 
-// ---- 6) 예제 곡이 스스로 적어 둔 규칙을 지키는가 ----
+// ---- 6) 떨림(CC1)은 렌더용 MIDI 에도 실려야 한다 ----
+//
+// 볼륨·팬은 믹서가 따로 걸어서 렌더용 MIDI 에서 뺐다. 떨림은 그렇지 않다 —
+// 사운드폰트 트랙의 떨림을 실어 나르는 길이 CC1 하나뿐이라, 같이 빼면
+// **화면에서는 떨리는데 뽑아낸 WAV 만 안 떨린다.**
+const vibProj = {
+  ...proj,
+  tracks: [{ ...proj.tracks[0], vibrato: 0.8, vibratoDelay: 0 }],
+};
+ok("파일로 내보낸 MIDI 에 떨림(CC1)이 실린다", findCC(projectToMidi(vibProj), 1) === 102,
+   { CC1: findCC(projectToMidi(vibProj), 1) });
+ok("렌더용 MIDI 에도 떨림(CC1)이 실린다 (볼륨과 달리 빠지면 안 된다)",
+   findCC(projectToMidi(vibProj, { includeMixer: false }), 1) === 102,
+   { CC1: findCC(projectToMidi(vibProj, { includeMixer: false }), 1) });
+ok("떨림이 0 이면 CC1 을 아예 안 보낸다", findCC(projectToMidi(proj), 1) === null,
+   { CC1: findCC(projectToMidi(proj), 1) });
+
+// ---- 7) 예제 곡이 스스로 적어 둔 규칙을 지키는가 ----
 //
 // demoSong.ts 헤더가 "1/8 격자에 딱 떨어진다 · 5음계만 쓴다" 고 약속한다.
 // 손으로 적은 음표 목록이라 고치다 한 줄 어긋나기 쉽고, 어긋나도 소리로는
@@ -123,6 +142,19 @@ ok("예제 곡에 같은 음이 겹치는 자리가 없다", overlaps === 0, { �
 ok("예제 곡의 세 트랙이 서로 다른 악기다",
    new Set(demo.tracks.map((t) => t.source.presetId)).size === demo.tracks.length,
    demo.tracks.map((t) => t.source.presetId));
+
+// 예제 곡의 떨림이 실제로 "긴 음만" 떨게 되어 있는가. 딜레이를 잘못 잡으면
+// 전부 떨거나 하나도 안 떨어서, 보여 주려던 것이 안 보인다.
+const mel = demo.tracks[0];
+const melVib = vibratoOf(mel);
+const secPerBeat = 60 / demo.bpm;
+const shaking = mel.notes.filter((n) => shakes(melVib, n.length * secPerBeat));
+ok("예제 곡 멜로디에 떨림이 걸려 있다", melVib.depth > 0 && melVib.delay > 0, melVib);
+ok("예제 곡에서 긴 음은 떨리고 짧은 음은 안 떨린다",
+   shaking.length > 3 && shaking.length < mel.notes.length,
+   { 떠는음: shaking.length, 전체: mel.notes.length });
+ok("예제 곡의 반주·베이스에는 떨림이 없다",
+   demo.tracks.slice(1).every((t) => (t.vibrato ?? 0) === 0));
 
 // 두 번 부르면 노트 id 가 달라야 한다. 같은 객체를 돌려주면 사용자가 고친 게
 // 다음에 열 때도 남아서 예제가 예제 노릇을 못 한다.

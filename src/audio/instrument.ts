@@ -18,6 +18,8 @@
  * 없다. 채널 번호로 통일하면 두 방식이 같은 인터페이스에 들어온다.
  */
 
+import type { VibratoSetting } from "./vibrato";
+
 export interface Instrument {
   /** 화면에 보여 줄 이름. */
   readonly name: string;
@@ -40,6 +42,12 @@ export interface Instrument {
 
   /** `hold` 로 낸 소리를 끝낸다. 낸 적이 없으면 아무 일도 하지 않는다. */
   release(pitch: number, channel: number): void;
+
+  /**
+   * 이 채널의 떨림(비브라토)을 정한다. `prepare` 단계에서 한 번 걸어 둔다 —
+   * 노트마다 부를 자리가 아니다 (audio/vibrato.ts 참고).
+   */
+  setVibrato(channel: number, v: VibratoSetting): void;
 
   /** 정지 버튼. 예약해 둔 것까지 전부 끊는다. */
   stopAll(): void;

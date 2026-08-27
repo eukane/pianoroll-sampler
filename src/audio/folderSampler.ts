@@ -41,6 +41,7 @@
 import type { Instrument } from "./instrument";
 import type { Mixer } from "./mixer";
 import { commonLabel, layerVelocity, parseSampleName, type Layer } from "../model/sampleNames";
+import { NO_VIBRATO, shakes, VIBRATO_FADE, VIBRATO_HZ, VIBRATO_MAX_CENTS, type VibratoSetting } from "./vibrato";
 
 export type SampleEntry = {
   fileName: string;
@@ -152,7 +153,7 @@ export class SampleFolder {
   }
 }
 
-type Voice = { source: AudioBufferSourceNode; gain: GainNode };
+type Voice = { source: AudioBufferSourceNode; gain: GainNode; lfo?: OscillatorNode };
 
 export class FolderSampler implements Instrument {
   readonly name = "샘플 폴더";
@@ -162,6 +163,7 @@ export class FolderSampler implements Instrument {
   private held = new Map<string, Voice>();
   /** 트랙(채널)마다 어느 폴더를 쓰는지. */
   private channelFolder = new Map<number, string>();
+  private vibrato = new Map<number, VibratoSetting>();
 
   constructor(
     private ctx: BaseAudioContext,
@@ -296,7 +298,10 @@ export class FolderSampler implements Instrument {
     // 여운을 길게 남기면 보이스가 금방 쌓인다. 상한을 두고 오래된 것부터 뺏는다.
     if (this.playing.length >= MAX_VOICES) this.steal();
 
-    const voice: Voice = { source, gain };
+    // 재생 속도로 음정을 옮긴 위에 다시 흔든다. detune 은 센트 단위라
+    // 어느 음을 어느 속도로 밀고 있든 흔들리는 폭이 같다.
+    const lfo = this.attachVibrato(source, channel, when, stopAt, hold);
+    const voice: Voice = { source, gain, ...(lfo ? { lfo } : {}) };
     this.playing.push(voice);
     source.onended = () => {
       gain.disconnect();
@@ -313,6 +318,34 @@ export class FolderSampler implements Instrument {
     this.fadeOut(v, 0.02);
   }
 
+  setVibrato(channel: number, v: VibratoSetting): void {
+    this.vibrato.set(channel, v);
+  }
+
+  /** 음정을 흔드는 LFO. 안 걸 거면 노드를 안 만든다. */
+  private attachVibrato(
+    source: AudioBufferSourceNode,
+    channel: number,
+    when: number,
+    stopAt: number,
+    durationSec: number,
+  ): OscillatorNode | undefined {
+    const v = this.vibrato.get(channel) ?? NO_VIBRATO;
+    if (!shakes(v, durationSec)) return undefined;
+
+    const lfo = this.ctx.createOscillator();
+    lfo.frequency.value = VIBRATO_HZ;
+    const depth = this.ctx.createGain();
+    depth.gain.setValueAtTime(0, when);
+    depth.gain.setValueAtTime(0, when + v.delay);
+    depth.gain.linearRampToValueAtTime(v.depth * VIBRATO_MAX_CENTS, when + v.delay + VIBRATO_FADE);
+    lfo.connect(depth);
+    depth.connect(source.detune);
+    lfo.start(when);
+    lfo.stop(stopAt + 0.02);
+    return lfo;
+  }
+
   /** 소리를 부드럽게 줄이고 끈다. 뚝 끊으면 '틱' 소리가 난다. */
   private fadeOut(v: Voice, seconds: number): void {
     const now = this.ctx.currentTime;
@@ -321,6 +354,7 @@ export class FolderSampler implements Instrument {
       v.gain.gain.setValueAtTime(Math.max(0.0001, v.gain.gain.value), now);
       v.gain.gain.exponentialRampToValueAtTime(0.0001, now + seconds);
       v.source.stop(now + seconds + 0.01);
+      v.lfo?.stop(now + seconds + 0.02);
     } catch {
       /* 이미 끝난 노드 */
     }

@@ -14,6 +14,7 @@ import { WorkletSynthesizer } from "spessasynth_lib";
 import type { Instrument } from "./instrument";
 import { MAX_CHANNELS, type Mixer } from "./mixer";
 import { packPresetId, unpackPresetId } from "../model/preset";
+import { NO_VIBRATO, shakes, VIBRATO_FADE, type VibratoSetting } from "./vibrato";
 
 /** 화면에 뿌리는 프리셋 한 줄. */
 export type Preset = {
@@ -51,6 +52,9 @@ export function looksLikeSoundBank(buffer: ArrayBuffer): boolean {
 
 /** 워크렛이 응답 없이 멈추는 경우를 대비한 상한. 큰 파일도 이 안에는 끝난다. */
 const LOAD_TIMEOUT_MS = 60_000;
+
+/** 눌러 보는 소리의 최대 길이(초). 떨림을 예약할 때 길이 대신 쓴다. */
+const MAX_PREVIEW_SEC = 10;
 
 /**
  * 이 주소에서 사운드폰트를 쓸 수 있는가.
@@ -96,6 +100,14 @@ export class SoundFontInstrument implements Instrument {
    * `calibrate()` 가 실측해서 넣는다. 자세한 사연은 아래 calibrate() 주석.
    */
   private clockOffset = 0;
+  /** 채널마다 걸린 떨림 설정과, 지금 채널에 실제로 보내 둔 CC1 값. */
+  private vibrato = new Map<number, VibratoSetting>();
+  private channelMod = new Map<number, number>();
+  /**
+   * 이 채널에서 마지막으로 예약한 음이 끝나는 시각.
+   * 겹쳐 있는 동안에는 떨림을 0 으로 되돌리지 않는다 — 앞 음이 아직 떨고 있다.
+   */
+  private vibBusyUntil = new Map<number, number>();
   /** 지금 돌고 있는 보정 작업. 끝나야 값이 확정된다. */
   private calibration: Promise<number> = Promise.resolve(0);
   private calibrating = false;
@@ -199,8 +211,10 @@ export class SoundFontInstrument implements Instrument {
       .sort((a, b) =>
         Number(a.isDrum) - Number(b.isDrum) || a.bankMSB - b.bankMSB || a.program - b.program);
 
-    // 사운드폰트를 바꿔 끼우면 채널에 걸린 프리셋도 다시 보내야 한다.
+    // 사운드폰트를 바꿔 끼우면 채널에 걸린 프리셋도, CC1 도 다시 보내야 한다.
     this.channelPreset.clear();
+    this.channelMod.clear();
+    this.vibBusyUntil.clear();
     this.loaded = true;
     this.sourceFile = file;
 
@@ -391,12 +405,61 @@ export class SoundFontInstrument implements Instrument {
     this.synth.programChange(channel, program, options);
   }
 
+  /**
+   * 떨림을 건다. 실제로 음정을 흔드는 건 신스다 — CC1(모듈레이션 휠)을 보내면
+   * 사운드폰트 안의 비브라토 LFO 가 그만큼 열린다 (audio/vibrato.ts 참고).
+   *
+   * 딜레이가 0 이면 **여기서 한 번 보내고 끝난다.** 노트마다 보낼 이유가 없다.
+   * 딜레이가 있으면 음이 시작하고 나서 서서히 열어야 해서 play() 가 맡는다.
+   */
+  setVibrato(channel: number, v: VibratoSetting): void {
+    this.vibrato.set(channel, v);
+    if (v.delay === 0) this.sendMod(channel, Math.round(v.depth * 127));
+  }
+
+  /** 같은 값을 또 보내지 않는다. 재생 중에는 이 자리가 자주 불린다. */
+  private sendMod(channel: number, value: number, when?: number): void {
+    if (when === undefined && this.channelMod.get(channel) === value) return;
+    this.channelMod.set(channel, value);
+    this.synth?.controllerChange(channel, 1, value, when === undefined ? undefined : { time: when });
+  }
+
   play(pitch: number, velocity: number, when: number, durationSec: number, channel: number): void {
     if (!this.synth) return;
     // 신스 안쪽 시계가 뒤처져 있는 만큼 당겨서 준다 (calibrate() 참고).
     const at = when - this.clockOffset;
+    this.scheduleVibrato(channel, at, durationSec);
     this.synth.noteOn(channel, pitch, Math.max(1, Math.round(velocity)), { time: at });
     this.synth.noteOff(channel, pitch, { time: at + durationSec });
+  }
+
+  /**
+   * 딜레이가 걸린 떨림을 이 음에 맞춰 예약한다.
+   *
+   * CC1 은 채널 전체에 걸리는 값이라 음마다 0 으로 되돌리면, 아직 울리고 있는
+   * 앞 음의 떨림까지 같이 꺼진다. 그래서 **앞 음이 아직 안 끝났으면 되돌리지
+   * 않는다.** 화음이나 이어지는 음에서 떨림이 뚝뚝 끊기지 않게 하는 장치다.
+   *
+   * 뚝 켜지면 부자연스러워서 세 걸음에 걸쳐 연다.
+   */
+  private scheduleVibrato(channel: number, at: number, durationSec: number): void {
+    const v = this.vibrato.get(channel) ?? NO_VIBRATO;
+    if (v.delay === 0) return; // setVibrato 가 이미 걸어 뒀다
+
+    const busyUntil = this.vibBusyUntil.get(channel) ?? 0;
+    const overlapping = at < busyUntil - 1e-6;
+    this.vibBusyUntil.set(channel, Math.max(busyUntil, at + durationSec));
+
+    if (!shakes(v, durationSec)) {
+      // 떨릴 자격이 없는 짧은 음. 앞 음이 아직 떨고 있으면 건드리지 않는다.
+      if (!overlapping) this.sendMod(channel, 0, at);
+      return;
+    }
+    if (!overlapping) this.sendMod(channel, 0, at);
+    const full = Math.round(v.depth * 127);
+    for (const step of [1 / 3, 2 / 3, 1]) {
+      this.sendMod(channel, Math.round(full * step), at + v.delay + VIBRATO_FADE * step);
+    }
   }
 
   /**
@@ -408,9 +471,11 @@ export class SoundFontInstrument implements Instrument {
    */
   hold(pitch: number, velocity: number, channel: number): void {
     if (!this.synth) return;
-    this.synth.noteOn(channel, pitch, Math.max(1, Math.round(velocity)), {
-      time: this.ctx.currentTime - this.clockOffset,
-    });
+    const at = this.ctx.currentTime - this.clockOffset;
+    // 눌러 보는 소리에도 떨림이 있어야 음원을 고를 수 있다. 언제 뗄지 모르니
+    // 최대 길이로 잡아 예약해 둔다.
+    this.scheduleVibrato(channel, at, MAX_PREVIEW_SEC);
+    this.synth.noteOn(channel, pitch, Math.max(1, Math.round(velocity)), { time: at });
   }
 
   release(pitch: number, channel: number): void {

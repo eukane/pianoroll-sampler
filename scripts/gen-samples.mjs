@@ -91,9 +91,12 @@ function sustained(midi, seconds = 3.0) {
   const data = new Float32Array(n);
   for (let i = 0; i < n; i += 1) {
     const t = i / SR;
-    // 살짝 흔들리지만 잦아들지는 않는다
-    const vib = 1 + 0.004 * Math.sin(2 * Math.PI * 5 * t);
-    data[i] = Math.sin(2 * Math.PI * f * vib * t) * 0.45;
+    // 살짝 흔들리지만 잦아들지는 않는다.
+    // 흔들림은 **위상**에 더한다. f * (1 + 흔들림) * t 로 쓰면 흔들리는 폭이
+    // t 에 비례해서 커진다 — 3초 끝에서는 반음이 넘게 벗어난다. 음정을 재는
+    // 검사(떨림 점검)가 그 샘플을 쓰면 아무것도 못 잰다.
+    const phase = 2 * Math.PI * f * t + 0.03 * Math.sin(2 * Math.PI * 5 * t);
+    data[i] = Math.sin(phase) * 0.45;
   }
   const fade = Math.floor(SR * 0.03);
   for (let i = 0; i < fade; i += 1) {

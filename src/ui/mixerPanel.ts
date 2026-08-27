@@ -93,6 +93,37 @@ export class MixerPanel {
           v === 0 ? "가운데" : v < 0 ? `왼쪽 ${Math.round(-v * 100)}` : `오른쪽 ${Math.round(v * 100)}`,
         ),
       );
+      // 떨림은 긴 음에만 걸리게 하는 게 자연스럽다. 그래서 깊이 옆에 늘
+      // "시작까지" 를 같이 둔다 — 둘이 짝이라 하나만 있으면 쓸모가 반이다.
+      // 깊이가 0 에서 벗어나면 "떨림 시작" 줄이 새로 생기거나 사라져야 한다.
+      const hadVibrato = (track.vibrato ?? 0) > 0;
+      row.appendChild(
+        this.slider(
+          "떨림",
+          track.vibrato ?? 0,
+          0,
+          1,
+          0.02,
+          (v) => (track.vibrato = v),
+          (v) => (v === 0 ? "없음" : `${Math.round(v * 100)}`),
+          () => {
+            if (((track.vibrato ?? 0) > 0) !== hadVibrato) this.render();
+          },
+        ),
+      );
+      if ((track.vibrato ?? 0) > 0) {
+        row.appendChild(
+          this.slider(
+            "떨림 시작",
+            track.vibratoDelay ?? 0,
+            0,
+            1.2,
+            0.05,
+            (v) => (track.vibratoDelay = v),
+            (v) => (v === 0 ? "바로" : `${v.toFixed(2)}초 뒤`),
+          ),
+        );
+      }
       row.appendChild(
         this.slider(
           "울림",
@@ -124,6 +155,8 @@ export class MixerPanel {
     step: number,
     set: (v: number) => void,
     format: (v: number) => string,
+    /** 손을 뗀 뒤 줄 구성이 달라져야 할 때 (떨림 0 ↔ 0 초과). */
+    onSettled?: () => void,
   ): HTMLElement {
     const wrap = document.createElement("label");
     wrap.className = "mixslider";
@@ -149,7 +182,10 @@ export class MixerPanel {
       readout.textContent = format(v);
       this.cb.onChange();
     });
-    input.addEventListener("change", () => this.cb.onAfterChange());
+    input.addEventListener("change", () => {
+      this.cb.onAfterChange();
+      onSettled?.();
+    });
 
     wrap.append(text, input, readout);
     return wrap;

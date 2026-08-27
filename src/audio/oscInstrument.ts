@@ -14,6 +14,7 @@
 import type { Instrument } from "./instrument";
 import type { Mixer } from "./mixer";
 import { midiToFreq } from "../util/music";
+import { NO_VIBRATO, shakes, VIBRATO_FADE, VIBRATO_HZ, VIBRATO_MAX_CENTS, type VibratoSetting } from "./vibrato";
 
 export type Waveform = "sine" | "sawtooth" | "square" | "triangle";
 
@@ -30,6 +31,8 @@ type Voice = {
   osc: OscillatorNode;
   gain: GainNode;
   endsAt: number;
+  /** 떨림을 만드는 저주파 오실레이터. 안 걸었으면 없다. */
+  lfo?: OscillatorNode;
 };
 
 export class OscInstrument implements Instrument {
@@ -40,6 +43,7 @@ export class OscInstrument implements Instrument {
    * 모자랄 때 뺏겨 나가는데, 그러면 손을 떼도 끌 대상이 없어진다.
    */
   private held = new Map<string, Voice>();
+  private vibrato = new Map<number, VibratoSetting>();
 
   constructor(
     private ctx: BaseAudioContext,
@@ -75,7 +79,8 @@ export class OscInstrument implements Instrument {
     osc.start(when);
     osc.stop(endsAt + 0.01);
 
-    const voice: Voice = { osc, gain, endsAt };
+    const lfo = this.attachVibrato(osc, channel, when, endsAt, hold);
+    const voice: Voice = { osc, gain, endsAt, ...(lfo ? { lfo } : {}) };
     this.voices.push(voice);
     osc.onended = () => {
       gain.disconnect();
@@ -103,7 +108,8 @@ export class OscInstrument implements Instrument {
     osc.start(now);
     osc.stop(now + MAX_HOLD);
 
-    const voice: Voice = { osc, gain, endsAt: now + MAX_HOLD };
+    const lfo = this.attachVibrato(osc, channel, now, now + MAX_HOLD, MAX_HOLD);
+    const voice: Voice = { osc, gain, endsAt: now + MAX_HOLD, ...(lfo ? { lfo } : {}) };
     const key = holdKey(pitch, channel);
     this.held.set(key, voice);
     osc.onended = () => {
@@ -130,11 +136,43 @@ export class OscInstrument implements Instrument {
         v.gain.gain.setValueAtTime(Math.max(0.0001, v.gain.gain.value), now);
         v.gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.02);
         v.osc.stop(now + 0.03);
+        v.lfo?.stop(now + 0.04);
       } catch {
         /* 이미 끝난 노드 */
       }
     }
     this.voices = [];
+  }
+
+  setVibrato(channel: number, v: VibratoSetting): void {
+    this.vibrato.set(channel, v);
+  }
+
+  /**
+   * 음정을 흔드는 LFO 를 이 보이스에 붙인다. 안 걸 거면 노드를 아예 안 만든다 —
+   * 폰에서 노트마다 노드 두 개씩 늘리는 건 그냥 낭비다.
+   */
+  private attachVibrato(
+    osc: OscillatorNode,
+    channel: number,
+    when: number,
+    endsAt: number,
+    durationSec: number,
+  ): OscillatorNode | undefined {
+    const v = this.vibrato.get(channel) ?? NO_VIBRATO;
+    if (!shakes(v, durationSec)) return undefined;
+
+    const lfo = this.ctx.createOscillator();
+    lfo.frequency.value = VIBRATO_HZ;
+    const depth = this.ctx.createGain();
+    depth.gain.setValueAtTime(0, when);
+    depth.gain.setValueAtTime(0, when + v.delay);
+    depth.gain.linearRampToValueAtTime(v.depth * VIBRATO_MAX_CENTS, when + v.delay + VIBRATO_FADE);
+    lfo.connect(depth);
+    depth.connect(osc.detune);
+    lfo.start(when);
+    lfo.stop(endsAt + 0.02);
+    return lfo;
   }
 
   /** 소리를 부드럽게 줄이고 끈다. 뚝 끊으면 '틱' 소리가 난다. */
@@ -145,6 +183,7 @@ export class OscInstrument implements Instrument {
       v.gain.gain.setValueAtTime(Math.max(0.0001, v.gain.gain.value), now);
       v.gain.gain.exponentialRampToValueAtTime(0.0001, now + seconds);
       v.osc.stop(now + seconds + 0.01);
+      v.lfo?.stop(now + seconds + 0.02);
     } catch {
       /* 이미 끝난 노드 */
     }
