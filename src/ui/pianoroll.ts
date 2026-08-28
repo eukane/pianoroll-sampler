@@ -643,9 +643,18 @@ export class PianoRoll {
     } else if (this.drag.mode === "move" && this.drag.moved) {
       const track = this.track;
       if (track) sortNotes(track);
-    } else if (this.drag.mode === "move" && quick && still) {
+    } else if ((this.drag.mode === "move" || this.drag.mode === "resize") && still) {
       // 노트를 톡 치면 꾸밈 창. 예전에는 이 동작에 아무 일도 안 일어났다.
       // (길게 누르면 삭제, 끌면 이동 — 탭만 비어 있었다)
+      //
+      // **길이 조절 자리(오른쪽 끝)에서도 받는다.** 손가락 굵기 때문에 노트의
+      // 오른쪽 20px 은 길이 조절로 잡히는데, 좁은 노트에서는 그게 3분의 1이다.
+      // 거기를 눌러도 아무 일이 안 일어나서 "창이 안 뜬다" 가 됐다.
+      //
+      // 시간 제한(TAP_MS)도 걸지 않는다. 480ms 를 넘겼으면 길게 누르기가 이미
+      // 지웠을 것이고 여기까지 오지도 않는다. 그 사이(400~480ms)에 뗀 손가락만
+      // 조용히 무시되고 있었다 — 폰에서 작은 노트를 정확히 누르려면 그 정도는
+      // 걸린다.
       this.cb.onNoteTap(this.drag.note);
     }
 

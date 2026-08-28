@@ -26,6 +26,7 @@
  *   · 떨림 시작을 늦추면 짧은 음이 안 떨리는가
  *   · 음 하나에 건 꾸밈이 말한 방향으로 휘는가 (끌어올림 · 흘러내림)
  *   · 노트를 톡 치면 꾸밈 창이 열리고, 고른 게 그 음에 남는가
+ *     (오른쪽 끝을 쳐도 · 사람 손가락처럼 천천히 흔들리게 쳐도)
  *   · ⏮ 이 재생 위치를 맨 앞으로 되돌리는가 (재생 중에 눌러도 버튼이 안 뒤집히는가)
  *   · 렌더 경로가 둘로 갈리는데 서로 정렬돼 있는가
  *   · 재생에서 사운드폰트가 임시 신스와 같은 시각에 울리는가 (워크렛 시계 보정)
@@ -1343,15 +1344,46 @@ const notePos = await page.evaluate(() => {
   t.notes.length = 0;
   t.notes.push({ id: "orn-test", pitch: 72, start: 1, length: 2, velocity: 100 });
   app.scheduler.invalidate();
+  const left = 46 + 1 * roll.pxPerBeat - roll.scrollX;
   return {
-    x: 46 + 1 * roll.pxPerBeat - roll.scrollX + roll.pxPerBeat * 0.4,
+    x: left + roll.pxPerBeat * 0.4,
+    // 오른쪽 끝에서 6px 안쪽 — 길이 조절로 잡히는 자리
+    rightEdge: left + roll.pxPerBeat * 2 - 6,
     y: 36 + (127 - 72) * roll.keyHeight - roll.scrollY + roll.keyHeight / 2,
   };
 });
 const ornBox = await page.locator("#roll").boundingBox();
-await page.touchscreen.tap(ornBox.x + notePos.x, ornBox.y + notePos.y);
-await page.waitForTimeout(250);
+// **사람 손가락처럼** 친다. 합성 탭(0ms · 정확히 그 좌표)으로만 시험하면
+// 실제로 안 되는 걸 통과시킨다 — 처음에 그래서 놓쳤다. 폰에서 작은 노트를
+// 정확히 누르려면 300ms 쯤 걸리고 손가락은 몇 px 씩 흔들린다.
+const fingerTap = async (x, y) => {
+  await page.mouse.move(ornBox.x + x, ornBox.y + y);
+  await page.mouse.down();
+  await page.waitForTimeout(300);
+  await page.mouse.move(ornBox.x + x + 3, ornBox.y + y + 2); // 손 떨림
+  await page.mouse.up();
+  await page.waitForTimeout(250);
+};
+await fingerTap(notePos.x, notePos.y);
 check("노트를 톡 치면 꾸밈 창이 열린다", await page.locator("#note-modal").isVisible());
+await page.locator("#note-close").click();
+await page.waitForTimeout(150);
+// 노트 오른쪽 끝은 길이 조절 자리다. 좁은 노트에서는 그게 3분의 1이라
+// 거기를 눌러도 창이 떠야 한다 — 안 그러면 "안 뜬다" 가 된다.
+await fingerTap(notePos.rightEdge, notePos.y);
+const ornOpen = await page.locator("#note-modal").isVisible();
+check("노트 오른쪽 끝을 쳐도 꾸밈 창이 열린다", ornOpen);
+// 창이 안 열렸으면 아래 검사는 눌러 볼 데가 없다. 멈추지 말고 실패로 남긴다.
+if (!ornOpen) {
+  for (const name of [
+    "고른 꾸밈이 그 음에 남는다",
+    "꾸밈을 고르면 세기 조절이 따라 나온다",
+    "「그냥」을 고르면 세기 조절이 사라진다",
+    "꾸밈 창에서 그 음을 지울 수 있다",
+    "지운 것은 되돌리기 한 번에 돌아온다",
+  ]) check(name, false, "꾸밈 창이 안 열려서 확인 못 함");
+}
+if (ornOpen) {
 await page.locator('button.orn[data-orn="bend"]').click();
 await page.waitForTimeout(200);
 const ornPicked = await page.evaluate(() => {
@@ -1382,6 +1414,7 @@ check(
   await page.evaluate(() =>
     window.__app.project.tracks[window.__app.roll.activeTrack].notes.some((x) => x.id === "orn-test")),
 );
+}
 await page.locator("#play").click();
 await page.waitForTimeout(250);
 await page.locator("#rewind").click();
