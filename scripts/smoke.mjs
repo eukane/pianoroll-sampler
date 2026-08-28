@@ -34,6 +34,7 @@
  *   · 복사 한 번 + 붙여넣기 연타로 마디가 채워지는가
  *   · 내보내기가 조용히 실패하지 않는가 (무음 · 곡 밖 노트 · 음소거 트랙)
  *   · 예제 곡이 열리고 실제로 소리가 나는가 (덮어쓰기 전에 물어보는가)
+ *   · 둘째 예제(일렉트로닉)가 드럼을 9번 채널에 놓고, 드롭에서 커지는가
  *   · 콘솔 오류가 하나도 없는가
  *
  * 쓰는 법: 다른 창에서 `npm run dev` 를 띄워 두고 `npm run smoke`.
@@ -1599,7 +1600,7 @@ page.on("dialog", (d) => {
 });
 await page.locator("#export").click();
 await page.waitForTimeout(150);
-await page.locator("#open-demo").click();
+await page.locator("#open-demo-gugak").click();
 await page.waitForTimeout(400);
 const demo = await page.evaluate(() => {
   const p = window.__app.project;
@@ -1640,6 +1641,88 @@ check(
   "예제 곡이 실제로 소리가 난다 (찌그러지지 않고)",
   demoSound.peak > 0.02 && demoSound.peak < 0.99 && demoSound.seconds > 18,
   demoSound,
+);
+
+// ---- 둘째 예제 곡 (일렉트로닉) ----
+//
+// 성격이 정반대인 곡을 하나 더 둔다 — 같은 도구로 다른 장르가 나온다는 걸
+// 보여 주려고. 이쪽은 드럼이 있어서 채널 배치(드럼은 9번)까지 같이 걸린다.
+// **음원을 안 넣은 새 화면**에서 연다. 지금까지 쓰던 시험용 SF2 에는 드럼
+// 킷이 없어서, 그 상태로 열면 앱이 드럼 트랙을 (제대로) 첫 악기로 떨어뜨린다.
+// 그러면 드럼이 9번 채널로 가는지도, 안내가 뜨는지도 확인할 수가 없다.
+// 사용자가 앱을 처음 열고 예제를 눌러 보는 상황이 실제로 이쪽이기도 하다.
+await page.reload({ waitUntil: "networkidle" });
+await page.locator("#unlock").tap();
+await page.waitForTimeout(300);
+await page.locator("#export").click();
+await page.waitForTimeout(150);
+await page.locator("#open-demo-edm").click();
+await page.waitForTimeout(500);
+const edm = await page.evaluate(async () => {
+  const { assignChannels } = await import("/src/model/channels.ts");
+  const p = window.__app.project;
+  return {
+    bpm: p.bpm,
+    bars: p.bars,
+    tracks: p.tracks.length,
+    notes: p.tracks.reduce((n, t) => n + t.notes.length, 0),
+    channels: assignChannels(p),
+    drumIndex: p.tracks.findIndex((t) => t.name === "드럼"),
+    status: document.getElementById("status")?.textContent ?? "",
+  };
+});
+check(
+  "일렉트로닉 예제가 16마디 5트랙으로 들어온다",
+  edm.bars === 16 && edm.tracks === 5 && edm.bpm === 128 && edm.notes > 300,
+  edm,
+);
+// 드럼이 9번 채널에 안 가면 다른 DAW 에서도 우리 신스에서도 타악기로 안 난다.
+check("드럼 트랙이 9번 채널에 간다", edm.channels[edm.drumIndex] === 9, edm.channels);
+// 사운드폰트 없이 열면 드럼이 낮은 톱니파가 된다. 왜 그런지 말해 줘야 한다.
+check(
+  "음원 없이 열면 드럼 얘기를 해 준다",
+  edm.status.includes("드럼") && edm.status.includes("사운드폰트"),
+  edm.status,
+);
+const edmSound = await page.evaluate(async () => {
+  const { renderProject } = await import("/src/export/render.ts");
+  const app = window.__app;
+  const buf = await renderProject(
+    app.project,
+    () => app.registry.soundfont.bankBuffer(),
+    app.registry.folders.list,
+    app.mixerState,
+  );
+  // 마디마다 음량을 재서 "인트로 → 쌓기 → 드롭" 이 실제로 커지는지 본다.
+  const d = buf.getChannelData(0);
+  const perBar = (bar) => {
+    const secPerBar = (60 / 128) * 4;
+    const s = Math.floor(bar * secPerBar * buf.sampleRate);
+    const e = Math.min(d.length, Math.floor((bar + 1) * secPerBar * buf.sampleRate));
+    let sum = 0;
+    for (let i = s; i < e; i += 7) sum += d[i] * d[i];
+    return Math.sqrt(sum / Math.max(1, (e - s) / 7));
+  };
+  let peak = 0;
+  for (const v of d) peak = Math.max(peak, Math.abs(v));
+  return {
+    peak: +peak.toFixed(3),
+    인트로: +perBar(1).toFixed(4),
+    쌓기: +perBar(6).toFixed(4),
+    드롭: +perBar(10).toFixed(4),
+  };
+});
+check(
+  "일렉트로닉 예제가 소리가 난다 (찌그러지지 않고)",
+  edmSound.peak > 0.05 && edmSound.peak < 0.99,
+  edmSound,
+);
+// 드롭이 안 커지면 구조가 없는 것이다. 처음에 킥을 빌드부터 다 쳤더니
+// 빌드와 드롭이 거의 같은 크기여서 열리는 느낌이 없었다.
+check(
+  "인트로 → 쌓기 → 드롭 순으로 커진다",
+  edmSound.인트로 < edmSound.쌓기 * 0.75 && edmSound.쌓기 < edmSound.드롭 * 0.85,
+  edmSound,
 );
 
 check("콘솔 오류 없음", errors.length === 0, errors);

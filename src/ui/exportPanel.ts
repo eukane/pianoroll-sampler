@@ -12,7 +12,7 @@ import type { Project } from "../model/types";
 import { projectToMidi, midiToProject } from "../export/midi";
 import { totalBeats, beatsPerBar } from "../model/project";
 import { projectToJson, projectFromJson } from "../export/projectFile";
-import { demoSong } from "../model/demoSong";
+import { DEMOS, type Demo } from "../model/demos";
 import { audioBufferToWav, peakOf } from "../export/wav";
 import { onlyTrack, projectSeconds, renderProject } from "../export/render";
 import type { InstrumentRegistry } from "../audio/registry";
@@ -49,7 +49,7 @@ export class ExportPanel {
     this.on("save-stems", () => this.exportStems());
     this.on("save-midi", () => this.exportMidi());
     this.on("save-json", () => this.exportJson());
-    this.on("open-demo", () => this.openDemo());
+    this.buildDemoButtons();
 
     const importInput = document.getElementById("import-file") as HTMLInputElement;
     (document.getElementById("open-file") as HTMLButtonElement).addEventListener("click", () =>
@@ -207,6 +207,23 @@ export class ExportPanel {
 
   // ------------------------------------------------------------ 가져오기
 
+  /** 예제 곡 버튼은 목록(model/demos.ts)에서 만든다. 곡을 늘려도 여기는 안 고친다. */
+  private buildDemoButtons(): void {
+    const slot = document.getElementById("demo-list") as HTMLDivElement;
+    for (const demo of DEMOS) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "big";
+      b.id = `open-demo-${demo.id}`;
+      b.textContent = demo.title;
+      const small = document.createElement("small");
+      small.textContent = demo.hint;
+      b.appendChild(small);
+      b.addEventListener("click", () => this.openDemo(demo));
+      slot.appendChild(b);
+    }
+  }
+
   /**
    * 예제 곡 열기.
    *
@@ -214,12 +231,22 @@ export class ExportPanel {
    * 노트가 하나라도 있으면 물어보고 연다. 빈 화면이면 그냥 연다 — 아무것도
    * 없는데 물어보는 건 그냥 귀찮게 하는 것이다.
    */
-  private openDemo(): void {
+  private openDemo(demo: Demo): void {
     const hasNotes = this.getProject().tracks.some((t) => t.notes.length > 0);
     if (hasNotes && !window.confirm("지금 만들던 것을 덮어씁니다. 예제 곡을 불러올까요?")) return;
     this.close();
-    this.cb.onProjectReplaced(demoSong());
-    this.cb.onStatus("예제 곡 (8마디) — 트랙 이름을 눌러 악기를 바꿔 보세요");
+    const project = demo.make();
+    this.cb.onProjectReplaced(project);
+
+    // 드럼이 든 곡을 음원 없이 열면 드럼만 이상하게 들린다. 왜 그런지 알려 준다.
+    const bars = `${project.bars}마디`;
+    if (demo.needsDrums && !this.registry.usingSoundFont) {
+      this.cb.onStatus(
+        `${demo.title} (${bars}) — 드럼은 사운드폰트(.sf2)를 넣어야 제대로 들립니다`,
+      );
+      return;
+    }
+    this.cb.onStatus(`${demo.title} (${bars}) — 트랙 이름을 눌러 악기를 바꿔 보세요`);
   }
 
   private async importFile(file: File): Promise<void> {

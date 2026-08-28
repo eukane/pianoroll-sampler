@@ -12,6 +12,7 @@
  *   · 꾸밈 곡선이 말한 모양대로 나오는가 (끌어올림은 아래에서 위로 …)
  *   · 트랙 기본 떨림과 음의 꾸밈이 규칙대로 합쳐지는가
  *   · 예제 곡이 헤더에 적어 둔 대로 되어 있는가 (격자·음계·겹침)
+ *   · 둘째 예제(일렉트로닉)의 드럼이 9번 채널에 가고 구조가 살아 있는가
  *
  *     node scripts/audit.mjs
  */
@@ -19,6 +20,7 @@ import { projectToMidi, midiToProject } from "../src/export/midi.ts";
 import { packPresetId, unpackPresetId, isDrumPreset } from "../src/model/preset.ts";
 import { assignChannels, channelForTrack } from "../src/model/channels.ts";
 import { demoSong } from "../src/model/demoSong.ts";
+import { DEMOS } from "../src/model/demos.ts";
 import { shakes, vibratoOf } from "../src/audio/vibrato.ts";
 import { bendCurve, MAX_BEND_CENTS } from "../src/model/ornament.ts";
 import { expressionFor } from "../src/audio/expression.ts";
@@ -244,6 +246,58 @@ ok("예제 곡이 MIDI 왕복을 견딘다",
    demoBack.tracks.length === demo.tracks.length
      && demoBack.tracks.every((t, i) => t.notes.length === demo.tracks[i].notes.length),
    { 원본: demo.tracks.map((t) => t.notes.length), 왕복: demoBack.tracks.map((t) => t.notes.length) });
+
+// ---- 10) 예제 곡 목록과 둘째 곡(일렉트로닉) ----
+//
+// 곡이 둘이 되면서 목록에서 버튼을 만든다. 목록이 어긋나면 버튼이 안 뜨거나
+// 엉뚱한 곡이 열린다.
+ok("예제 곡이 둘 이상이고 id 가 겹치지 않는다",
+   DEMOS.length >= 2 && new Set(DEMOS.map((d) => d.id)).size === DEMOS.length,
+   DEMOS.map((d) => d.id));
+
+const edm = DEMOS.find((d) => d.id === "edm").make();
+const edmNotes = edm.tracks.flatMap((t) => t.notes);
+
+// 이 곡은 1/16 격자다 (첫 예제는 1/8). 손으로 고칠 때 스냅만 맞추면 딱 떨어져야 한다.
+ok("일렉트로닉 예제가 전부 1/16 격자에 떨어진다",
+   edmNotes.every((n) => Math.abs(n.start * 4 - Math.round(n.start * 4)) < 1e-9
+     && Math.abs(n.length * 4 - Math.round(n.length * 4)) < 1e-9));
+ok("일렉트로닉 예제의 노트가 곡 길이 안에 있다",
+   edmNotes.every((n) => n.start >= 0 && n.start + n.length <= edm.bars * 4 + 1e-9));
+
+// 드럼이 9번 채널로 가야 우리 신스에서도, 내보낸 .mid 를 연 다른 DAW 에서도
+// 타악기로 난다. 이건 사운드폰트와 무관하게 항상 참이어야 한다.
+const edmChannels = assignChannels(edm);
+const drumIdx = edm.tracks.findIndex((t) => t.name === "드럼");
+ok("일렉트로닉 예제의 드럼이 9번 채널에 간다", edmChannels[drumIdx] === 9, edmChannels);
+ok("나머지 트랙은 9번을 비켜 간다",
+   edmChannels.filter((c, i) => i !== drumIdx).every((c) => c !== 9), edmChannels);
+
+// 같은 음 겹침 — 겹치면 앞 음의 noteOff 가 뒤 음을 끊는다. 드럼처럼 같은
+// 건반을 계속 치는 트랙에서 특히 나기 쉽다.
+let edmOverlaps = 0;
+for (const t of edm.tracks) {
+  const end = new Map();
+  for (const n of [...t.notes].sort((a, b) => a.start - b.start)) {
+    const prev = end.get(n.pitch);
+    if (prev !== undefined && n.start < prev - 1e-9) edmOverlaps += 1;
+    end.set(n.pitch, n.start + n.length);
+  }
+}
+ok("일렉트로닉 예제에 같은 음이 겹치는 자리가 없다", edmOverlaps === 0, { 겹침: edmOverlaps });
+
+// 구조 — 킥은 드롭(9마디)부터 4분음표로 친다. 쌓는 구간에 다 쳐 버리면
+// 드롭이 열리는 느낌이 없어진다 (실제로 그랬다).
+const drums = edm.tracks[drumIdx].notes;
+const kicksIn = (bar) => drums.filter((n) => n.pitch === 36 && n.start >= bar * 4 && n.start < (bar + 1) * 4).length;
+ok("인트로에는 킥이 없다", kicksIn(0) === 0 && kicksIn(1) === 0);
+ok("쌓는 구간의 킥은 마디마다 한 번", kicksIn(5) === 1 && kicksIn(6) === 1, kicksIn(5));
+ok("드롭부터는 4분음표 킥", kicksIn(9) === 4 && kicksIn(14) === 4, kicksIn(9));
+
+const edmOrn = edm.tracks[0].notes.filter((n) => n.ornament);
+ok("일렉트로닉 예제의 리드에도 손본 자리가 있다 (많지 않게)",
+   edmOrn.length >= 2 && edmOrn.length <= 4,
+   edmOrn.map((n) => `${n.start}박 ${n.ornament}`));
 
 let bad = 0;
 for (const r of out) { if (!r.pass) bad++; console.log(`${r.pass ? "✅" : "❌"} ${r.n}${r.pass ? "" : "  " + JSON.stringify(r.d)}`); }
