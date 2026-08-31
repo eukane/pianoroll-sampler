@@ -59,12 +59,13 @@ AudioWorklet 이 보안 컨텍스트(https 나 localhost)에서만 동작하는�
 
 ```bash
 npm run build      # 타입 검사 + 프로덕션 빌드
-npm run smoke      # 브라우저 자동 점검 123가지 (dev 서버를 띄워 둔 상태에서)
+npm run smoke      # 브라우저 자동 점검 134가지 (dev 서버를 띄워 둔 상태에서)
 npm run midi       # MIDI 왕복 점검 20가지 (브라우저 없이, 1초)
 npm run names      # 샘플 파일명 읽기 점검 19가지 (브라우저 없이)
 npm run audit      # 고치다 옆엣것을 깨뜨리지 않았는지 56가지 (브라우저 없이)
 npm run built-check # 빌드된 결과물이 실제로 도는지 10가지 (build 뒤에)
 npm run clipboard  # 복사·붙여넣기 점검 15가지 (브라우저 없이)
+npm run select     # 상자로 고르기 점검 19가지 (브라우저 없이)
 npm run oto        # UTAU 음원 읽기·이어붙이기 점검 62가지 (브라우저 없이)
 npm run zip        # 일본어 이름 zip 읽기 점검 (브라우저 없이)
 npm run gen-voicebank  # 시험용 가짜 UTAU 음원 만들기 (smoke 가 자동으로 부른다)
@@ -193,7 +194,8 @@ npm run latency    # 이 기기에서 사운드폰트가 몇 ms 늦는지 실측
 ### M1 — 피아노롤 에디터 + 임시 신스 ✅
 
 - **이번에 된 것**: 캔버스 피아노롤(빈 곳 탭=찍기, 노트 탭=세부 설정 창,
-  드래그=옮기기, 오른쪽 끝=길이, 두 손가락=가로 확대), 1/4·1/8·1/16 스냅, 재생/정지·재생 헤드·루프
+  드래그=옮기기, 오른쪽 끝=길이, 두 손가락=가로 확대,
+  `⬚ 고르기` 를 켜면 끌어서 여러 노트 고르기), 1/4·1/8·1/16 스냅, 재생/정지·재생 헤드·루프
   구간, 오실레이터 임시 소리, 폰 오디오 잠금 해제.
 - **확인하는 법**: `npm run dev` → 폰으로 접속 → 화면 한 번 탭 → 격자를 눌러
   4마디쯤 멜로디를 찍고 `▶︎ 재생`. 위쪽 눈금을 드래그하면 루프 구간이 잡힌다.
@@ -226,6 +228,7 @@ npm run latency    # 이 기기에서 사운드폰트가 몇 ms 늦는지 실측
 ```
 src/
   model/     Note · Track · Project (노트는 악기 정보를 갖지 않는다)
+             · selection(상자로 고르기) · clipboard(복사·붙여넣기)
              · ornament(음 하나에 붙는 꾸밈 — 시김새)
              · demos(예제 곡 목록) · demoSong(국악풍) · demoEdm(일렉트로닉)
              · oto(UTAU 원음설정) · frq(녹음된 음정) · phrase(이어붙이기 계획)

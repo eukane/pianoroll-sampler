@@ -45,10 +45,24 @@ export type Clipboard = {
 export function copyRegion(track: Track, startBeat: number, endBeat: number): Clipboard {
   const start = Math.min(startBeat, endBeat);
   const end = Math.max(startBeat, endBeat);
-  const notes = track.notes
-    .filter((n) => n.start >= start - 1e-6 && n.start < end - 1e-6)
-    .map((n) => ({ ...n, start: n.start - start }));
-  return { notes, lengthBeats: Math.max(0, end - start) };
+  const inside = track.notes.filter((n) => n.start >= start - 1e-6 && n.start < end - 1e-6);
+  return copyNotes(inside, start, end);
+}
+
+/**
+ * **고른 노트들**을 뜬다. 상자로 고른 것을 복사할 때 쓴다.
+ *
+ * 구간(start~end)을 밖에서 받는 이유는, 상자로 고르면 "무엇을" 과 "얼마나
+ * 넓게" 가 따로이기 때문이다. 화음 세 개만 골라도 그게 두 마디짜리 진행이면
+ * 붙여넣기는 두 마디를 밀어야 한다 (model/selection.ts 의 selectionRange).
+ */
+export function copyNotes(notes: Note[], startBeat: number, endBeat: number): Clipboard {
+  const start = Math.min(startBeat, endBeat);
+  const end = Math.max(startBeat, endBeat);
+  return {
+    notes: notes.map((n) => ({ ...n, start: n.start - start })),
+    lengthBeats: Math.max(0, end - start),
+  };
 }
 
 /**

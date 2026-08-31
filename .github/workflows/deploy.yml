@@ -47,6 +47,7 @@ jobs:
           npm run midi
           npm run names
           npm run clipboard
+          npm run select
           npm run audit
           npm run oto
           npm run gen-voicebank

@@ -19,6 +19,7 @@
  */
 
 import type { Note, Project } from "../model/types";
+import { boxFrom, notesInBox, pruneSelection, type SelectBox } from "../model/selection";
 import { beatsPerBar, makeNote, snap, snapFloor, sortNotes, totalBeats } from "../model/project";
 import { clampPitch, isBlackKey, isC, midiToName } from "../util/music";
 import type { Ornament } from "../model/ornament";
@@ -61,6 +62,7 @@ type Drag =
     }
   | { mode: "resize"; note: Note; startLength: number; downBeat: number }
   | { mode: "loop"; anchorBeat: number }
+  | { mode: "select"; anchor: { beat: number; pitch: number } }
   | { mode: "scrub" }
   | { mode: "key"; pitch: number }
   | { mode: "pinch"; startDist: number; startPx: number; anchorBeat: number; startMidY: number; startScrollY: number };
@@ -77,6 +79,8 @@ export type PianoRollCallbacks = {
   onPreviewRelease: () => void;
   /** 노트를 톡 쳤다 — 꾸밈을 고르는 창을 열라는 뜻. */
   onNoteTap: (note: Note) => void;
+  /** 고른 노트가 바뀌었다. 화면이 버튼을 켜고 끄고 개수를 알려 준다. */
+  onSelectionChange: (count: number) => void;
   /** 활성 트랙이 아닌 노트를 만졌다 — 왜 반응이 없는지 알려 달라. */
   onSeek: (beat: number) => void;
   onLoopChange: (startBeat: number, endBeat: number) => void;
@@ -102,6 +106,19 @@ export class PianoRoll {
   /** 지금 미리듣기가 붙잡혀 있는가. 손을 뗄 때 끝내야 한다. */
   private previewHeld = false;
   private draggingNoteId: string | null = null;
+
+  /**
+   * 상자로 고르는 중인가. **버튼으로 켜고 끈다.**
+   *
+   * 길게 누르기 같은 시간 기반 제스처로 넣지 않았다. 바로 앞에서 그것 때문에
+   * 물렸다 — 누른 시간으로 두 동작을 가르면 폰에서는 어느 쪽이 나올지 사람이
+   * 예측할 수 없다. 빈 곳 드래그는 화면 밀기라 양보할 수도 없다.
+   */
+  selectMode = false;
+  /** 고른 노트 id. 작업 중인 트랙 것만 담는다. */
+  private selected = new Set<string>();
+  /** 지금 끌고 있는 상자 (그리기용). */
+  private box: SelectBox | null = null;
 
   constructor(
     private canvas: HTMLCanvasElement,
@@ -199,6 +216,7 @@ export class PianoRoll {
     this.drawLoopShade();
     this.drawGrid(bpb);
     this.drawNotes();
+    this.drawSelectBox();
     this.drawPlayhead();
 
     g.restore();
@@ -255,6 +273,23 @@ export class PianoRoll {
     g.fillRect(x1, RULER, x2 - x1, this.height - RULER);
   }
 
+  /** 끌고 있는 고르기 상자. 손을 떼면 사라진다. */
+  private drawSelectBox(): void {
+    const b = this.box;
+    if (!b) return;
+    const g = this.ctx2d;
+    const x = this.beatToX(b.startBeat);
+    const w = Math.max(2, (b.endBeat - b.startBeat) * this.pxPerBeat);
+    // 음높이는 위로 갈수록 커진다 — 높은 음이 화면 위쪽이다.
+    const y = this.pitchToY(b.highPitch);
+    const h = Math.max(2, (b.highPitch - b.lowPitch + 1) * this.keyHeight);
+    g.fillStyle = C.selectBox;
+    g.fillRect(x, y, w, h);
+    g.strokeStyle = C.selectEdge;
+    g.lineWidth = 1;
+    g.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+  }
+
   private drawNotes(): void {
     const project = this.getProject();
     // 다른 트랙은 흐리게 뒤에 깔아 준다. 여러 트랙을 겹쳐 만들 때
@@ -276,15 +311,17 @@ export class PianoRoll {
       if (x + w < GUTTER || x > this.width || y + h < RULER || y > this.height) continue;
 
       const dragging = n.id === this.draggingNoteId;
+      const picked = active && this.selected.has(n.id);
       const alpha = (0.45 + (n.velocity / 127) * 0.55) * (active ? 1 : 0.34);
       g.globalAlpha = alpha;
-      g.fillStyle = dragging ? C.noteActive : active ? C.note : C.noteOther;
+      g.fillStyle = dragging || picked ? C.noteActive : active ? C.note : C.noteOther;
       this.roundRect(x, y + 1, w, h - 2, Math.min(4, h / 3));
       g.fill();
       g.globalAlpha = active ? 1 : 0.45;
 
-      g.strokeStyle = dragging ? C.noteActive : active ? C.noteEdge : C.noteOther;
-      g.lineWidth = 1;
+      // 고른 노트는 테두리를 굵게. 색만 바꾸면 작은 노트에서 잘 안 보인다.
+      g.strokeStyle = dragging || picked ? C.noteActive : active ? C.noteEdge : C.noteOther;
+      g.lineWidth = picked ? 2 : 1;
       this.roundRect(x + 0.5, y + 1.5, w - 1, h - 3, Math.min(4, h / 3));
       g.stroke();
       g.globalAlpha = 1;
@@ -421,6 +458,36 @@ export class PianoRoll {
     g.fillRect(0, RULER - 1, this.width, 1);
   }
 
+  // ------------------------------------------------------------ 고르기
+
+  /** 고른 노트들. 없는 것(되돌리기로 사라진 것)은 걸러서 준다. */
+  selectedNotes(): Note[] {
+    const track = this.track;
+    if (!track) return [];
+    return track.notes.filter((n) => this.selected.has(n.id));
+  }
+
+  get selectedCount(): number {
+    return this.selectedNotes().length;
+  }
+
+  clearSelection(): void {
+    if (this.selected.size === 0) return;
+    this.selected.clear();
+    this.cb.onSelectionChange(0);
+    this.render();
+  }
+
+  /**
+   * 사라진 노트의 id 를 걷어낸다. 되돌리기·트랙 바꾸기 뒤에 부른다.
+   * 안 걷어내면 "3개 고름" 이라고 떠 있는데 지울 게 없는 상태가 된다.
+   */
+  syncSelection(): void {
+    const before = this.selected.size;
+    this.selected = pruneSelection(this.track, this.selected);
+    if (this.selected.size !== before) this.cb.onSelectionChange(this.selected.size);
+  }
+
   // ------------------------------------------------------------ 히트 테스트
 
   private localPoint(e: PointerEvent): { x: number; y: number } {
@@ -522,6 +589,19 @@ export class PianoRoll {
       return;
     }
 
+    // 상자로 고르는 중이면 격자 위 손가락은 전부 상자다. 노트 위에서도
+    // 시작할 수 있어야 한다 — 안 그러면 노트가 빽빽한 데서 상자를 시작할
+    // 자리가 없다.
+    if (this.selectMode) {
+      this.drag = {
+        mode: "select",
+        anchor: { beat: this.xToBeat(p.x), pitch: this.yToPitch(p.y) },
+      };
+      this.box = boxFrom(this.drag.anchor, this.drag.anchor);
+      this.render();
+      return;
+    }
+
     const found = this.noteAt(p.x, p.y);
     if (found) {
       const hit = found.note;
@@ -576,6 +656,14 @@ export class PianoRoll {
     if (movedFar && this.drag.mode === "pan") this.cancelPreview();
 
     switch (this.drag.mode) {
+      case "select": {
+        this.box = boxFrom(this.drag.anchor, {
+          beat: this.xToBeat(p.x),
+          pitch: this.yToPitch(p.y),
+        });
+        this.render();
+        break;
+      }
       case "pinch":
         this.updatePinch();
         break;
@@ -656,6 +744,31 @@ export class PianoRoll {
     const p = this.localPoint(e);
     const quick = performance.now() - ptr.downAt < TAP_MS;
     const still = Math.hypot(p.x - ptr.downX, p.y - ptr.downY) <= TAP_SLOP;
+
+    if (this.drag.mode === "select") {
+      const track = this.track;
+      const box = this.box;
+      this.box = null;
+      if (track && box) {
+        if (still) {
+          // 끌지 않고 톡 친 것 — 그 자리 노트를 넣거나 뺀다. 노트가 없으면
+          // 고른 것을 전부 푼다. 하나만 빼려고 상자를 다시 그리는 건 고역이다.
+          const hit = this.noteAt(p.x, p.y);
+          if (hit) {
+            if (this.selected.has(hit.note.id)) this.selected.delete(hit.note.id);
+            else this.selected.add(hit.note.id);
+          } else {
+            this.selected.clear();
+          }
+        } else {
+          for (const n of notesInBox(track, box)) this.selected.add(n.id);
+        }
+      }
+      this.drag = { mode: "none" };
+      this.cb.onSelectionChange(this.selected.size);
+      this.render();
+      return;
+    }
 
     if (this.drag.mode === "loop" && quick && still) {
       this.cb.onSeek(Math.max(0, snap(this.xToBeat(p.x), this.snapUnit)));

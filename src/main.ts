@@ -22,7 +22,8 @@ import { ExportPanel } from "./ui/exportPanel";
 import { MixerPanel } from "./ui/mixerPanel";
 import { NotePanel } from "./ui/notePanel";
 import { History } from "./history";
-import { copyRegion, pasteAt, lastBeat, type Clipboard } from "./model/clipboard";
+import { copyNotes, copyRegion, pasteAt, lastBeat, type Clipboard } from "./model/clipboard";
+import { boxFrom, deleteSelected, selectionRange } from "./model/selection";
 
 const project = emptyProject();
 
@@ -68,6 +69,7 @@ const roll = new PianoRoll(canvas, () => project, {
   },
   onPreviewRelease: () => scheduler.previewRelease(),
   onNoteTap: (note) => notePanel.open(note),
+  onSelectionChange: (count) => refreshSelection(count),
   onSeek: (beat) => scheduler.seek(beat),
   onLoopChange: (start, end) => {
     scheduler.loopStart = start;
@@ -232,6 +234,9 @@ const waveRow = waveSelect.closest("label") as HTMLLabelElement;
 const panel = new InstrumentPanel(project, registry, {
   onTrackChange: (index) => {
     roll.activeTrack = index;
+    // 고르기는 작업 트랙 안의 일이다. 트랙을 바꿨는데 남아 있으면 지우기
+    // 버튼이 켜져 있는데 화면에는 아무것도 안 골라진 것처럼 보인다.
+    roll.clearSelection();
   },
   onSourceChange: () => {
     // 노래 음원으로 바뀌었을 수 있다. 쓸 글자를 미리 풀어 둔다.
@@ -272,8 +277,9 @@ function applyProject(loaded: Project, { keepHistory = true } = {}): void {
   roll.activeTrack = panel.activeTrack;
   panel.refresh();
   mixerPanel.render();
-  // 되돌리기로 노트가 사라졌으면 열려 있던 창도 닫는다.
+  // 되돌리기로 노트가 사라졌으면 열려 있던 창도 닫고, 고른 것도 걷어낸다.
   notePanel.syncWithProject();
+  roll.syncSelection();
   mixerState.apply(project, mixer);
   scheduler.invalidate();
   refreshHistoryButtons();
@@ -298,7 +304,49 @@ redoBtn.addEventListener("click", () => {
 
 const copyBtn = $<HTMLButtonElement>("copy");
 const pasteBtn = $<HTMLButtonElement>("paste");
+const selectBtn = $<HTMLButtonElement>("select-mode");
+const deleteBtn = $<HTMLButtonElement>("delete-selected");
 let clipboard: Clipboard | null = null;
+
+/**
+ * 상자로 고르기.
+ *
+ * **버튼으로 켜고 끈다.** 길게 누르기 같은 시간 기반 제스처는 쓰지 않았다 —
+ * 바로 앞에서 그것 때문에 물렸고(누른 시간으로 창 열기와 삭제를 갈랐다가
+ * 어느 쪽이 나올지 예측이 안 됐다), 빈 곳 드래그는 화면 밀기라 양보할 수도
+ * 없다. 폰에서는 숨은 제스처보다 눈에 보이는 버튼이 낫다.
+ */
+function refreshSelection(count = roll.selectedCount): void {
+  deleteBtn.disabled = count === 0;
+  deleteBtn.textContent = count > 0 ? `🗑 ${count}` : "🗑";
+  copyBtn.title =
+    count > 0 ? `고른 노트 ${count}개 복사` : "루프 구간(없으면 이 마디) 복사";
+}
+
+selectBtn.addEventListener("click", () => {
+  roll.selectMode = !roll.selectMode;
+  selectBtn.classList.toggle("on", roll.selectMode);
+  if (!roll.selectMode) roll.clearSelection();
+  showStatus(
+    roll.selectMode
+      ? "끌어서 여러 노트를 고르세요. 톡 치면 하나씩 넣고 뺍니다."
+      : "고르기를 껐습니다.",
+  );
+});
+
+deleteBtn.addEventListener("click", () => {
+  const track = project.tracks[panel.activeTrack];
+  const ids = new Set(roll.selectedNotes().map((n) => n.id));
+  if (!track || ids.size === 0) return;
+  history.begin();
+  const removed = deleteSelected(track, ids);
+  history.commit();
+  refreshHistoryButtons();
+  roll.clearSelection();
+  scheduler.invalidate();
+  roll.render();
+  showStatus(`${removed}개 음을 지웠습니다 (↶ 로 되돌릴 수 있습니다)`);
+});
 
 /**
  * 무엇을 복사할지.
@@ -319,8 +367,24 @@ function copyRange(): { start: number; end: number } {
 copyBtn.addEventListener("click", () => {
   const track = project.tracks[panel.activeTrack];
   if (!track) return;
-  const { start, end } = copyRange();
-  const copied = copyRegion(track, start, end);
+  // 고른 게 있으면 그게 우선이다. 일부러 골라 놓고 복사를 눌렀는데 엉뚱한
+  // 마디가 복사되면 그것만큼 황당한 게 없다.
+  const picked = roll.selectedNotes();
+  let copied: Clipboard;
+  let end: number;
+  if (picked.length > 0) {
+    const box = boxFrom(
+      { beat: Math.min(...picked.map((n) => n.start)), pitch: 0 },
+      { beat: Math.max(...picked.map((n) => n.start + n.length)), pitch: 0 },
+    );
+    const range = selectionRange(box, picked);
+    copied = copyNotes(picked, range.start, range.end);
+    end = range.end;
+  } else {
+    const r = copyRange();
+    copied = copyRegion(track, r.start, r.end);
+    end = r.end;
+  }
   if (copied.notes.length === 0) {
     showStatus("복사할 노트가 없습니다. 루프 구간을 잡거나 노트가 있는 마디로 옮겨 주세요.", "error");
     return;
@@ -488,10 +552,17 @@ window.addEventListener("keydown", (e) => {
     for (const id of ["preset-modal", "export-modal", "mixer-modal", "map-modal", "note-modal"]) {
       document.getElementById(id)?.classList.add("hidden");
     }
+    roll.clearSelection();
+  }
+  // 고른 것을 Delete 로도 지운다. 폰에는 없는 키지만 PC 에서는 이게 자연스럽다.
+  if ((e.key === "Delete" || e.key === "Backspace") && roll.selectedCount > 0) {
+    e.preventDefault();
+    deleteBtn.click();
   }
 });
 
 refreshHistoryButtons();
+refreshSelection(0);
 mixerState.apply(project, mixer);
 
 // 폰에서 와이파이로 붙었을 때 미리 알려 준다. 사운드폰트를 넣어 보고 나서

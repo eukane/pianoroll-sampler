@@ -51,6 +51,9 @@ export const C = {
   playhead: "#ff6b6b",
   loop: "rgba(120, 160, 255, 0.13)",
   loopEdge: "#6f8fff",
+  // 고르기 상자. 루프와 색을 갈랐다 — 둘 다 파랗게 두면 무엇을 잡았는지 모른다.
+  selectBox: "rgba(255, 212, 121, 0.16)",
+  selectEdge: "#ffd479",
   keyWhite: "#e8eaf0",
   keyBlack: "#2a2f3a",
   keyLine: "#0d0f14",

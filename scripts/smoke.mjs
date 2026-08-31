@@ -7,6 +7,7 @@
  *   · 탭으로 노트가 찍히고 그리드에 붙는가
  *   · 몸통 드래그 = 이동, 오른쪽 끝 드래그 = 길이 (서로 안 잡아먹는가)
  *   · 천천히 눌러도 안 지워지고 세부 설정 창이 열리는가
+ *   · 상자를 끌어 여러 노트를 고르고, 고른 것만 지우고 복사할 수 있는가
  *   · 재생 헤드가 BPM 에 맞는 속도로 나아가는가
  *   · 루프 구간을 벗어나지 않고 되돌아오는가
  *   · SF2 를 읽고 프리셋 목록·검색이 되는가
@@ -2062,6 +2063,146 @@ check("zip 안의 WAV 를 꺼내 실제로 부른다", zipSang.peak > 0.02, zipS
 check("zip 안의 주파수표를 부를 때 꺼내 음정을 맞춘다",
   zipSang.pitches.every((p, i) => Math.abs(p - [62, 64, 65][i]) < 0.5),
   { 잰음정: zipSang.pitches, 기대: [62, 64, 65] });
+
+// ---- 상자로 여러 노트 고르기 ----
+//
+// 손가락으로 상자를 그리는 부분은 순수 함수로 못 본다 (고르는 규칙 자체는
+// npm run select 가 브라우저 없이 19가지를 본다). 여기서는 **진짜 터치로**
+// 끌어서, 화면에 보이는 것이 실제로 골라지는지만 확인한다.
+await page.reload({ waitUntil: "networkidle" });
+await page.locator("#unlock").tap();
+await page.waitForTimeout(300);
+
+// 한 트랙에 두 줄로 노트를 놓는다. 위 줄만 상자로 고를 것이다.
+await page.evaluate(() => {
+  const app = window.__app, r = app.roll;
+  r.scrollX = 0;
+  r.scrollToPitch(64);
+  const t = app.project.tracks[0];
+  t.notes.length = 0;
+  for (let i = 0; i < 4; i += 1) {
+    t.notes.push({ id: "hi" + i, pitch: 67, start: i, length: 1, velocity: 100 });
+    t.notes.push({ id: "lo" + i, pitch: 55, start: i, length: 1, velocity: 100 });
+  }
+  app.project.bars = 4;
+  app.scheduler.invalidate();
+  r.render();
+});
+
+const selBox = await page.locator("#roll").boundingBox();
+const pt = async (beat, pitch) => await page.evaluate(([b, p]) => {
+  const r = window.__app.roll;
+  return { x: 46 + b * r.pxPerBeat - r.scrollX, y: 36 + (127 - p) * r.keyHeight - r.scrollY + r.keyHeight / 2 };
+}, [beat, pitch]);
+
+// 고르기를 켜기 전에는 격자 드래그가 화면 밀기여야 한다 (기존 동작 유지).
+{
+  const a = await pt(0.5, 67);
+  const scrollBefore = await page.evaluate(() => window.__app.roll.scrollX);
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: selBox.x + a.x, y: selBox.y + a.y + 60 }] });
+  await page.waitForTimeout(60);
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: selBox.x + a.x - 90, y: selBox.y + a.y + 60 }] });
+  await page.waitForTimeout(60);
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+  await page.waitForTimeout(200);
+  const scrollAfter = await page.evaluate(() => window.__app.roll.scrollX);
+  check("고르기가 꺼져 있으면 격자 드래그는 화면 밀기다",
+    scrollAfter > scrollBefore, { 전: scrollBefore, 후: scrollAfter });
+  await page.evaluate(() => { window.__app.roll.scrollX = 0; window.__app.roll.render(); });
+}
+
+await page.locator("#select-mode").tap();
+await page.waitForTimeout(150);
+
+// 위 줄(67)만 감싸는 상자를 끈다.
+{
+  const a = await pt(0.2, 69);
+  const b = await pt(2.8, 66);
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: selBox.x + a.x, y: selBox.y + a.y }] });
+  await page.waitForTimeout(60);
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: selBox.x + (a.x + b.x) / 2, y: selBox.y + (a.y + b.y) / 2 }] });
+  await page.waitForTimeout(60);
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: selBox.x + b.x, y: selBox.y + b.y }] });
+  await page.waitForTimeout(60);
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+  await page.waitForTimeout(250);
+}
+const picked = await page.evaluate(() => ({
+  ids: window.__app.roll.selectedNotes().map((n) => n.id).sort(),
+  del: document.getElementById("delete-selected").textContent,
+  disabled: document.getElementById("delete-selected").disabled,
+  scrollX: window.__app.roll.scrollX,
+}));
+check("끌면 상자 안의 노트가 골라진다",
+  JSON.stringify(picked.ids) === JSON.stringify(["hi0", "hi1", "hi2"]), picked.ids);
+check("고르는 중에는 화면이 밀리지 않는다", picked.scrollX === 0, picked.scrollX);
+check("지우기 버튼에 고른 개수가 보인다", picked.del.includes("3") && !picked.disabled, picked);
+
+// 톡 치면 하나씩 넣고 뺀다 — 하나만 빼려고 상자를 다시 그리는 건 고역이다.
+{
+  const a = await pt(0.5, 67);
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: selBox.x + a.x, y: selBox.y + a.y }] });
+  await page.waitForTimeout(120);
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+  await page.waitForTimeout(200);
+}
+check("톡 치면 그 노트를 뺀다",
+  (await page.evaluate(() => window.__app.roll.selectedNotes().length)) === 2);
+
+// 고른 것만 지운다.
+const beforeDel = await page.evaluate(() => window.__app.project.tracks[0].notes.length);
+await page.locator("#delete-selected").tap();
+await page.waitForTimeout(250);
+const afterDel = await page.evaluate(() => ({
+  n: window.__app.project.tracks[0].notes.length,
+  ids: window.__app.project.tracks[0].notes.map((x) => x.id).sort(),
+  disabled: document.getElementById("delete-selected").disabled,
+}));
+check("고른 것만 지워진다", beforeDel - afterDel.n === 2, { 전: beforeDel, 후: afterDel.n });
+check("안 고른 노트는 남는다", afterDel.ids.filter((x) => x.startsWith("lo")).length === 4, afterDel.ids);
+check("지운 뒤 버튼이 다시 꺼진다", afterDel.disabled);
+// 실수로 지웠어도 되돌릴 수 있어야 한다. 여러 개를 한꺼번에 지우는 기능이라
+// 되돌리기가 없으면 무섭다.
+await page.locator("#undo").tap();
+await page.waitForTimeout(250);
+check("한 번 되돌리면 지운 것이 다 돌아온다",
+  (await page.evaluate(() => window.__app.project.tracks[0].notes.length)) === beforeDel);
+
+// 고른 것을 복사해서 붙여넣기 — 코드 진행 반복이 목적이다.
+await page.evaluate(() => {
+  const app = window.__app;
+  app.project.tracks[0].notes.length = 0;
+  // 화음 하나: 도·미·솔 을 0박에
+  [60, 64, 67].forEach((p, i) => app.project.tracks[0].notes.push(
+    { id: "ch" + i, pitch: p, start: 0, length: 2, velocity: 100 }));
+  app.roll.render();
+});
+{
+  const a = await pt(-0.2, 69);
+  const b = await pt(2.2, 58);
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: selBox.x + Math.max(48, a.x), y: selBox.y + a.y }] });
+  await page.waitForTimeout(60);
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: selBox.x + b.x, y: selBox.y + b.y }] });
+  await page.waitForTimeout(60);
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+  await page.waitForTimeout(250);
+}
+check("화음 세 음이 한 번에 골라진다",
+  (await page.evaluate(() => window.__app.roll.selectedNotes().length)) === 3);
+await page.locator("#copy").tap();
+await page.waitForTimeout(200);
+await page.locator("#paste").tap();
+await page.waitForTimeout(200);
+await page.locator("#paste").tap();
+await page.waitForTimeout(250);
+const chords = await page.evaluate(() => {
+  const ns = window.__app.project.tracks[0].notes;
+  const starts = [...new Set(ns.map((n) => n.start))].sort((a, b) => a - b);
+  return { n: ns.length, starts };
+});
+// 고른 화음이 그대로 두 번 더 붙어야 한다 — 이게 "코드 진행 반복" 이다.
+check("고른 화음을 붙여넣기 연타로 반복할 수 있다",
+  chords.n === 9 && chords.starts.length === 3, chords);
 
 check("콘솔 오류 없음", errors.length === 0, errors);
 

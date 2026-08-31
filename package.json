@@ -27,7 +27,8 @@
     "oto": "node scripts/oto-test.mjs",
     "gen-voicebank": "node scripts/gen-voicebank.mjs",
     "gen-voicezip": "node scripts/gen-voicezip.mjs",
-    "zip": "node scripts/zip-test.mjs"
+    "zip": "node scripts/zip-test.mjs",
+    "select": "node scripts/selection-test.mjs"
   },
   "devDependencies": {
     "@vitejs/plugin-basic-ssl": "^1.2.0",
