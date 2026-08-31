@@ -6,7 +6,7 @@
  *   · 첫 터치 전 오디오 잠금 안내가 뜨고, 탭하면 실제로 풀리는가
  *   · 탭으로 노트가 찍히고 그리드에 붙는가
  *   · 몸통 드래그 = 이동, 오른쪽 끝 드래그 = 길이 (서로 안 잡아먹는가)
- *   · 길게 누르면 지워지는가
+ *   · 천천히 눌러도 안 지워지고 세부 설정 창이 열리는가
  *   · 재생 헤드가 BPM 에 맞는 속도로 나아가는가
  *   · 루프 구간을 벗어나지 않고 되돌아오는가
  *   · SF2 를 읽고 프리셋 목록·검색이 되는가
@@ -28,7 +28,7 @@
  *   · 노트를 톡 치면 꾸밈 창이 열리고, 고른 게 그 음에 남는가
  *     (오른쪽 끝을 쳐도 · 사람 손가락처럼 천천히 흔들리게 쳐도)
  *   · 손가락이 흔들려도(12px) 탭으로 쳐 주는가 — **진짜 터치 이벤트로** 확인
- *   · 남의 트랙 노트를 눌러도 작업 트랙이 안 바뀌고 엉뚱한 노트가 안 찍히는가
+ *   · 다른 트랙에 노트가 있는 자리에도 노트를 찍을 수 있는가 (노래에 필요)
  *   · ⏮ 이 재생 위치를 맨 앞으로 되돌리는가 (재생 중에 눌러도 버튼이 안 뒤집히는가)
  *   · 렌더 경로가 둘로 갈리는데 서로 정렬돼 있는가
  *   · 재생에서 사운드폰트가 임시 신스와 같은 시각에 울리는가 (워크렛 시계 보정)
@@ -145,15 +145,32 @@ check(
   { afterMove, afterResize },
 );
 
-// ------------------------------------------------------------ 길게 눌러 삭제
+// ------------------------------------------------- 천천히 눌러도 안 지워진다
+//
+// 예전에는 480ms 를 넘기면 노트가 지워졌다. 그런데 노트를 톡 치면 세부 설정
+// 창이 열린다. 둘 사이에 있는 건 **누르고 있던 시간뿐**이라, 폰에서 작은
+// 노트를 정확히 누르려고 조금 오래 잡고 있으면 창이 열리는 대신 노트가
+// 사라졌다. 사용자 말 그대로: "세부 설정 창이 뜨는 경우도 있고 지워지는
+// 경우도 있어."
+//
+// 길게 눌러 삭제를 없앴다. 지우기는 그 창 안의 🗑 버튼이다.
 const countBefore = await page.evaluate(() => window.__app.project.tracks[0].notes.length);
 const p2 = await posOf(notes[2].id);
 await page.mouse.move(box.x + p2.left + 8, box.y + p2.y);
 await page.mouse.down();
 await page.waitForTimeout(700);
 await page.mouse.up();
+await page.waitForTimeout(200);
 const countAfter = await page.evaluate(() => window.__app.project.tracks[0].notes.length);
-check("길게 누르면 노트가 지워진다", countAfter === countBefore - 1, { countBefore, countAfter });
+check("700ms 눌러도 노트가 안 지워진다", countAfter === countBefore, { countBefore, countAfter });
+// 창이 안 열렸을 때 여기서 멈추면 뒤 검사가 통째로 안 돈다. 실패로만 남긴다.
+const slowOpened = await page.evaluate(
+  () => !document.getElementById("note-modal").classList.contains("hidden"));
+check("대신 세부 설정 창이 열린다", slowOpened);
+if (slowOpened) {
+  await page.locator("#note-close").click();
+  await page.waitForTimeout(150);
+}
 
 // -------------------------------------------------- 재생 헤드가 BPM 대로 간다
 await page.evaluate(() => {
@@ -1657,16 +1674,17 @@ check(
   demoSound,
 );
 
-// ---- 남의 트랙 노트를 눌렀을 때 ----
+// ---- 다른 트랙에 노트가 있는 자리에 찍기 ----
 //
-// 여기가 실제로 안 되던 자리다. 앞의 꾸밈 검사는 **활성 트랙에 손으로 놓은
-// 노트 하나**를 눌렀다 — 그래서 통과했다. 그런데 사람이 실제로 여는 건
-// 트랙이 서넛인 예제 곡이고, 화면에 흐리게 보이는 남의 트랙 노트를 누르면
+// 한때 여기를 막아 뒀다 — 다른 트랙 노트를 누르면 "그 노트는 3번 트랙에
+// 있습니다" 하고 아무 일도 안 했다. 그런데 그러면 **다른 트랙에 노트가
+// 있는 자리에는 노트를 찍을 수가 없다.**
 //
-//   · 창이 안 열리고
-//   · 그 자리에 활성 트랙의 새 노트가 **조용히 찍혔다**
+// 노래에서는 그게 치명적이다. 반주가 깔린 자리에 가사를 얹는 게 노래인데
+// 반주 노트가 먼저 있으면 그 위에 음을 못 놓는다. 트랙이 여럿인 곡은
+// 대부분의 자리가 그렇다. 트랙은 서로 독립이고 겹쳐 찍는 게 정상이다.
 //
-// 검사가 진짜 상황을 안 밟고 있었다. 예제 곡을 열어 놓고 확인한다.
+// 작업 트랙을 자동으로 갈아타지 않는 것만 그대로다.
 const otherTrack = await page.evaluate(() => {
   const app = window.__app, r = app.roll;
   r.scrollX = 0;
@@ -1695,15 +1713,17 @@ const afterOther = await page.evaluate(() => ({
   status: document.getElementById("status")?.textContent ?? "",
 }));
 check(
-  "남의 트랙 노트를 눌렀을 때 엉뚱한 노트가 찍히지 않는다",
-  JSON.stringify(afterOther.counts) === JSON.stringify(otherTrack.counts),
+  "다른 트랙에 노트가 있는 자리에도 노트가 찍힌다",
+  afterOther.counts[0] === otherTrack.counts[0] + 1,
   { 전: otherTrack.counts, 후: afterOther.counts },
 );
+// 남의 트랙 노트는 건드리지 않는다. 겹쳐 찍는 것이지 옮기는 게 아니다.
+check("남의 트랙 노트는 그대로 있다",
+  afterOther.counts[1] === otherTrack.counts[1],
+  { 전: otherTrack.counts[1], 후: afterOther.counts[1] });
 // 작업하던 트랙을 마음대로 바꾸지 않는다. 바꾸면 다음에 찍는 노트가 엉뚱한
 // 데로 간다 — 사용자가 그러지 말라고 했고, 그게 맞다.
 check("작업하던 트랙이 안 바뀐다", afterOther.active === 0, afterOther.active);
-// 대신 조용히 아무 일도 안 하지는 않는다. 왜 반응이 없는지 말해 준다.
-check("왜 반응이 없는지 알려 준다", afterOther.status.includes("트랙"), afterOther.status);
 if (afterOther.opened) {
   await page.locator("#note-close").click();
   await page.waitForTimeout(150);

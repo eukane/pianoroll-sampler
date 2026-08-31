@@ -21,7 +21,6 @@ export const MAX_KEY_HEIGHT = 40;
 export const EDGE_GRAB = 20;
 export const TAP_SLOP = 8; // 이만큼 움직이면 탭이 아니라 드래그
 export const TAP_MS = 400;
-export const LONG_PRESS_MS = 480;
 
 /**
  * 빈 격자를 눌렀을 때 소리를 내기까지 기다리는 시간(ms).

@@ -8,8 +8,7 @@
  *   건반 누르고 있기 누른 만큼 소리 (위아래로 밀면 음이 따라온다)
  *   노트 드래그    옮기기 (그리드에 붙음)
  *   오른쪽 끝 드래그 길이 조절
- *   노트 탭        꾸밈 고르기 (시김새) — 남의 트랙 노트면 그 트랙으로 갈아탄다
- *   길게 누르기    삭제
+ *   노트 탭        꾸밈·가사 고르기 (지우기도 그 창 안에 있다)
  *   빈 곳 드래그   화면 이동
  *   두 손가락 핀치 가로 확대 / 세로 이동
  *   위쪽 눈금 탭   재생 위치 / 눈금 드래그 = 루프 구간
@@ -27,7 +26,6 @@ import {
   C,
   EDGE_GRAB,
   GUTTER,
-  LONG_PRESS_MS,
   MAX_KEY_HEIGHT,
   MAX_PX_PER_BEAT,
   MIN_KEY_HEIGHT,
@@ -80,7 +78,6 @@ export type PianoRollCallbacks = {
   /** 노트를 톡 쳤다 — 꾸밈을 고르는 창을 열라는 뜻. */
   onNoteTap: (note: Note) => void;
   /** 활성 트랙이 아닌 노트를 만졌다 — 왜 반응이 없는지 알려 달라. */
-  onForeignNote: (trackIndex: number) => void;
   onSeek: (beat: number) => void;
   onLoopChange: (startBeat: number, endBeat: number) => void;
   getPlayheadBeat: () => number;
@@ -101,7 +98,6 @@ export class PianoRoll {
 
   private pointers = new Map<number, Ptr>();
   private drag: Drag = { mode: "none" };
-  private longPressTimer: number | null = null;
   private previewTimer: number | null = null;
   /** 지금 미리듣기가 붙잡혀 있는가. 손을 뗄 때 끝내야 한다. */
   private previewHeld = false;
@@ -433,15 +429,21 @@ export class PianoRoll {
   }
 
   /**
-   * 그 자리에 있는 노트. **활성 트랙을 먼저 보고, 없으면 다른 트랙도 본다.**
+   * 그 자리에 있는 노트. **작업 중인 트랙만 본다.**
    *
-   * 예전에는 활성 트랙만 봤다. 그래서 화면에 흐리게 보이는 남의 트랙 노트를
-   * 누르면 아무 일도 안 일어나고, 대신 그 자리에 **활성 트랙의 새 노트가 조용히
-   * 찍혔다.** 예제 곡처럼 트랙이 여럿이면 대부분의 탭이 그 경우라 "눌러도
-   * 안 된다" 가 된다. 실제로 그렇게 됐다.
+   * 한때 다른 트랙의 노트까지 잡아서, 거기를 누르면 "그 노트는 3번 트랙에
+   * 있습니다" 하고 아무 일도 안 하게 해 뒀다. 그런데 그러면 **다른 트랙에
+   * 노트가 있는 자리에는 노트를 찍을 수가 없다.**
    *
-   * 눈에 보이는 걸 눌렀으면 그게 잡혀야 한다. 다른 트랙이면 그 트랙으로
-   * 갈아탄다 (조용히 갈아타지 않고 화면에 알린다 — onTrackSwitch).
+   * 노래에서는 그게 치명적이다. 반주가 있는 자리에 가사를 얹는 게 노래인데,
+   * 반주 노트가 먼저 있으면 그 위에 음을 못 놓는다. 트랙이 여럿인 곡은
+   * 대부분의 자리가 그렇다.
+   *
+   * 트랙은 서로 독립이다. 겹쳐 찍는 게 정상이고, 그게 화음이고 화성이다.
+   * 다른 트랙 노트는 배경 그림으로만 두고 손가락은 통과시킨다.
+   *
+   * (작업 트랙을 자동으로 갈아타지는 않는다 — 그건 따로 물린 적이 있다.
+   * 손가락 한 번에 트랙이 바뀌면 다음에 찍는 노트가 엉뚱한 데로 간다.)
    */
   private noteAt(x: number, y: number): { note: Note; trackIndex: number } | null {
     const project = this.getProject();
@@ -461,13 +463,7 @@ export class PianoRoll {
     };
 
     const mine = inTrack(this.activeTrack);
-    if (mine) return { note: mine, trackIndex: this.activeTrack };
-    for (let t = 0; t < project.tracks.length; t += 1) {
-      if (t === this.activeTrack) continue;
-      const found = inTrack(t);
-      if (found) return { note: found, trackIndex: t };
-    }
-    return null;
+    return mine ? { note: mine, trackIndex: this.activeTrack } : null;
   }
 
   /**
@@ -494,7 +490,6 @@ export class PianoRoll {
     this.pointers.set(e.pointerId, { x: p.x, y: p.y, downX: p.x, downY: p.y, downAt: performance.now() });
 
     if (this.pointers.size === 2) {
-      this.cancelLongPress();
       // 두 손가락 = 확대. 첫 손가락으로 예약해 둔 소리를 취소한다.
       this.cancelPreview();
       this.beginPinch();
@@ -530,16 +525,6 @@ export class PianoRoll {
     const found = this.noteAt(p.x, p.y);
     if (found) {
       const hit = found.note;
-      // 남의 트랙 노트면 **아무것도 하지 않는다.** 작업하던 트랙을 마음대로
-      // 바꾸면 다음에 찍는 노트가 엉뚱한 데로 간다. 다만 그 자리에 새 노트를
-      // 찍지도 않는다 — 예전에는 그래서 남의 노트 위에 노트가 조용히 겹쳤다.
-      // 왜 반응이 없는지는 말해 준다.
-      if (found.trackIndex !== this.activeTrack) {
-        this.cb.onForeignNote(found.trackIndex);
-        this.drag = { mode: "none" };
-        return;
-      }
-
       // 끄는 동안 프레임마다 찍으면 되돌리기가 1픽셀씩 돌아간다.
       // 손가락을 대는 이 순간의 상태만 쌓는다.
       this.cb.onBeforeChange();
@@ -555,7 +540,6 @@ export class PianoRoll {
           startBeat: hit.start,
           moved: false,
         };
-        this.startLongPress(hit);
       }
       return;
     }
@@ -588,11 +572,8 @@ export class PianoRoll {
     ptr.y = p.y;
 
     const movedFar = Math.hypot(p.x - ptr.downX, p.y - ptr.downY) > TAP_SLOP;
-    if (movedFar) {
-      this.cancelLongPress();
-      // 화면을 미는 중이다 — 노트를 찍는 게 아니니 소리를 내지 않는다.
-      if (this.drag.mode === "pan") this.cancelPreview();
-    }
+    // 화면을 미는 중이다 — 노트를 찍는 게 아니니 소리를 내지 않는다.
+    if (movedFar && this.drag.mode === "pan") this.cancelPreview();
 
     switch (this.drag.mode) {
       case "pinch":
@@ -661,7 +642,6 @@ export class PianoRoll {
   private onUp = (e: PointerEvent): void => {
     const ptr = this.pointers.get(e.pointerId);
     this.pointers.delete(e.pointerId);
-    this.cancelLongPress();
     // 손을 뗐으니 붙잡고 있던 소리를 끝낸다. 예약만 해 두고 아직 안 낸
     // 소리라면 그대로 취소한다.
     this.cancelPreview();
@@ -773,23 +753,6 @@ export class PianoRoll {
     this.clampScroll();
   }
 
-  private startLongPress(note: Note): void {
-    this.cancelLongPress();
-    this.longPressTimer = window.setTimeout(() => {
-      const track = this.track;
-      if (!track) return;
-      const i = track.notes.findIndex((n) => n.id === note.id);
-      if (i >= 0) {
-        track.notes.splice(i, 1);
-        navigator.vibrate?.(15);
-        this.cb.onEdit();
-        this.cb.onAfterChange();
-      }
-      this.draggingNoteId = null;
-      this.drag = { mode: "none" };
-    }, LONG_PRESS_MS);
-  }
-
   /** 소리를 내고 손을 뗄 때까지 붙잡는다. */
   private holdPreview(pitch: number): void {
     this.previewHeld = true;
@@ -805,13 +768,6 @@ export class PianoRoll {
     if (this.previewHeld) {
       this.previewHeld = false;
       this.cb.onPreviewRelease();
-    }
-  }
-
-  private cancelLongPress(): void {
-    if (this.longPressTimer !== null) {
-      clearTimeout(this.longPressTimer);
-      this.longPressTimer = null;
     }
   }
 
