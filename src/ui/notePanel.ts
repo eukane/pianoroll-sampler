@@ -21,6 +21,10 @@ import type { Note, Project } from "../model/types";
 import { amountOf, DEFAULT_AMOUNT, ORNAMENTS, type Ornament } from "../model/ornament";
 
 export type NotePanelCallbacks = {
+  /** 지금 트랙이 노래하는 트랙인가. 맞으면 가사칸을 띄운다. */
+  isSinging: () => boolean;
+  /** 이 음원이 낼 수 있는 소리인가. 아니면 사용자에게 알려 준다. */
+  canSing: (lyric: string) => boolean;
   onBeforeChange: () => void;
   onAfterChange: () => void;
   /** 값이 바뀌었다 — 예약을 다시 하고 화면을 다시 그려 달라. */
@@ -80,6 +84,9 @@ export class NotePanel {
     this.body.textContent = "";
     this.title.textContent = `${nameOf(note.pitch)} · ${beatText(note.length)}`;
 
+    // 노래하는 트랙이면 가사가 제일 위다. 꾸밈보다 먼저 정할 것이다.
+    if (this.cb.isSinging()) this.body.appendChild(this.lyricInput(note));
+
     const row = document.createElement("div");
     row.className = "ornaments";
     for (const o of ORNAMENTS) {
@@ -124,6 +131,58 @@ export class NotePanel {
 
     foot.append(play, del);
     this.body.appendChild(foot);
+  }
+
+  /**
+   * 노랫말 한 글자.
+   *
+   * 적자마자 들려준다 — 「か」와 「が」를 글자로 구분하는 것보다 귀로 듣는 게
+   * 빠르다. 음원에 없는 글자면 **그 자리에서 알려 준다.** 소리만 안 나면
+   * 오타인지 음원에 없는 건지 알 수가 없다.
+   */
+  private lyricInput(note: Note): HTMLElement {
+    const wrap = document.createElement("label");
+    wrap.className = "lyricrow";
+
+    const text = document.createElement("span");
+    text.textContent = "가사";
+
+    const input = document.createElement("input");
+    input.id = "note-lyric";
+    input.type = "text";
+    input.value = note.lyric ?? "";
+    input.placeholder = "か";
+    input.autocomplete = "off";
+
+    const mark = document.createElement("i");
+    const show = () => {
+      const v = input.value.trim();
+      if (!v) {
+        mark.textContent = "비어 있음";
+        mark.className = "";
+        return;
+      }
+      const okay = this.cb.canSing(v);
+      mark.textContent = okay ? "✓ 낼 수 있음" : "이 음원에 없는 소리";
+      mark.className = okay ? "" : "bad";
+    };
+    show();
+
+    input.addEventListener("input", () => {
+      const v = input.value.trim();
+      if (v) note.lyric = v;
+      else delete note.lyric;
+      show();
+      this.cb.onEdit();
+    });
+    input.addEventListener("pointerdown", () => this.cb.onBeforeChange());
+    input.addEventListener("change", () => {
+      this.cb.onAfterChange();
+      if (this.cb.canSing(input.value.trim())) this.cb.onAudition(note);
+    });
+
+    wrap.append(text, input, mark);
+    return wrap;
   }
 
   private choose(o: Ornament): void {

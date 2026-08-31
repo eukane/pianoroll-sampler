@@ -40,6 +40,7 @@ import { Mixer } from "../audio/mixer";
 import { MixerState } from "../audio/mixerState";
 import { OscInstrument } from "../audio/oscInstrument";
 import { FolderSampler, type SampleFolder } from "../audio/folderSampler";
+import type { VoiceBank } from "../audio/voicebank";
 import { projectToMidi } from "./midi";
 
 export const SAMPLE_RATE = 44100;
@@ -74,13 +75,18 @@ export async function renderProject(
   getSoundBank: SoundBankSource,
   folders: SampleFolder[] = [],
   mixerState: MixerState = new MixerState(),
+  /** 노래하는 음원들. 없으면 노래 트랙은 조용히 빠지는 게 아니라 소리가 안 난다. */
+  voices: Map<string, VoiceBank> = new Map(),
 ): Promise<AudioBuffer> {
   const frames = Math.max(1, Math.ceil(projectSeconds(project) * SAMPLE_RATE));
   const soundBank = await getSoundBank();
 
-  const isFolderTrack = (t: Track) => t.source.kind === "sampleFolder";
-  const sfTracks = project.tracks.filter((t) => !isFolderTrack(t));
-  const localTracks = project.tracks.filter(isFolderTrack);
+  // 여기서 세 갈래로 갈린다.
+  //   · 사운드폰트 → MIDI 로 만들어 워크렛 시퀀서에 넘긴다
+  //   · 폴더 샘플러 · 임시 신스 · **노래** → 노트를 직접 절대 시각으로 꽂는다
+  const isLocal = (t: Track) => t.source.kind === "sampleFolder" || t.source.kind === "voice";
+  const sfTracks = project.tracks.filter((t) => !isLocal(t));
+  const localTracks = project.tracks.filter(isLocal);
 
   const passes: AudioBuffer[] = [];
 
@@ -91,7 +97,7 @@ export async function renderProject(
     if (soundBank) {
       await renderWithSoundFont(ctx, part, project, soundBank, mixerState);
     } else {
-      renderLocally(ctx, part, project, [], mixerState);
+      renderLocally(ctx, part, project, [], mixerState, voices);
     }
     passes.push(await ctx.startRendering());
   }
@@ -99,7 +105,7 @@ export async function renderProject(
   // 샘플 폴더 트랙
   if (localTracks.length > 0) {
     const ctx = new OfflineAudioContext(2, frames, SAMPLE_RATE);
-    renderLocally(ctx, { ...project, tracks: localTracks }, project, folders, mixerState);
+    renderLocally(ctx, { ...project, tracks: localTracks }, project, folders, mixerState, voices);
     passes.push(await ctx.startRendering());
   }
 
@@ -194,6 +200,7 @@ function renderLocally(
   full: Project,
   folders: SampleFolder[],
   mixerState: MixerState,
+  voices: Map<string, VoiceBank>,
 ): void {
   const master = ctx.createGain();
   master.gain.value = 0.9;
@@ -217,6 +224,25 @@ function renderLocally(
       muted: false,
       send: track.reverbSend ?? 0,
     });
+
+    // 노래하는 트랙은 노트 하나씩 꽂을 수 없다. 줄 통째로 넘긴다.
+    if (track.source.kind === "voice") {
+      const bank = voices.get(track.source.bankId);
+      if (!bank) continue;
+      bank.sing(
+        ctx,
+        mixer.input(channel),
+        track.notes.map((n) => ({
+          id: n.id,
+          pitch: n.pitch,
+          startSec: n.start * secPerBeat,
+          lengthSec: Math.max(0.02, n.length * secPerBeat),
+          lyric: n.lyric ?? "",
+        })),
+        0,
+      );
+      continue;
+    }
 
     let instrument: OscInstrument | FolderSampler = osc;
     if (track.source.kind === "sampleFolder") {

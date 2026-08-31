@@ -62,6 +62,16 @@ export class ExportPanel {
     });
   }
 
+  /**
+   * 곡에 적힌 노랫말을 미리 풀어 둔다.
+   *
+   * 디코딩은 비동기라 렌더 도중에는 못 한다. 빼먹으면 노래 트랙만 조용히
+   * 비어서 나온다 — 왜 안 들리는지 알 수가 없는 종류의 실패다.
+   */
+  private prepareVoices(project: Project): Promise<void> {
+    return this.registry.prepareVoices(project.tracks);
+  }
+
   /** 렌더 한 번마다 사운드폰트를 새로 읽어 온다 (export/render.ts 헤더 참고). */
   private bankSource = (): Promise<ArrayBuffer | null> => this.registry.soundfont.bankBuffer();
 
@@ -96,7 +106,15 @@ export class ExportPanel {
       const seconds = projectSeconds(project);
       this.cb.onStatus(`WAV 만드는 중… (${seconds.toFixed(1)}초 분량)`);
       await nextFrame();
-      const buffer = await renderProject(project, this.bankSource, this.registry.folders.list, this.mixerState);
+      // 노랫말은 렌더 직전에 풀어 둔다. 안 그러면 노래 트랙만 조용히 빈다.
+      await this.prepareVoices(project);
+      const buffer = await renderProject(
+        project,
+        this.bankSource,
+        this.registry.folders.list,
+        this.mixerState,
+        this.registry.voices,
+      );
       download(audioBufferToWav(buffer), `${this.baseName()}.wav`);
 
       // 안내는 **저장 메시지보다 나중에** 낸다.
@@ -165,6 +183,8 @@ export class ExportPanel {
           onlyTrack(project, index),
           this.bankSource,
           this.registry.folders.list,
+          this.mixerState,
+          this.registry.voices,
         );
 
         const safe = track.name.replace(/[^\w가-힣 -]/g, "").trim() || `track${index + 1}`;

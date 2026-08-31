@@ -59,12 +59,13 @@ AudioWorklet 이 보안 컨텍스트(https 나 localhost)에서만 동작하는�
 
 ```bash
 npm run build      # 타입 검사 + 프로덕션 빌드
-npm run smoke      # 브라우저 자동 점검 105가지 (dev 서버를 띄워 둔 상태에서)
+npm run smoke      # 브라우저 자동 점검 114가지 (dev 서버를 띄워 둔 상태에서)
 npm run midi       # MIDI 왕복 점검 20가지 (브라우저 없이, 1초)
 npm run names      # 샘플 파일명 읽기 점검 19가지 (브라우저 없이)
-npm run audit      # 고치다 옆엣것을 깨뜨리지 않았는지 45가지 (브라우저 없이)
+npm run audit      # 고치다 옆엣것을 깨뜨리지 않았는지 51가지 (브라우저 없이)
 npm run clipboard  # 복사·붙여넣기 점검 15가지 (브라우저 없이)
 npm run oto        # UTAU 음원 읽기·이어붙이기 점검 50가지 (브라우저 없이)
+npm run gen-voicebank  # 시험용 가짜 UTAU 음원 만들기 (smoke 가 자동으로 부른다)
 npm run latency    # 이 기기에서 사운드폰트가 몇 ms 늦는지 실측 (통과/실패 아님)
 ```
 
@@ -72,6 +73,17 @@ npm run latency    # 이 기기에서 사운드폰트가 몇 ms 늦는지 실측
 1.2KB 짜리라 음원을 받지 않아도 프리셋 목록·검색·악기 교체 경로가 전부 돈다.
 
 ## 진행 상황
+
+### 노래하는 트랙 (UTAU 음원) ✅
+
+- **이번에 된 것**: `🎹 악기 → ＋ 노래 음원 넣기` 로 UTAU 음원 폴더를 넣으면
+  그 트랙이 **노래를 부른다.** 노트를 톡 쳐서 가사(「か」「さ」…)를 적는다.
+- **왜 되는가**: UTAU 음원은 암호화가 없다 — WAV 더미 + `oto.ini` 텍스트 한
+  장이다. 이 앱이 이미 갖고 있던 "폴더째로 WAV 읽기" 위에 얹었다.
+- **음원 구하기**: [重音テト 공식 UTAU 음원](https://kasaneteto.jp/utau/) 이
+  무료다. 비상업 범위에서 자유롭게 쓸 수 있고, 상업 이용은 별도 허락이 필요하다.
+- **한계**: SynthV 같은 소리는 안 난다. 이음새가 들리고, 긴 음은 모음을
+  반복해 채우느라 반복 지점이 티날 수 있다. **조교 연습용**이다.
 
 ### 음 하나씩 조교하기 (꾸밈) ✅
 
@@ -200,10 +212,12 @@ src/
   model/     Note · Track · Project (노트는 악기 정보를 갖지 않는다)
              · ornament(음 하나에 붙는 꾸밈 — 시김새)
              · demos(예제 곡 목록) · demoSong(국악풍) · demoEdm(일렉트로닉)
+             · oto(UTAU 원음설정) · frq(녹음된 음정) · phrase(이어붙이기 계획)
   audio/     engine(잠금해제) · scheduler(lookahead) · mixer(트랙별 배선)
              · instrument(인터페이스) · oscInstrument(음원 없을 때)
              · soundfont(SF2 샘플러) · folderSampler(낱개 WAV)
              · reverb(계산으로 만든 울림) · mixerState(뮤트·솔로 판단)
+             · voicebank(UTAU 음원으로 노래하기)
              · vibrato(떨림 — 왜 깊이만 있고 빠르기는 없는지)
              · expression(트랙 기본값 + 음의 꾸밈 = 이 음의 연주법)
              · registry(악기 교체가 일어나는 유일한 지점)

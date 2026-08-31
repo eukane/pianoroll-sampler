@@ -41,6 +41,8 @@
           <button id="export" type="button">💾 내보내기</button>
           <input id="sf-file" type="file" accept=".sf2,.sf3,.dls" hidden />
           <input id="sample-files" type="file" accept="audio/*,.wav" multiple hidden />
+          <!-- UTAU 음원은 폴더 통째로 받는다 (WAV 더미 + oto.ini + 주파수표). -->
+          <input id="voice-files" type="file" webkitdirectory multiple hidden />
           <span class="spacer"></span>
           <label>BPM <input id="bpm" type="number" min="20" max="300" step="1" value="100" /></label>
           <label>마디 <input id="bars" type="number" min="1" max="64" step="1" value="4" /></label>

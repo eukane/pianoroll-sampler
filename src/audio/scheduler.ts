@@ -26,6 +26,8 @@ import type { MixerState } from "./mixerState";
 import { totalBeats } from "../model/project";
 import { assignChannels, channelForTrack } from "../model/channels";
 import { expressionFor } from "./expression";
+import type { SungNote } from "../model/phrase";
+import type { VoiceBank } from "./voicebank";
 
 const TICK_MS = 25;
 const LOOKAHEAD_SEC = 0.12;
@@ -140,6 +142,7 @@ export class Scheduler {
     this.evIdx = this.firstEventAtOrAfter(from);
 
     this.playing = true;
+    this.singVoices(this.startTime, from);
     this.tick();
     this.timer = window.setInterval(() => this.tick(), TICK_MS);
   }
@@ -186,6 +189,10 @@ export class Scheduler {
     this.startTime = this.engine.currentTime - (pos - this.regionStart) * this.secPerBeat;
     this.passBase = this.startTime;
     this.evIdx = this.firstEventAtOrAfter(pos);
+    // 노래는 줄 통째로 예약돼 있다. 걷어내고 지금 위치부터 다시 건다 — 안 그러면
+    // 고치기 전 가사와 고친 가사가 겹쳐 들린다.
+    for (const bank of this.registry.voices.values()) bank.stopAll();
+    this.singVoices(this.engine.currentTime, pos);
   }
 
   /** 지금 재생 헤드가 몇 박에 있는가. */
@@ -208,6 +215,8 @@ export class Scheduler {
     project.tracks.forEach((track, trackIndex) => {
       // 뮤트·솔로 판단은 MixerState 한 곳에서만 한다.
       if (!this.mixerState.isAudible(track)) return;
+      // 노래하는 트랙은 노트 하나씩 예약할 수 없다. 아래 singVoices 가 맡는다.
+      if (track.source.kind === "voice") return;
       for (const n of track.notes) {
         if (n.start >= this.regionEnd) continue;
         if (n.start + n.length <= this.regionStart) continue;
@@ -249,6 +258,8 @@ export class Scheduler {
         }
         this.passBase += this.regionBeats * spb;
         this.evIdx = 0;
+        // 새 회차가 시작된다 — 노래도 그 회차만큼 다시 예약해야 한다.
+        this.singVoices(this.passBase, this.regionStart);
         if (this.passBase > ahead) return;
         continue;
       }
@@ -261,6 +272,66 @@ export class Scheduler {
       this.evIdx += 1;
     }
   }
+
+  /**
+   * 곡에 적힌 노랫말을 미리 풀어 둔다.
+   *
+   * WAV 디코딩은 비동기라 재생 도중에는 못 한다. 그런데 UTAU 음원은 파일이
+   * 백 개가 넘어서 통째로 풀 수도 없다 — **실제로 쓰는 글자만** 재생·렌더
+   * 직전에 푼다. 안 부르면 그냥 소리가 안 나서, 이걸 빼먹으면 조용히 실패한다.
+   */
+  async prepareVoices(): Promise<void> {
+    await this.registry.prepareVoices(this.getProject().tracks);
+  }
+
+  /**
+   * 노래하는 트랙을 **줄 통째로** 예약한다.
+   *
+   * 다른 악기는 25ms 마다 깨어나서 앞으로 120ms 안의 노트를 하나씩 넣는다.
+   * 노래는 그럴 수가 없다 — 한 음의 소리가 앞뒤 음에 달려 있고(선행발성·겹침),
+   * 심지어 **소리가 박보다 먼저 시작**해서 120ms 앞만 봐서는 늦는다.
+   *
+   * 그래서 재생을 시작할 때(그리고 루프가 한 바퀴 돌 때마다) 그 회차의 줄을
+   * 한 번에 예약한다. 노트를 고치면 `invalidate()` 가 걷어내고 다시 건다.
+   *
+   * @param base    이 회차의 0박이 실제로 몇 초인가 (ctx 시각)
+   * @param fromBeat 이 회차에서 어느 박부터 부르는가
+   */
+  private singVoices(base: number, fromBeat: number): void {
+    const project = this.getProject();
+    const spb = this.secPerBeat;
+
+    for (const track of project.tracks) {
+      if (track.source.kind !== "voice") continue;
+      if (!this.mixerState.isAudible(track)) continue;
+      const bank = this.registry.voiceFor(track);
+      if (!bank) continue;
+
+      const notes: SungNote[] = track.notes
+        .filter((n) => n.start >= fromBeat - 1e-6 && n.start < this.regionEnd)
+        .map((n) => ({
+          id: n.id,
+          pitch: n.pitch,
+          startSec: (n.start - this.regionStart) * spb,
+          lengthSec: Math.max(0.02, n.length * spb),
+          lyric: n.lyric ?? "",
+        }));
+      if (notes.length === 0) continue;
+
+      const channel = this.channels[project.tracks.indexOf(track)] ?? 0;
+      this.mixer.set(channel, {
+        volume: track.volume,
+        pan: track.pan,
+        muted: false,
+        send: track.reverbSend ?? 0,
+      });
+      const result = bank.sing(this.engine.ctx, this.mixer.input(channel), notes, base);
+      if (result.missing.length > 0) this.onMissingLyrics?.(result.missing.map((m) => m.lyric));
+    }
+  }
+
+  /** 음원에 없는 글자를 만났다 — 화면이 알려 줘야 한다. 조용히 빼먹지 않는다. */
+  onMissingLyrics: ((lyrics: string[]) => void) | null = null;
 
   private scheduleEvent(ev: Event, when: number): void {
     const project = this.getProject();
@@ -343,6 +414,38 @@ export class Scheduler {
       // 그 사이 다른 건반을 눌렀으면 그건 아직 눌려 있는 것이다. 건드리지 않는다.
       if (this.heldPreview?.token === token) this.endPreview();
     }, MIN_PREVIEW_MS - soundedMs);
+  }
+
+  /**
+   * 노래하는 트랙에서 그 음 하나만 불러 준다.
+   *
+   * 가사를 적자마자 들려주는 자리다. 짧은 음이어도 **최소 0.6초는** 불러야
+   * 「か」인지 「が」인지 구분이 된다 — 노트 길이를 그대로 쓰면 16분음표에서
+   * 자음만 스치고 끝난다.
+   */
+  async previewSing(bank: VoiceBank, note: Note): Promise<void> {
+    const project = this.getProject();
+    const trackIndex = project.tracks.findIndex((t) => t.notes.some((n) => n.id === note.id));
+    const track = project.tracks[Math.max(0, trackIndex)];
+    if (!track) return;
+
+    bank.stopAll();
+    const lyric = note.lyric ?? "";
+    await bank.prepare(this.engine.ctx, [lyric]);
+
+    const channel = assignChannels(project)[Math.max(0, trackIndex)] ?? 0;
+    this.mixer.set(channel, {
+      volume: track.volume,
+      pan: track.pan,
+      muted: false,
+      send: track.reverbSend ?? 0,
+    });
+    bank.sing(
+      this.engine.ctx,
+      this.mixer.input(channel),
+      [{ id: note.id, pitch: note.pitch, startSec: 0, lengthSec: Math.max(0.6, 0.6), lyric }],
+      this.engine.currentTime + 0.02,
+    );
   }
 
   /** 노트를 끌 때처럼 한 번만 들려주면 되는 자리. */

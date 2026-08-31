@@ -33,6 +33,8 @@ export class InstrumentPanel {
   private instrumentBtn: HTMLButtonElement;
   private fileInput: HTMLInputElement;
   private sampleInput: HTMLInputElement;
+  private voiceInput: HTMLInputElement;
+  private voiceSeq = 0;
   private mapModal: HTMLDivElement;
   private query = "";
   private folderSeq = 0;
@@ -51,6 +53,12 @@ export class InstrumentPanel {
     this.instrumentBtn = document.getElementById("instrument") as HTMLButtonElement;
     this.fileInput = document.getElementById("sf-file") as HTMLInputElement;
     this.sampleInput = document.getElementById("sample-files") as HTMLInputElement;
+    this.voiceInput = document.getElementById("voice-files") as HTMLInputElement;
+    this.voiceInput.addEventListener("change", () => {
+      const files = [...(this.voiceInput.files ?? [])];
+      if (files.length > 0) void this.loadVoiceBank(files);
+      this.voiceInput.value = "";
+    });
     this.mapModal = document.getElementById("map-modal") as HTMLDivElement;
 
     this.instrumentBtn.addEventListener("click", () => this.openPicker());
@@ -216,6 +224,41 @@ export class InstrumentPanel {
       (add.querySelector(".pname") as HTMLSpanElement).textContent = "＋ 폴더 넣기 (낱개 WAV)";
       add.addEventListener("click", () => this.sampleInput.click());
       this.listEl.appendChild(add);
+
+      // 노래하는 음원(UTAU). 폴더를 통째로 받는다 — WAV 와 oto.ini 가 짝이라
+      // 파일 몇 개만 골라서는 못 쓴다.
+      const sing = document.createElement("button");
+      sing.type = "button";
+      sing.className = "preset folder";
+      sing.id = "add-voice";
+      sing.innerHTML = '<span class="pname"></span><span class="badge">UTAU</span>';
+      (sing.querySelector(".pname") as HTMLSpanElement).textContent = "＋ 노래 음원 넣기 (UTAU 폴더)";
+      sing.addEventListener("click", () => this.voiceInput.click());
+      this.listEl.appendChild(sing);
+    }
+
+    // 이미 넣어 둔 노래 음원들
+    const cur = this.project.tracks[this.activeTrack]?.source;
+    for (const v of this.registry.voiceList) {
+      if (this.query && !v.name.toLowerCase().includes(this.query)) continue;
+      const row = document.createElement("button");
+      row.type = "button";
+      row.className = "preset folder" + (cur?.kind === "voice" && cur.bankId === v.id ? " current" : "");
+      row.innerHTML = '<span class="pname"></span><span class="pnum"></span>';
+      (row.querySelector(".pname") as HTMLSpanElement).textContent = `🎤 ${v.name}`;
+      (row.querySelector(".pnum") as HTMLSpanElement).textContent = `소리 ${v.sounds}`;
+      row.addEventListener("click", () => {
+        const track = this.project.tracks[this.activeTrack];
+        if (!track) return;
+        track.source = { kind: "voice", bankId: v.id };
+        track.name = v.name;
+        this.cb.onSourceChange();
+        this.renderTracks();
+        this.renderInstrumentButton();
+        this.closePicker();
+        this.cb.onStatus(`${this.activeTrack + 1}번 트랙 → ${v.name} · 노트를 눌러 가사를 적으세요`);
+      });
+      this.listEl.appendChild(row);
     }
 
     const current = this.project.tracks[this.activeTrack]?.source;
@@ -270,6 +313,73 @@ export class InstrumentPanel {
     } catch (err) {
       this.cb.onStatus(
         `샘플을 읽지 못했습니다: ${err instanceof Error ? err.message : String(err)}`,
+        "error",
+      );
+    }
+  }
+
+  /**
+   * UTAU 음원 폴더를 읽는다 (WAV 더미 + oto.ini + 주파수표).
+   *
+   * 폴더를 통째로 받되 **WAV 는 여기서 디코딩하지 않는다.** 음원 하나에 파일이
+   * 백 개가 넘어서, 넣자마자 전부 풀면 폰에서 수백 MB 가 메모리에 올라간다.
+   * 실제로 부르는 글자만 나중에 푼다 (audio/voicebank.ts 의 prepare).
+   */
+  private async loadVoiceBank(files: File[]): Promise<void> {
+    const oto = files.find((f) => f.name.toLowerCase() === "oto.ini");
+    if (!oto) {
+      this.cb.onStatus(
+        "oto.ini 가 없습니다. UTAU 음원 폴더(WAV 와 oto.ini 가 같이 든 폴더)를 골라 주세요.",
+        "error",
+      );
+      return;
+    }
+    // oto.ini 가 든 그 폴더의 파일만 쓴다. 음원에는 하위 폴더가 여럿인 경우가 많다.
+    const dir = (oto as File & { webkitRelativePath?: string }).webkitRelativePath?.replace(/[^/]*$/, "") ?? "";
+    const sameDir = (f: File) =>
+      ((f as File & { webkitRelativePath?: string }).webkitRelativePath ?? "").replace(/[^/]*$/, "") === dir;
+
+    const wanted = files.filter((f) => sameDir(f) && /\.(wav|frq)$/i.test(f.name));
+    if (wanted.length === 0) {
+      this.cb.onStatus("그 폴더에 WAV 가 없습니다.", "error");
+      return;
+    }
+
+    this.cb.onStatus(`음원 읽는 중… (파일 ${wanted.length}개)`);
+    try {
+      const { VoiceBank, decodeOtoText } = await import("../audio/voicebank");
+      const bytes = new Map<string, ArrayBuffer>();
+      for (const f of wanted) bytes.set(f.name, await f.arrayBuffer());
+
+      const name = dir.replace(/\/$/, "").split("/").pop() || "노래 음원";
+      const bank = new VoiceBank(name, decodeOtoText(await oto.arrayBuffer()), bytes);
+      if (bank.soundCount === 0) {
+        this.cb.onStatus("oto.ini 를 읽었지만 쓸 수 있는 소리가 없습니다.", "error");
+        return;
+      }
+
+      this.voiceSeq += 1;
+      const id = `voice${this.voiceSeq}`;
+      this.registry.addVoice(bank, id);
+
+      const track = this.project.tracks[this.activeTrack];
+      if (track) {
+        track.source = { kind: "voice", bankId: id };
+        track.name = bank.name;
+        this.cb.onSourceChange();
+        this.renderTracks();
+        this.renderInstrumentButton();
+      }
+      this.closePicker();
+
+      const parts = [`${bank.name} — 소리 ${bank.soundCount}가지`];
+      if (bank.tunedCount > 0) parts.push(`음정표 ${bank.tunedCount}개`);
+      if (bank.skipped.length > 0) parts.push(`못 읽은 줄 ${bank.skipped.length}개`);
+      parts.push("노트를 눌러 가사를 적으세요");
+      this.cb.onStatus(parts.join(" · "));
+    } catch (err) {
+      this.cb.onStatus(
+        `음원을 읽지 못했습니다: ${err instanceof Error ? err.message : String(err)}`,
         "error",
       );
     }
@@ -383,6 +493,11 @@ export class InstrumentPanel {
     // 적히면 무엇이 걸렸는지 화면이 거짓말을 하는 셈이다.
     const source = track?.source;
     let label = "임시 신스";
+    if (source?.kind === "voice") {
+      const bank = this.registry.voices.get(source.bankId);
+      this.instrumentBtn.textContent = `🎤 ${bank ? bank.name : "노래 음원 없음"}`;
+      return;
+    }
     if (source?.kind === "sampleFolder") {
       const folder = this.registry.folders.get(source.folderId);
       if (folder) label = folder.name;

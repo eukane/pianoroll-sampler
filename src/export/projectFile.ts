@@ -10,9 +10,10 @@
  */
 
 import type { Note, Project, Track } from "../model/types";
-import { emptyTrack, newId, sortNotes } from "../model/project";
-import { MAX_TRACKS } from "../model/channels";
-import { MAX_PRESET_ID } from "../model/preset";
+import { emptyTrack, newId, sortNotes } from "../model/project.ts";
+import { MAX_TRACKS } from "../model/channels.ts";
+import { MAX_PRESET_ID } from "../model/preset.ts";
+import { DEFAULT_AMOUNT, ORNAMENTS, type Ornament } from "../model/ornament.ts";
 
 export const FILE_VERSION = 1;
 
@@ -51,6 +52,8 @@ function readTrack(raw: unknown, index: number): Track {
   const source = t.source as Record<string, unknown> | undefined;
   if (source?.kind === "sampleFolder" && typeof source.folderId === "string") {
     track.source = { kind: "sampleFolder", folderId: source.folderId };
+  } else if (source?.kind === "voice" && typeof source.bankId === "string") {
+    track.source = { kind: "voice", bankId: source.bankId };
   } else {
     track.source = { kind: "sf2", presetId: Math.round(clamp(num(source?.presetId, 0), 0, MAX_PRESET_ID)) };
   }
@@ -58,8 +61,10 @@ function readTrack(raw: unknown, index: number): Track {
   track.volume = clamp(num(t.volume, 0.8), 0, 1);
   track.pan = clamp(num(t.pan, 0), -1, 1);
   track.muted = t.muted === true;
-  // 예전에 저장한 파일에는 없는 값이다. 없으면 울림 0.
+  // 예전에 저장한 파일에는 없는 값들이다. 없으면 0(= 안 걸림)으로 떨어진다.
   track.reverbSend = clamp(num(t.reverbSend, 0), 0, 1);
+  track.vibrato = clamp(num(t.vibrato, 0), 0, 1);
+  track.vibratoDelay = clamp(num(t.vibratoDelay, 0), 0, 2);
   track.notes = Array.isArray(t.notes) ? (t.notes as unknown[]).map(readNote).filter(isNote) : [];
   sortNotes(track);
   return track;
@@ -74,13 +79,24 @@ function readNote(raw: unknown): Note | null {
   // 말이 안 되는 노트는 버린다. 길이가 0 이하면 소리가 안 나고, 음높이가
   // 범위를 벗어나면 렌더에서 터진다.
   if (pitch < 0 || pitch > 127 || start < 0 || length <= 0) return null;
-  return {
+  const note: Note = {
     id: typeof n.id === "string" && n.id ? n.id : newId("n"),
     pitch,
     start,
     length,
     velocity: Math.round(clamp(num(n.velocity, 100), 1, 127)),
   };
+
+  // 꾸밈(시김새)과 노랫말. **예전에는 이 둘을 안 읽어서, 저장했다 열면 조교한
+  // 게 통째로 날아갔다.** 파일에는 멀쩡히 들어 있는데 읽는 쪽이 버리고 있었다 —
+  // 저장이 됐으니 사용자는 눈치채기도 어렵다.
+  if (ORNAMENTS.some((o) => o.id === n.ornament)) {
+    note.ornament = n.ornament as Ornament;
+    note.ornamentAmount = clamp(num(n.ornamentAmount, DEFAULT_AMOUNT), 0, 1);
+  }
+  if (typeof n.lyric === "string" && n.lyric.trim()) note.lyric = n.lyric.trim();
+
+  return note;
 }
 
 function isNote(n: Note | null): n is Note {

@@ -89,7 +89,17 @@ const roll = new PianoRoll(canvas, () => project, {
   }),
 });
 
+const singingTrack = () => {
+  const track = project.tracks[roll.activeTrack];
+  return track ? registry.voiceFor(track) : null;
+};
+
 const notePanel = new NotePanel(() => project, {
+  isSinging: () => singingTrack() !== null,
+  canSing: (lyric) => {
+    const bank = singingTrack();
+    return bank ? bank.sounds.includes(lyric) : false;
+  },
   onBeforeChange: () => history.begin(),
   onAfterChange: () => {
     history.commit();
@@ -97,8 +107,16 @@ const notePanel = new NotePanel(() => project, {
   },
   onEdit: () => scheduler.invalidate(),
   onAudition: (note) => {
+    if (!engine.isUnlocked) return;
+    // 노래하는 트랙이면 그 글자를 실제로 불러 준다. 임시 신스 소리를 들려주면
+    // 가사를 고르는 데 아무 도움이 안 된다.
+    const bank = singingTrack();
+    if (bank) {
+      void scheduler.previewSing(bank, note);
+      return;
+    }
     // 그 음의 꾸밈대로 들려준다. 음이 짧아도 꾸밈은 끝까지 들려야 고를 수 있다.
-    if (engine.isUnlocked) scheduler.preview(note.pitch, roll.activeTrack, note.velocity, note);
+    scheduler.preview(note.pitch, roll.activeTrack, note.velocity, note);
   },
   onDelete: (note) => {
     history.begin();
@@ -134,6 +152,11 @@ window.addEventListener("pointerup", tryUnlock);
 function setPlaying(on: boolean): void {
   if (on) {
     void engine.unlock();
+    // 노랫말은 재생 직전에 푼다 (디코딩은 비동기라 재생 중에는 못 한다).
+    // 이미 풀린 글자는 그냥 넘어가므로 두 번째 재생부터는 값이 없다.
+    void scheduler.prepareVoices().then(() => {
+      if (scheduler.isPlaying) scheduler.invalidate();
+    });
     scheduler.play();
     playBtn.textContent = "■ 정지";
     playBtn.classList.remove("primary");
@@ -221,6 +244,8 @@ const panel = new InstrumentPanel(project, registry, {
     roll.activeTrack = index;
   },
   onSourceChange: () => {
+    // 노래 음원으로 바뀌었을 수 있다. 쓸 글자를 미리 풀어 둔다.
+    void scheduler.prepareVoices();
     // 노트는 그대로 두고 악기만 바뀐다. 재생 중이면 다음 노트부터 새 소리다.
     const chs = assignChannels(project);
     project.tracks.forEach((t, i) => registry.prepare(t, chs[i]));

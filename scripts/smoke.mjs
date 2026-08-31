@@ -37,6 +37,7 @@
  *   · 내보내기가 조용히 실패하지 않는가 (무음 · 곡 밖 노트 · 음소거 트랙)
  *   · 예제 곡이 열리고 실제로 소리가 나는가 (덮어쓰기 전에 물어보는가)
  *   · 둘째 예제(일렉트로닉)가 드럼을 9번 채널에 놓고, 드롭에서 커지는가
+ *   · UTAU 음원을 넣으면 노래하는 트랙이 되고, 가사대로 실제로 부르는가
  *   · 콘솔 오류가 하나도 없는가
  *
  * 쓰는 법: 다른 창에서 `npm run dev` 를 띄워 두고 `npm run smoke`.
@@ -1788,6 +1789,134 @@ check(
   "인트로 → 쌓기 → 드롭 순으로 커진다",
   edmSound.인트로 < edmSound.쌓기 * 0.75 && edmSound.쌓기 < edmSound.드롭 * 0.85,
   edmSound,
+);
+
+// ---- 노래하는 트랙 (UTAU 음원) ----
+//
+// 진짜 음원은 저장소에 못 넣는다(배포 금지). 형식만 실물과 같게 만든 가짜
+// 음원을 쓴다 — WAV + Shift-JIS oto.ini + 주파수표, 별칭 세 갈래까지.
+//
+// 「さ」만 반음 낮게 녹음해 뒀다. 주파수표를 안 읽으면 그 글자만 음이 틀리는데,
+// 실물 테토가 정확히 그랬다.
+await page.reload({ waitUntil: "networkidle" });
+await page.locator("#unlock").tap();
+await page.waitForTimeout(300);
+await page.evaluate((items) => {
+  const dt = new DataTransfer();
+  for (const it of items) {
+    const bin = atob(it.b64);
+    const u = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i += 1) u[i] = bin.charCodeAt(i);
+    dt.items.add(new File([u], it.name));
+  }
+  const el = document.getElementById("voice-files");
+  el.files = dt.files;
+  el.dispatchEvent(new Event("change", { bubbles: true }));
+}, readdirSync("fixtures/voicebank").map((f) => ({
+  name: f, b64: readFileSync(`fixtures/voicebank/${f}`).toString("base64"),
+})));
+await page.waitForTimeout(1500);
+
+const voice = await page.evaluate(() => ({
+  source: window.__app.project.tracks[0].source,
+  button: document.getElementById("instrument")?.textContent ?? "",
+  status: document.getElementById("status")?.textContent ?? "",
+}));
+check("UTAU 음원 폴더를 넣으면 노래하는 트랙이 된다", voice.source.kind === "voice", voice);
+check("악기 이름에 노래 음원이 보인다", voice.button.includes("🎤"), voice.button);
+// oto.ini 는 Shift-JIS 다. 브라우저가 못 읽으면 소리 가짓수가 0 이 된다.
+check("Shift-JIS oto.ini 를 읽는다 (소리 6가지)", voice.status.includes("6가지"), voice.status);
+check("주파수표도 같이 읽는다", voice.status.includes("음정표"), voice.status);
+
+// 노트를 톡 치면 가사칸이 나온다 — 노래하는 트랙에서만.
+await page.evaluate(() => {
+  const app = window.__app, r = app.roll;
+  r.scrollX = 0;
+  r.scrollToPitch(63);
+  const t = app.project.tracks[0];
+  t.notes.length = 0;
+  t.notes.push({ id: "s0", pitch: 63, start: 0, length: 1, velocity: 100 });
+  app.scheduler.invalidate();
+});
+const singPos = await page.evaluate(() => {
+  const r = window.__app.roll;
+  return { x: 46 + 0 * r.pxPerBeat - r.scrollX + r.pxPerBeat * 0.4,
+           y: 36 + (127 - 63) * r.keyHeight - r.scrollY + r.keyHeight / 2 };
+});
+const singBox = await page.locator("#roll").boundingBox();
+{
+  const X = singBox.x + singPos.x, Y = singBox.y + singPos.y;
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: X, y: Y }] });
+  await page.waitForTimeout(150);
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+  await page.waitForTimeout(300);
+}
+check("노래하는 트랙에서는 노트 창에 가사칸이 나온다",
+  await page.locator("#note-lyric").count() > 0);
+if (await page.locator("#note-lyric").count() > 0) {
+  await page.locator("#note-lyric").fill("か");
+  await page.waitForTimeout(200);
+  check("적은 가사가 노트에 남는다",
+    await page.evaluate(() => window.__app.project.tracks[0].notes[0].lyric) === "か");
+  // 음원에 없는 글자는 그 자리에서 알려 준다. 소리만 안 나면 오타인지 알 수 없다.
+  await page.locator("#note-lyric").fill("ぴ");
+  await page.waitForTimeout(200);
+  check("음원에 없는 글자는 그 자리에서 알려 준다",
+    (await page.locator(".lyricrow i").textContent())?.includes("없는"),
+    await page.locator(".lyricrow i").textContent());
+  await page.locator("#note-lyric").fill("か");
+  await page.waitForTimeout(150);
+  await page.locator("#note-close").click();
+}
+
+// 실제로 부르는가. 가사를 붙인 다섯 음을 렌더해서 음정을 추적한다.
+const sang = await page.evaluate(async () => {
+  const app = window.__app;
+  const t = app.project.tracks[0];
+  t.notes.length = 0;
+  ["か", "さ", "ね", "て", "と"].forEach((lyric, i) => t.notes.push({
+    id: "s" + i, pitch: [62, 64, 65, 64, 62][i], start: i, length: 1, velocity: 100, lyric,
+  }));
+  app.project.bars = 2;
+  await app.registry.prepareVoices(app.project.tracks);
+
+  const { renderProject } = await import("/src/export/render.ts");
+  const buf = await renderProject(app.project, () => app.registry.soundfont.bankBuffer(),
+    app.registry.folders.list, app.mixerState, app.registry.voices);
+
+  const d = buf.getChannelData(0);
+  const sr = buf.sampleRate;
+  const pitchAt = (sec) => {
+    const SUB = 2048, minLag = Math.floor(sr / 600), maxLag = Math.floor(sr / 200);
+    const s0 = Math.floor(sec * sr);
+    let energy = 0;
+    for (let i = s0; i < s0 + SUB; i += 1) energy += d[i] * d[i];
+    if (Math.sqrt(energy / SUB) < 0.01) return null;
+    const r = [];
+    for (let lag = minLag; lag <= maxLag; lag += 1) {
+      let sum = 0;
+      for (let i = 0; i < SUB; i += 1) sum += d[s0 + i] * d[s0 + i + lag];
+      r.push(sum);
+    }
+    const peak = Math.max(...r);
+    let idx = r.findIndex((v) => v >= peak * 0.92);
+    while (idx + 1 < r.length && r[idx + 1] > r[idx]) idx += 1;
+    return +(69 + 12 * Math.log2(sr / (minLag + idx) / 440)).toFixed(2);
+  };
+  // 100BPM 이라 한 박이 0.6초.
+  return { pitches: [0, 1, 2, 3, 4].map((i) => pitchAt(i * 0.6 + 0.3)), seconds: +buf.duration.toFixed(1) };
+});
+const want = [62, 64, 65, 64, 62];
+check(
+  "가사를 붙인 음을 실제로 부른다 (음정 반음 이내)",
+  sang.pitches.every((p, i) => p !== null && Math.abs(p - want[i]) < 0.5),
+  { 잰음정: sang.pitches, 기대: want },
+);
+// 「さ」가 반음 낮게 녹음돼 있어서, 주파수표를 안 읽으면 여기만 틀린다.
+check(
+  "파일마다 다른 녹음 음정을 주파수표로 바로잡는다",
+  sang.pitches[1] !== null && Math.abs(sang.pitches[1] - 64) < 0.5,
+  { さ: sang.pitches[1] },
 );
 
 check("콘솔 오류 없음", errors.length === 0, errors);

@@ -44,6 +44,8 @@ export class VoiceBank {
   readonly skipped: string[];
   /** 파일명 → 그 파일이 녹음된 음정(MIDI). 주파수표에서 읽는다. */
   private pitches = new Map<string, number>();
+  /** 지금 울리고 있는(또는 예약된) 소리들. 정지·다시예약 때 끊어야 한다. */
+  private active: { source: AudioBufferSourceNode; gain: GainNode }[] = [];
 
   constructor(name: string, otoText: string, files: Map<string, ArrayBuffer>) {
     this.name = name;
@@ -120,6 +122,7 @@ export class VoiceBank {
    * 알려 줘야 한다 — 소리만 안 나면 왜 안 나는지 알 수가 없다.
    */
   sing(ctx: BaseAudioContext, dest: AudioNode, notes: SungNote[], at = 0): PhrasePlan {
+    this.ctxTime = ctx.currentTime;
     const plan = this.plan(notes);
 
     for (const piece of plan.pieces) {
@@ -154,8 +157,46 @@ export class VoiceBank {
       gain.connect(dest);
       source.start(start, piece.bufferOffset);
       source.stop(end + 0.02);
+
+      const voice = { source, gain };
+      this.active.push(voice);
+      source.onended = () => {
+        gain.disconnect();
+        const i = this.active.indexOf(voice);
+        if (i >= 0) this.active.splice(i, 1);
+      };
     }
 
     return plan;
   }
+
+  /**
+   * 예약해 둔 것까지 전부 끊는다.
+   *
+   * 노래는 **곡이 시작할 때 줄을 통째로 예약**한다(재생 중에 한 음씩 넣는 게
+   * 아니다). 그래서 정지하거나 노트를 고쳤을 때 예약된 걸 걷어내지 않으면,
+   * 멈춘 뒤에도 계속 부르거나 옛 가사와 새 가사가 겹쳐 들린다.
+   */
+  stopAll(): void {
+    const now = this.ctxTime ?? 0;
+    for (const v of this.active) {
+      try {
+        v.gain.gain.cancelScheduledValues(now);
+        v.gain.gain.setValueAtTime(Math.max(0.0001, v.gain.gain.value), now);
+        v.gain.gain.linearRampToValueAtTime(0, now + 0.02);
+        v.source.stop(now + 0.03);
+      } catch {
+        /* 아직 시작 안 했거나 이미 끝난 노드 */
+        try {
+          v.source.stop();
+        } catch {
+          /* 무시 */
+        }
+      }
+    }
+    this.active = [];
+  }
+
+  /** 정지할 때 쓸 현재 시각. sing() 이 불릴 때마다 갱신한다. */
+  private ctxTime: number | null = null;
 }

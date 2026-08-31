@@ -13,6 +13,7 @@
  *   · 트랙 기본 떨림과 음의 꾸밈이 규칙대로 합쳐지는가
  *   · 예제 곡이 헤더에 적어 둔 대로 되어 있는가 (격자·음계·겹침)
  *   · 둘째 예제(일렉트로닉)의 드럼이 9번 채널에 가고 구조가 살아 있는가
+ *   · **저장했다 열면 꾸밈·노랫말이 그대로 있는가** (예전에는 날아갔다)
  *
  *     node scripts/audit.mjs
  */
@@ -24,6 +25,7 @@ import { DEMOS } from "../src/model/demos.ts";
 import { shakes, vibratoOf } from "../src/audio/vibrato.ts";
 import { bendCurve, MAX_BEND_CENTS } from "../src/model/ornament.ts";
 import { expressionFor } from "../src/audio/expression.ts";
+import { projectToJson, projectFromJson } from "../src/export/projectFile.ts";
 
 const out = [];
 const ok = (n, pass, d) => out.push({ n, pass: !!pass, d });
@@ -298,6 +300,42 @@ const edmOrn = edm.tracks[0].notes.filter((n) => n.ornament);
 ok("일렉트로닉 예제의 리드에도 손본 자리가 있다 (많지 않게)",
    edmOrn.length >= 2 && edmOrn.length <= 4,
    edmOrn.map((n) => `${n.start}박 ${n.ornament}`));
+
+// ---- 11) 저장했다 열면 그대로인가 ----
+//
+// **꾸밈과 노랫말이 안 읽히고 있었다.** 파일에는 멀쩡히 들어 있는데 읽는 쪽이
+// 버려서, 저장했다 다시 열면 조교한 게 통째로 날아갔다. 저장 자체는 잘 되니
+// 사용자는 눈치채기도 어렵다 — 딱 이 저장소가 제일 싫어하는 종류다.
+const saved = {
+  bpm: 100, bars: 2, timeSig: [4, 4],
+  tracks: [
+    { id: "t1", name: "노래", source: { kind: "voice", bankId: "teto" },
+      notes: [{ id: "n1", pitch: 62, start: 0, length: 1, velocity: 100,
+                ornament: "bend", ornamentAmount: 0.42, lyric: "か" }],
+      volume: 0.8, pan: 0, muted: false, reverbSend: 0.2, vibrato: 0.5, vibratoDelay: 0.3 },
+    { id: "t2", name: "악기", source: { kind: "sf2", presetId: 65 },
+      notes: [{ id: "n2", pitch: 60, start: 1, length: 2, velocity: 90, ornament: "none" }],
+      volume: 0.7, pan: -0.3, muted: false, reverbSend: 0 },
+  ],
+};
+const reopened = projectFromJson(projectToJson(saved));
+const rn = reopened.tracks[0].notes[0];
+ok("저장했다 열어도 꾸밈이 남는다",
+   rn.ornament === "bend" && Math.abs(rn.ornamentAmount - 0.42) < 1e-9, rn);
+ok("저장했다 열어도 노랫말이 남는다", rn.lyric === "か", rn.lyric);
+ok("「그냥」도 그대로 남는다 (트랙 기본 떨림을 끄는 뜻이라 날아가면 안 된다)",
+   reopened.tracks[1].notes[0].ornament === "none", reopened.tracks[1].notes[0]);
+ok("노래하는 트랙 종류가 남는다",
+   reopened.tracks[0].source.kind === "voice" && reopened.tracks[0].source.bankId === "teto",
+   reopened.tracks[0].source);
+ok("트랙 기본 떨림도 남는다",
+   reopened.tracks[0].vibrato === 0.5 && reopened.tracks[0].vibratoDelay === 0.3,
+   { v: reopened.tracks[0].vibrato, d: reopened.tracks[0].vibratoDelay });
+// 없는 꾸밈 이름이 들어오면 무시해야 한다. 사람이 손으로 고칠 수 있는 파일이다.
+const junk = projectFromJson(JSON.stringify({ ...saved,
+  tracks: [{ ...saved.tracks[0], notes: [{ ...saved.tracks[0].notes[0], ornament: "쾅" }] }] }));
+ok("모르는 꾸밈 이름은 무시한다", junk.tracks[0].notes[0].ornament === undefined,
+   junk.tracks[0].notes[0].ornament);
 
 let bad = 0;
 for (const r of out) { if (!r.pass) bad++; console.log(`${r.pass ? "✅" : "❌"} ${r.n}${r.pass ? "" : "  " + JSON.stringify(r.d)}`); }

@@ -29,6 +29,13 @@ export type Note = {
   ornament?: Ornament;
   /** 꾸밈의 세기 0~1. */
   ornamentAmount?: number;
+  /**
+   * 노랫말 한 글자(「か」「さ」…). 노래하는 트랙에서만 쓴다.
+   *
+   * 다른 악기 트랙에서는 그냥 남아 있다 — 악기를 바꿨다가 되돌렸을 때 적어 둔
+   * 가사가 사라지면 안 된다. "노트는 악기 정보를 갖지 않는다" 와 같은 이유다.
+   */
+  lyric?: string;
 };
 
 /**
@@ -40,7 +47,15 @@ export type Note = {
  */
 export type TrackSource =
   | { kind: "sf2"; presetId: number }
-  | { kind: "sampleFolder"; folderId: string };
+  | { kind: "sampleFolder"; folderId: string }
+  /**
+   * 노래하는 트랙. UTAU 음원(WAV 더미 + oto.ini)을 쓴다.
+   *
+   * 다른 둘과 다른 점이 하나 있다 — **노트마다 따로 소리를 낼 수 없다.**
+   * 한 음의 소리가 앞뒤 음에 달려 있어서(선행발성·겹침·이어짐용 녹음) 줄을
+   * 통째로 계산한다. 자세한 건 model/phrase.ts.
+   */
+  | { kind: "voice"; bankId: string };
 
 export type Track = {
   id: string;
