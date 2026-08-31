@@ -68,6 +68,13 @@ const roll = new PianoRoll(canvas, () => project, {
   },
   onPreviewRelease: () => scheduler.previewRelease(),
   onNoteTap: (note) => notePanel.open(note),
+  onForeignNote: (index) => {
+    // 작업하던 트랙을 마음대로 바꾸지 않는다. 왜 반응이 없는지만 알려 준다.
+    showStatus(
+      `그 노트는 ${index + 1}번 트랙(${project.tracks[index]?.name ?? ""})에 있습니다.` +
+        " 위에서 그 트랙을 먼저 고르세요.",
+    );
+  },
   onSeek: (beat) => scheduler.seek(beat),
   onLoopChange: (start, end) => {
     scheduler.loopStart = start;

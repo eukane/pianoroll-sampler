@@ -8,7 +8,7 @@
  *   건반 누르고 있기 누른 만큼 소리 (위아래로 밀면 음이 따라온다)
  *   노트 드래그    옮기기 (그리드에 붙음)
  *   오른쪽 끝 드래그 길이 조절
- *   노트 탭        꾸밈 고르기 (시김새)
+ *   노트 탭        꾸밈 고르기 (시김새) — 남의 트랙 노트면 그 트랙으로 갈아탄다
  *   길게 누르기    삭제
  *   빈 곳 드래그   화면 이동
  *   두 손가락 핀치 가로 확대 / 세로 이동
@@ -53,7 +53,14 @@ type Ptr = { x: number; y: number; downX: number; downY: number; downAt: number 
 type Drag =
   | { mode: "none" }
   | { mode: "pan"; scrollX: number; scrollY: number; moved: boolean }
-  | { mode: "move"; note: Note; grabOffsetBeat: number; startPitch: number; moved: boolean }
+  | {
+      mode: "move";
+      note: Note;
+      grabOffsetBeat: number;
+      startPitch: number;
+      startBeat: number;
+      moved: boolean;
+    }
   | { mode: "resize"; note: Note; startLength: number; downBeat: number }
   | { mode: "loop"; anchorBeat: number }
   | { mode: "scrub" }
@@ -72,6 +79,8 @@ export type PianoRollCallbacks = {
   onPreviewRelease: () => void;
   /** 노트를 톡 쳤다 — 꾸밈을 고르는 창을 열라는 뜻. */
   onNoteTap: (note: Note) => void;
+  /** 활성 트랙이 아닌 노트를 만졌다 — 왜 반응이 없는지 알려 달라. */
+  onForeignNote: (trackIndex: number) => void;
   onSeek: (beat: number) => void;
   onLoopChange: (startBeat: number, endBeat: number) => void;
   getPlayheadBeat: () => number;
@@ -423,18 +432,40 @@ export class PianoRoll {
     return { x: e.clientX - r.left, y: e.clientY - r.top };
   }
 
-  private noteAt(x: number, y: number): Note | null {
-    const track = this.track;
-    if (!track) return null;
+  /**
+   * 그 자리에 있는 노트. **활성 트랙을 먼저 보고, 없으면 다른 트랙도 본다.**
+   *
+   * 예전에는 활성 트랙만 봤다. 그래서 화면에 흐리게 보이는 남의 트랙 노트를
+   * 누르면 아무 일도 안 일어나고, 대신 그 자리에 **활성 트랙의 새 노트가 조용히
+   * 찍혔다.** 예제 곡처럼 트랙이 여럿이면 대부분의 탭이 그 경우라 "눌러도
+   * 안 된다" 가 된다. 실제로 그렇게 됐다.
+   *
+   * 눈에 보이는 걸 눌렀으면 그게 잡혀야 한다. 다른 트랙이면 그 트랙으로
+   * 갈아탄다 (조용히 갈아타지 않고 화면에 알린다 — onTrackSwitch).
+   */
+  private noteAt(x: number, y: number): { note: Note; trackIndex: number } | null {
+    const project = this.getProject();
     const pitch = this.yToPitch(y);
     const beat = this.xToBeat(x);
-    // 뒤에서부터 본다 = 나중에 찍은 노트가 위에 있다
-    for (let i = track.notes.length - 1; i >= 0; i -= 1) {
-      const n = track.notes[i];
-      if (n.pitch !== pitch) continue;
-      const w = Math.max(3, n.length * this.pxPerBeat);
-      const beatWidth = w / this.pxPerBeat;
-      if (beat >= n.start && beat <= n.start + beatWidth) return n;
+
+    const inTrack = (trackIndex: number) => {
+      const notes = project.tracks[trackIndex]?.notes ?? [];
+      // 뒤에서부터 본다 = 나중에 찍은 노트가 위에 있다
+      for (let i = notes.length - 1; i >= 0; i -= 1) {
+        const n = notes[i];
+        if (n.pitch !== pitch) continue;
+        const w = Math.max(3, n.length * this.pxPerBeat);
+        if (beat >= n.start && beat <= n.start + w / this.pxPerBeat) return n;
+      }
+      return null;
+    };
+
+    const mine = inTrack(this.activeTrack);
+    if (mine) return { note: mine, trackIndex: this.activeTrack };
+    for (let t = 0; t < project.tracks.length; t += 1) {
+      if (t === this.activeTrack) continue;
+      const found = inTrack(t);
+      if (found) return { note: found, trackIndex: t };
     }
     return null;
   }
@@ -496,8 +527,19 @@ export class PianoRoll {
       return;
     }
 
-    const hit = this.noteAt(p.x, p.y);
-    if (hit) {
+    const found = this.noteAt(p.x, p.y);
+    if (found) {
+      const hit = found.note;
+      // 남의 트랙 노트면 **아무것도 하지 않는다.** 작업하던 트랙을 마음대로
+      // 바꾸면 다음에 찍는 노트가 엉뚱한 데로 간다. 다만 그 자리에 새 노트를
+      // 찍지도 않는다 — 예전에는 그래서 남의 노트 위에 노트가 조용히 겹쳤다.
+      // 왜 반응이 없는지는 말해 준다.
+      if (found.trackIndex !== this.activeTrack) {
+        this.cb.onForeignNote(found.trackIndex);
+        this.drag = { mode: "none" };
+        return;
+      }
+
       // 끄는 동안 프레임마다 찍으면 되돌리기가 1픽셀씩 돌아간다.
       // 손가락을 대는 이 순간의 상태만 쌓는다.
       this.cb.onBeforeChange();
@@ -510,6 +552,7 @@ export class PianoRoll {
           note: hit,
           grabOffsetBeat: this.xToBeat(p.x) - hit.start,
           startPitch: hit.pitch,
+          startBeat: hit.start,
           moved: false,
         };
         this.startLongPress(hit);
@@ -640,22 +683,30 @@ export class PianoRoll {
       // 시간 제한을 두지 않는다. 빈 곳을 좀 오래 눌렀다 뗐다고 아무 일도
       // 안 일어나면 사용자는 앱이 고장 난 줄 안다.
       this.addNoteAt(p.x, p.y);
-    } else if (this.drag.mode === "move" && this.drag.moved) {
-      const track = this.track;
-      if (track) sortNotes(track);
-    } else if ((this.drag.mode === "move" || this.drag.mode === "resize") && still) {
-      // 노트를 톡 치면 꾸밈 창. 예전에는 이 동작에 아무 일도 안 일어났다.
-      // (길게 누르면 삭제, 끌면 이동 — 탭만 비어 있었다)
+    } else if (this.drag.mode === "move" || this.drag.mode === "resize") {
+      // **손가락이 움직였는지가 아니라, 노트가 실제로 바뀌었는지로 가른다.**
       //
-      // **길이 조절 자리(오른쪽 끝)에서도 받는다.** 손가락 굵기 때문에 노트의
-      // 오른쪽 20px 은 길이 조절로 잡히는데, 좁은 노트에서는 그게 3분의 1이다.
-      // 거기를 눌러도 아무 일이 안 일어나서 "창이 안 뜬다" 가 됐다.
+      // 예전에는 "8px 안 움직였으면 탭" 이었다. 그런데 진짜 터치로 재 보니
+      // 10px 만 흔들려도 탭으로 안 쳐 줬다. 노트는 격자에 붙어 있어서 제자리
+      // 그대로인데 창만 안 열린다 — 사용자에게는 **눌렀는데 아무 일도 안
+      // 일어나는 것**으로 보인다. 손가락은 원래 그만큼 흔들린다.
       //
-      // 시간 제한(TAP_MS)도 걸지 않는다. 480ms 를 넘겼으면 길게 누르기가 이미
-      // 지웠을 것이고 여기까지 오지도 않는다. 그 사이(400~480ms)에 뗀 손가락만
-      // 조용히 무시되고 있었다 — 폰에서 작은 노트를 정확히 누르려면 그 정도는
-      // 걸린다.
-      this.cb.onNoteTap(this.drag.note);
+      // 안 움직인 노트를 놓았으면 그건 탭이다. 얼마나 흔들렸든 상관없다.
+      const changed =
+        this.drag.mode === "move"
+          ? this.drag.note.start !== this.drag.startBeat ||
+            this.drag.note.pitch !== this.drag.startPitch
+          : this.drag.note.length !== this.drag.startLength;
+
+      if (changed) {
+        const track = this.track;
+        if (track) sortNotes(track);
+      } else {
+        // 길이 조절 자리(오른쪽 끝)에서도 받는다. 손가락 굵기 때문에 노트의
+        // 오른쪽 20px 은 길이 조절로 잡히는데 좁은 노트에서는 그게 3분의 1이라,
+        // 거기를 누르면 아무 일도 안 일어났다.
+        this.cb.onNoteTap(this.drag.note);
+      }
     }
 
     this.draggingNoteId = null;

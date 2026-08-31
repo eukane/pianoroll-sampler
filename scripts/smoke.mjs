@@ -27,6 +27,8 @@
  *   · 음 하나에 건 꾸밈이 말한 방향으로 휘는가 (끌어올림 · 흘러내림)
  *   · 노트를 톡 치면 꾸밈 창이 열리고, 고른 게 그 음에 남는가
  *     (오른쪽 끝을 쳐도 · 사람 손가락처럼 천천히 흔들리게 쳐도)
+ *   · 손가락이 흔들려도(12px) 탭으로 쳐 주는가 — **진짜 터치 이벤트로** 확인
+ *   · 남의 트랙 노트를 눌러도 작업 트랙이 안 바뀌고 엉뚱한 노트가 안 찍히는가
  *   · ⏮ 이 재생 위치를 맨 앞으로 되돌리는가 (재생 중에 눌러도 버튼이 안 뒤집히는가)
  *   · 렌더 경로가 둘로 갈리는데 서로 정렬돼 있는가
  *   · 재생에서 사운드폰트가 임시 신스와 같은 시각에 울리는가 (워크렛 시계 보정)
@@ -56,6 +58,9 @@ if (process.env.CHROMIUM_PATH) launchOptions.executablePath = process.env.CHROMI
 const browser = await chromium.launch(launchOptions);
 const context = await browser.newContext({ ...devices["Pixel 5"], acceptDownloads: true });
 const page = await context.newPage();
+// 진짜 터치 이벤트를 보내려면 CDP 가 필요하다. Playwright 의 touchscreen.tap 은
+// 0ms 만에 정확한 좌표를 찍어서, 손가락이 흔들리는 걸 흉내낼 수가 없다.
+const cdp = await context.newCDPSession(page);
 
 const errors = [];
 page.on("console", (m) => m.type() === "error" && errors.push(m.text()));
@@ -1357,12 +1362,20 @@ const ornBox = await page.locator("#roll").boundingBox();
 // **사람 손가락처럼** 친다. 합성 탭(0ms · 정확히 그 좌표)으로만 시험하면
 // 실제로 안 되는 걸 통과시킨다 — 처음에 그래서 놓쳤다. 폰에서 작은 노트를
 // 정확히 누르려면 300ms 쯤 걸리고 손가락은 몇 px 씩 흔들린다.
-const fingerTap = async (x, y) => {
-  await page.mouse.move(ornBox.x + x, ornBox.y + y);
-  await page.mouse.down();
-  await page.waitForTimeout(300);
-  await page.mouse.move(ornBox.x + x + 3, ornBox.y + y + 2); // 손 떨림
-  await page.mouse.up();
+const fingerTap = async (x, y, drift = 12) => {
+  const X = ornBox.x + x;
+  const Y = ornBox.y + y;
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: X, y: Y }] });
+  await page.waitForTimeout(120);
+  // **12px 흔든다.** 예전 탭 기준이 8px 이었는데, 진짜 손가락은 그보다 훨씬
+  // 많이 흔들린다. 마우스로만 시험할 때는 이 값을 3px 로 뒀고, 그래서 실제로
+  // 안 열리는 걸 통과시켰다. 사람이 실제로 하는 만큼 흔든다.
+  await cdp.send("Input.dispatchTouchEvent", {
+    type: "touchMove",
+    touchPoints: [{ x: X + drift, y: Y + drift * 0.6 }],
+  });
+  await page.waitForTimeout(150);
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
   await page.waitForTimeout(250);
 };
 await fingerTap(notePos.x, notePos.y);
@@ -1642,6 +1655,58 @@ check(
   demoSound.peak > 0.02 && demoSound.peak < 0.99 && demoSound.seconds > 18,
   demoSound,
 );
+
+// ---- 남의 트랙 노트를 눌렀을 때 ----
+//
+// 여기가 실제로 안 되던 자리다. 앞의 꾸밈 검사는 **활성 트랙에 손으로 놓은
+// 노트 하나**를 눌렀다 — 그래서 통과했다. 그런데 사람이 실제로 여는 건
+// 트랙이 서넛인 예제 곡이고, 화면에 흐리게 보이는 남의 트랙 노트를 누르면
+//
+//   · 창이 안 열리고
+//   · 그 자리에 활성 트랙의 새 노트가 **조용히 찍혔다**
+//
+// 검사가 진짜 상황을 안 밟고 있었다. 예제 곡을 열어 놓고 확인한다.
+const otherTrack = await page.evaluate(() => {
+  const app = window.__app, r = app.roll;
+  r.scrollX = 0;
+  const n = app.project.tracks[1].notes[0]; // 반주 트랙 — 활성 트랙이 아니다
+  r.scrollToPitch(n.pitch);
+  return {
+    x: 46 + n.start * r.pxPerBeat - r.scrollX + Math.min(20, n.length * r.pxPerBeat * 0.4),
+    y: 36 + (127 - n.pitch) * r.keyHeight - r.scrollY + r.keyHeight / 2,
+    counts: app.project.tracks.map((t) => t.notes.length),
+    active: r.activeTrack,
+  };
+});
+const otherBox = await page.locator("#roll").boundingBox();
+{
+  const X = otherBox.x + otherTrack.x;
+  const Y = otherBox.y + otherTrack.y;
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: X, y: Y }] });
+  await page.waitForTimeout(150);
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+  await page.waitForTimeout(300);
+}
+const afterOther = await page.evaluate(() => ({
+  opened: !document.getElementById("note-modal").classList.contains("hidden"),
+  counts: window.__app.project.tracks.map((t) => t.notes.length),
+  active: window.__app.roll.activeTrack,
+  status: document.getElementById("status")?.textContent ?? "",
+}));
+check(
+  "남의 트랙 노트를 눌렀을 때 엉뚱한 노트가 찍히지 않는다",
+  JSON.stringify(afterOther.counts) === JSON.stringify(otherTrack.counts),
+  { 전: otherTrack.counts, 후: afterOther.counts },
+);
+// 작업하던 트랙을 마음대로 바꾸지 않는다. 바꾸면 다음에 찍는 노트가 엉뚱한
+// 데로 간다 — 사용자가 그러지 말라고 했고, 그게 맞다.
+check("작업하던 트랙이 안 바뀐다", afterOther.active === 0, afterOther.active);
+// 대신 조용히 아무 일도 안 하지는 않는다. 왜 반응이 없는지 말해 준다.
+check("왜 반응이 없는지 알려 준다", afterOther.status.includes("트랙"), afterOther.status);
+if (afterOther.opened) {
+  await page.locator("#note-close").click();
+  await page.waitForTimeout(150);
+}
 
 // ---- 둘째 예제 곡 (일렉트로닉) ----
 //
