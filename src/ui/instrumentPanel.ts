@@ -17,7 +17,12 @@ import { MAX_TRACKS, assignChannels } from "../model/channels";
 import type { InstrumentRegistry } from "../audio/registry";
 import type { Preset } from "../audio/soundfont";
 import type { SampleFolder } from "../audio/folderSampler";
-import type { VoiceBank } from "../audio/voicebank";
+// 늦게(import()) 부르지 않는다. 청크로 갈랐더니 사용자가 "FAILED TO FETCH
+// DYNAMICALLY IMPORTED MODULE" 을 만났다 — 열어 둔 화면은 옛 파일 목록을
+// 들고 있는데 새로 배포하면서 그 이름의 청크가 사라진다. 아낀 건 8.4KB
+// (전체 295KB 의 2.8%)였고, 대신 노래 기능이 통째로 안 열렸다.
+import { VoiceBank, decodeOtoText } from "../audio/voicebank";
+import { readZipIndex, readZipEntry, findVoiceBanks } from "../model/zip";
 import { midiToName } from "../util/music";
 
 export type PanelCallbacks = {
@@ -368,7 +373,6 @@ export class InstrumentPanel {
 
     this.cb.onStatus(`음원 읽는 중… (파일 ${wanted.length}개)`);
     try {
-      const { VoiceBank, decodeOtoText } = await import("../audio/voicebank");
       const bytes = new Map<string, ArrayBuffer>();
       for (const f of wanted) bytes.set(f.name, await f.arrayBuffer());
 
@@ -407,7 +411,6 @@ export class InstrumentPanel {
     const mb = (file.size / 1048576).toFixed(0);
     this.cb.onStatus(`${file.name} (${mb}MB) 읽는 중…`);
     try {
-      const { readZipIndex, readZipEntry, findVoiceBanks } = await import("../model/zip");
       const entries = await readZipIndex(file);
       if (!entries) {
         this.cb.onStatus(
@@ -426,7 +429,6 @@ export class InstrumentPanel {
         return;
       }
 
-      const { VoiceBank, decodeOtoText } = await import("../audio/voicebank");
       const made: VoiceBank[] = [];
       for (const one of found) {
         const otoBytes = await readZipEntry(file, one.oto);

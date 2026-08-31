@@ -59,6 +59,18 @@ jobs:
           # 저장소 이름이 곧 하위 경로다. 이름을 바꾸면 여기도 바뀐다.
           BASE_PATH: /${{ github.event.repository.name }}/
 
+      # 늦게 받아 오는 청크가 있으면 다시 배포하는 순간 화면을 열어 둔 사람의
+      # 그 기능이 통째로 안 열린다("FAILED TO FETCH DYNAMICALLY IMPORTED
+      # MODULE"). 실제로 사용자가 겪었다. 올리기 전에 막는다.
+      - name: 늦게 받아 오는 청크가 없는지
+        run: |
+          n=$(ls dist/assets/*.js | wc -l)
+          if [ "$n" -ne 1 ]; then
+            echo "JS 청크가 ${n}개입니다. 1개여야 합니다:"
+            ls -la dist/assets/*.js
+            exit 1
+          fi
+
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist

@@ -6,6 +6,9 @@
  *   · 하위 경로(`/pianoroll-sampler/`)로 서빙된다 — 경로 하나만 어긋나도 백지가 뜬다
  *   · 워크렛 파일이 정적 파일로 같이 올라가 있어야 한다
  *   · 개발용 창구(`window.__app`)가 없다 — 그래서 **화면만 보고** 확인한다
+ *   · **늦게 받아 오는 청크가 없어야 한다** — 개발 서버에서는 언제나 받아지지만,
+ *     올려 둔 사이트에서는 다시 배포하는 순간 옛 이름의 청크가 사라진다.
+ *     화면을 열어 둔 사람은 그때부터 그 기능이 통째로 안 열린다.
  *
  * 화면만 쓴다는 게 오히려 낫다. 사용자가 실제로 겪는 경로 그대로이기 때문이다.
  *
@@ -14,7 +17,7 @@
 
 import { chromium, devices } from "playwright";
 import { spawn } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readFileSync, existsSync, readdirSync } from "node:fs";
 
 const results = [];
 const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail });
@@ -61,6 +64,15 @@ page.on("requestfailed", (r) => failed.push(`${r.url()} — ${r.failure()?.error
 page.on("response", (r) => { if (r.status() >= 400) failed.push(`${r.url()} — ${r.status()}`); });
 
 await page.goto(URL, { waitUntil: "networkidle" });
+
+// 늦게 받아 오는 청크가 있으면 안 된다.
+//
+// 사용자가 실제로 이걸 만났다 — 노래 음원을 넣으려니 "FAILED TO FETCH
+// DYNAMICALLY IMPORTED MODULE". 열어 둔 화면이 들고 있던 청크 이름이 새
+// 배포에서 사라져서다. 아끼던 건 8.4KB(전체의 2.8%)였다. 그 정도 이득에
+// 기능이 안 열리는 위험을 다시 지지 않도록 여기서 막는다.
+const jsFiles = readdirSync("dist/assets").filter((f) => f.endsWith(".js"));
+check("늦게 받아 오는 청크가 없다 (배포 중에도 안 깨지게)", jsFiles.length === 1, jsFiles);
 
 check("하위 경로에서 화면이 뜬다", await page.locator("#roll").isVisible());
 check("404 나는 파일이 없다", failed.length === 0, failed);
@@ -120,6 +132,23 @@ check(
   String.fromCharCode(...bytes.subarray(0, 4)) === "RIFF" && loudest > 200,
   { name: download.suggestedFilename(), kb: Math.round(bytes.length / 1024), loudest },
 );
+
+// 노래 음원 넣기 — 사용자가 막혔던 바로 그 길을 빌드된 결과물에서 돌린다.
+if (existsSync("fixtures/voice-cp932.zip")) {
+  await page.locator("#voice-zip").setInputFiles("fixtures/voice-cp932.zip");
+  await page
+    .waitForFunction(() => (document.getElementById("instrument")?.textContent ?? "").includes("🎤"),
+      null, { timeout: 20000 })
+    .catch(() => {});
+  check(
+    "받은 zip 을 그대로 넣으면 노래 음원이 붙는다",
+    (await page.locator("#instrument").textContent())?.includes("重音テト単独音"),
+    { 악기: await page.locator("#instrument").textContent(),
+      상태: await page.locator("#status").textContent() },
+  );
+} else {
+  console.log("(fixtures/voice-cp932.zip 이 없어 zip 검사는 건너뜀 — npm run gen-voicebank && npm run gen-voicezip)\n");
+}
 
 check("콘솔 오류 없음", errors.length === 0, errors);
 

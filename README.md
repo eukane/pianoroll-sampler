@@ -63,6 +63,7 @@ npm run smoke      # 브라우저 자동 점검 122가지 (dev 서버를 띄워 
 npm run midi       # MIDI 왕복 점검 20가지 (브라우저 없이, 1초)
 npm run names      # 샘플 파일명 읽기 점검 19가지 (브라우저 없이)
 npm run audit      # 고치다 옆엣것을 깨뜨리지 않았는지 56가지 (브라우저 없이)
+npm run built-check # 빌드된 결과물이 실제로 도는지 10가지 (build 뒤에)
 npm run clipboard  # 복사·붙여넣기 점검 15가지 (브라우저 없이)
 npm run oto        # UTAU 음원 읽기·이어붙이기 점검 62가지 (브라우저 없이)
 npm run zip        # 일본어 이름 zip 읽기 점검 (브라우저 없이)
