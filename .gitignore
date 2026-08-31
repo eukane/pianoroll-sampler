@@ -15,3 +15,7 @@ dist/
 scripts/smoke.png
 public/spessasynth_processor.min.js
 fixtures/
+
+# 테토 음원은 받아서 쓰는 것이지 저장소에 넣는 게 아니다 (사용허락조건: 저작자
+# 승낙 없이 전부/일부를 판매·배포 금지). 개발용으로 여기 풀어 둘 뿐이다.
+.teto/

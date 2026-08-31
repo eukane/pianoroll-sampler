@@ -22,7 +22,8 @@
     "gen-big-sf2": "node --max-old-space-size=4096 scripts/gen-big-sf2.mjs",
     "audit": "node scripts/audit.mjs",
     "clipboard": "node scripts/clipboard-test.mjs",
-    "latency": "node scripts/latency-probe.mjs"
+    "latency": "node scripts/latency-probe.mjs",
+    "oto": "node scripts/oto-test.mjs"
   },
   "devDependencies": {
     "@vitejs/plugin-basic-ssl": "^1.2.0",

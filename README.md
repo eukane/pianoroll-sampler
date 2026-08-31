@@ -64,6 +64,7 @@ npm run midi       # MIDI 왕복 점검 20가지 (브라우저 없이, 1초)
 npm run names      # 샘플 파일명 읽기 점검 19가지 (브라우저 없이)
 npm run audit      # 고치다 옆엣것을 깨뜨리지 않았는지 45가지 (브라우저 없이)
 npm run clipboard  # 복사·붙여넣기 점검 15가지 (브라우저 없이)
+npm run oto        # UTAU 원음설정(oto.ini) 읽기 점검 24가지 (브라우저 없이)
 npm run latency    # 이 기기에서 사운드폰트가 몇 ms 늦는지 실측 (통과/실패 아님)
 ```
 
