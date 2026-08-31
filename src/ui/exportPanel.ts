@@ -214,7 +214,15 @@ export class ExportPanel {
     const buffer = new ArrayBuffer(bytes.byteLength);
     new Uint8Array(buffer).set(bytes);
     download(new Blob([buffer], { type: "audio/midi" }), `${this.baseName()}.mid`);
-    this.cb.onStatus(`${this.baseName()}.mid 를 저장했습니다`);
+
+    // MIDI 에는 노랫말을 실을 자리가 없다(우리가 쓰는 범위에서는). 노래하는
+    // 트랙이 있으면 그 사실을 말해 준다 — 다른 앱에서 열었더니 가사가
+    // 사라져 있으면 어디서 없어졌는지 알 길이 없다.
+    const singing = this.getProject().tracks.filter((t) => t.source.kind === "voice");
+    const note = singing.length > 0
+      ? ` · 노래 트랙 ${singing.length}개의 가사는 빠집니다 (음정·길이만 나갑니다)`
+      : "";
+    this.cb.onStatus(`${this.baseName()}.mid 를 저장했습니다${note}`);
     this.close();
   }
 

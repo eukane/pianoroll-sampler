@@ -27,6 +27,8 @@
 import { indexOto, parseOto, resolveSound, type OtoIndex } from "../model/oto";
 import { frqNameFor, hzToMidi, readFrqAverage } from "../model/frq";
 import { planPhrase, type PhrasePlan, type SungNote } from "../model/phrase";
+import { shakes, VIBRATO_FADE, VIBRATO_HZ, VIBRATO_MAX_CENTS } from "./vibrato";
+import type { Expression } from "./expression";
 
 /** oto.ini 는 Shift-JIS 다. 실제로 브라우저가 읽는 걸 확인했다. */
 export function decodeOtoText(bytes: ArrayBuffer): string {
@@ -45,7 +47,7 @@ export class VoiceBank {
   /** 파일명 → 그 파일이 녹음된 음정(MIDI). 주파수표에서 읽는다. */
   private pitches = new Map<string, number>();
   /** 지금 울리고 있는(또는 예약된) 소리들. 정지·다시예약 때 끊어야 한다. */
-  private active: { source: AudioBufferSourceNode; gain: GainNode }[] = [];
+  private active: { source: AudioBufferSourceNode; gain: GainNode; lfo?: OscillatorNode }[] = [];
 
   /**
    * zip 처럼 **아직 안 꺼낸** 파일을 나중에 꺼내 오는 길. 없으면 안 쓴다.
@@ -114,8 +116,16 @@ export class VoiceBank {
     }
     for (const fileName of wanted) {
       if (this.buffers.has(fileName)) continue;
-      // 손에 든 게 없으면 그때 꺼내 온다 (zip 안에 있는 경우).
-      const bytes = this.raw.get(fileName) ?? (this.fetch ? await this.fetch(fileName) : null);
+      // 손에 든 게 없으면 그때 꺼내 온다 (zip 안에 있는 경우). 꺼내다 실패해도
+      // 여기서 멈추면 안 된다 — 파일 하나 때문에 줄 전체가 안 나온다.
+      let bytes = this.raw.get(fileName) ?? null;
+      if (!bytes && this.fetch) {
+        try {
+          bytes = await this.fetch(fileName);
+        } catch {
+          bytes = null;
+        }
+      }
       if (!bytes) continue;
       try {
         // decodeAudioData 는 넘긴 버퍼를 가져가 버린다. 다시 쓸 수 있게 복사해 준다.
@@ -146,9 +156,16 @@ export class VoiceBank {
    * 돌려주는 계획에는 **못 부른 글자**가 들어 있다. 화면이 그걸 사용자에게
    * 알려 줘야 한다 — 소리만 안 나면 왜 안 나는지 알 수가 없다.
    */
-  sing(ctx: BaseAudioContext, dest: AudioNode, notes: SungNote[], at = 0): PhrasePlan {
+  sing(
+    ctx: BaseAudioContext,
+    dest: AudioNode,
+    notes: SungNote[],
+    at = 0,
+    expressions?: Map<string, Expression>,
+  ): PhrasePlan {
     this.ctxTime = ctx.currentTime;
     const plan = this.plan(notes);
+    const byId = new Map(notes.map((n) => [n.id, n]));
 
     for (const piece of plan.pieces) {
       const buffer = this.buffers.get(piece.fileName);
@@ -178,12 +195,19 @@ export class VoiceBank {
       gain.gain.setValueAtTime(1, end - fadeOut);
       gain.gain.linearRampToValueAtTime(0, end);
 
+      // 꾸밈의 시각은 **노트 기준**이다. 소리는 선행발성 때문에 노트보다
+      // 먼저 시작하므로(piece.startAt < 노트 시작), 여기서 기준을 다시 잡지
+      // 않으면 끌어올림이 글자가 나오기도 전에 끝나 버린다.
+      const note = byId.get(piece.noteId);
+      const expr = expressions?.get(piece.noteId);
+      const lfo = note && expr ? this.attachExpression(ctx, source, expr, at + note.startSec, end, note.lengthSec) : null;
+
       source.connect(gain);
       gain.connect(dest);
       source.start(start, piece.bufferOffset);
       source.stop(end + 0.02);
 
-      const voice = { source, gain };
+      const voice = { source, gain, ...(lfo ? { lfo } : {}) };
       this.active.push(voice);
       source.onended = () => {
         gain.disconnect();
@@ -193,6 +217,43 @@ export class VoiceBank {
     }
 
     return plan;
+  }
+
+  /**
+   * 이 음을 흔들고 휜다. 다른 악기와 **같은 방식**이다 — 재생 속도로 음정을
+   * 옮긴 위에 `detune`(센트)을 얹는다. 그래서 어느 글자를 어느 속도로 늘여
+   * 부르고 있든 흔들리는 폭이 같다.
+   *
+   * 모음을 반복해 늘인 긴 음은 반복 구간이 밋밋한데, 떨림이 걸리면 그게
+   * 가장 크게 좋아진다. 사람이 그렇게 부르기 때문이다.
+   */
+  private attachExpression(
+    ctx: BaseAudioContext,
+    source: AudioBufferSourceNode,
+    expr: Expression,
+    noteAt: number,
+    stopAt: number,
+    durationSec: number,
+  ): OscillatorNode | null {
+    if (expr.bend.length > 0) {
+      source.detune.setValueAtTime(expr.bend[0].cents, noteAt);
+      for (const p of expr.bend.slice(1)) source.detune.linearRampToValueAtTime(p.cents, noteAt + p.t);
+    }
+
+    const v = expr.vibrato;
+    if (!shakes(v, durationSec)) return null;
+
+    const lfo = ctx.createOscillator();
+    lfo.frequency.value = VIBRATO_HZ;
+    const depth = ctx.createGain();
+    depth.gain.setValueAtTime(0, noteAt);
+    depth.gain.setValueAtTime(0, noteAt + v.delay);
+    depth.gain.linearRampToValueAtTime(v.depth * VIBRATO_MAX_CENTS, noteAt + v.delay + VIBRATO_FADE);
+    lfo.connect(depth);
+    depth.connect(source.detune);
+    lfo.start(noteAt);
+    lfo.stop(stopAt + 0.02);
+    return lfo;
   }
 
   /**
@@ -210,6 +271,8 @@ export class VoiceBank {
         v.gain.gain.setValueAtTime(Math.max(0.0001, v.gain.gain.value), now);
         v.gain.gain.linearRampToValueAtTime(0, now + 0.02);
         v.source.stop(now + 0.03);
+        // 떨림 LFO 도 같이 끊는다. 안 끊으면 소리가 멎은 뒤에도 노드가 남는다.
+        v.lfo?.stop(now + 0.04);
       } catch {
         /* 아직 시작 안 했거나 이미 끝난 노드 */
         try {

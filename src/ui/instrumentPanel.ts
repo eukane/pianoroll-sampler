@@ -447,8 +447,10 @@ export class InstrumentPanel {
       }
 
       // 여럿이면 나머지도 전부 등록해 둔다. 목록에서 골라 쓸 수 있다.
-      for (const bank of made.slice(1)) this.registerVoice(bank);
+      // 지금 트랙에 붙일 것을 **먼저** 등록해야 목록 맨 위에 그게 온다 —
+      // 쓰고 있는 음원이 목록 가운데 박혀 있으면 어느 걸 쓰는지 헷갈린다.
       this.useVoiceBank(made[0], made.length > 1 ? [`음원 ${made.length}가지 — 목록에서 바꿀 수 있음`] : []);
+      for (const bank of made.slice(1)) this.registerVoice(bank);
     } catch (err) {
       this.cb.onStatus(
         `압축 파일을 읽지 못했습니다: ${err instanceof Error ? err.message : String(err)}`,

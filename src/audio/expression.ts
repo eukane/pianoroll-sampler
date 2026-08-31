@@ -55,3 +55,23 @@ export function sampleBend(bend: BendPoint[], stepSec = 0.03): BendPoint[] {
   }
   return out;
 }
+
+/**
+ * 노래하는 줄 하나에 붙는 꾸밈들. 노트 id 로 찾는다.
+ *
+ * 노래는 노트 하나씩 소리를 내지 않고 **줄을 통째로** 예약한다
+ * (audio/voicebank.ts). 그래서 꾸밈도 줄 단위로 미리 모아 넘겨야 한다.
+ * 아무 꾸밈도 없는 음은 담지 않는다 — 담아 봐야 노드만 늘어난다.
+ */
+export function singingExpressions(
+  track: Track,
+  notes: Note[],
+  secondsOf: (note: Note) => number,
+): Map<string, Expression> {
+  const out = new Map<string, Expression>();
+  for (const note of notes) {
+    const e = expressionFor(track, note, secondsOf(note));
+    if (e.bend.length > 0 || e.vibrato.depth > 0) out.set(note.id, e);
+  }
+  return out;
+}

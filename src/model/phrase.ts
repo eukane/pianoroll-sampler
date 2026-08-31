@@ -43,7 +43,7 @@
  * 음원에 같이 든 주파수표에서 읽어 쓴다 (model/frq.ts).
  */
 
-import { pickEntry, regionOf, vowelOf, type OtoEntry, type OtoIndex } from "./oto.ts";
+import { pickEntry, regionOf, vowelOf, type OtoIndex } from "./oto.ts";
 
 /**
  * 이 음원이 녹음된 음높이 (MIDI 번호).
@@ -202,9 +202,4 @@ export function planPhrase(notes: SungNote[], options: PlanOptions): PhrasePlan 
   }
 
   return { pieces, missing };
-}
-
-/** 검사·화면에서 쓰려고 노출한다. 이 설정이 실제로 쓰는 버퍼 구간. */
-export function pieceRegion(entry: OtoEntry, seconds: number) {
-  return regionOf(entry, seconds);
 }

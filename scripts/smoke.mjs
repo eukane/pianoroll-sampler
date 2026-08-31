@@ -1919,6 +1919,53 @@ check(
   { さ: sang.pitches[1] },
 );
 
+// 노래하는 트랙에도 음마다 꾸밈이 걸리는가.
+//
+// 이걸 넣기 전까지 노래 트랙은 **꾸밈을 조용히 무시하고 있었다.** 노트 창에
+// 떨림·꺾기 버튼이 다 나오고, 고르면 노트에 저장되고, 피아노롤에 「〜」까지
+// 그려지는데, 소리는 하나도 안 변했다. 그래서 소리를 직접 재서 확인한다.
+const singOrn = await page.evaluate(async () => {
+  const app = window.__app;
+  const t = app.project.tracks[0];
+  app.project.bars = 2;
+
+  const spread = async (ornament) => {
+    t.notes.length = 0;
+    t.notes.push({ id: "v0", pitch: 62, start: 0, length: 2, velocity: 100, lyric: "か",
+      ...(ornament ? { ornament, ornamentAmount: 0.8 } : {}) });
+    await app.registry.prepareVoices(app.project.tracks);
+    const { renderProject } = await import("/src/export/render.ts");
+    const buf = await renderProject(app.project, () => app.registry.soundfont.bankBuffer(),
+      app.registry.folders.list, app.mixerState, app.registry.voices);
+    const d = buf.getChannelData(0), sr = buf.sampleRate;
+    const at = (sec) => {
+      const SUB = 1024, minLag = Math.floor(sr / 600), maxLag = Math.floor(sr / 200);
+      const s0 = Math.floor(sec * sr);
+      const r = [];
+      for (let lag = minLag; lag <= maxLag; lag += 1) {
+        let sum = 0;
+        for (let i = 0; i < SUB; i += 1) sum += d[s0 + i] * d[s0 + i + lag];
+        r.push(sum);
+      }
+      const peak = Math.max(...r);
+      let idx = r.findIndex((v) => v >= peak * 0.92);
+      while (idx + 1 < r.length && r[idx + 1] > r[idx]) idx += 1;
+      return 69 + 12 * Math.log2(sr / (minLag + idx) / 440);
+    };
+    // 100BPM 이라 2박 = 1.2초. 머리(자음)와 꼬리(페이드)는 빼고 잰다.
+    const got = [];
+    for (let sec = 0.25; sec <= 0.95; sec += 0.02) got.push(at(sec));
+    return +((Math.max(...got) - Math.min(...got)) * 100).toFixed(1); // 센트
+  };
+
+  return { 그냥: await spread(null), 떨림: await spread("vibrato") };
+});
+// 실측: 꾸밈 없음 11.5센트(= 음정 추적기의 잡음 바닥), 떨림 0.8 → 80.5센트.
+// 이론값과 맞는다 — 0.8 × VIBRATO_MAX_CENTS(50) = ±40, 위아래로 80센트.
+// 고치기 전에는 둘 다 11.5 였다. 즉 꾸밈이 소리에 아무 영향이 없었다.
+check("노래 트랙: 꾸밈 없는 음은 음정이 곧다", singOrn.그냥 < 25, singOrn);
+check("노래 트랙: 떨림을 고른 음이 실제로 떤다", singOrn.떨림 > 55, singOrn);
+
 // ---- 받은 zip 을 안 풀고 넣기 ----
 //
 // 사용자의 폰이 테토 음원 zip 을 못 풀었다 — "폴더에 문제가 있어 추출할 수

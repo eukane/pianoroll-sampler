@@ -14,6 +14,7 @@
  *   · 예제 곡이 헤더에 적어 둔 대로 되어 있는가 (격자·음계·겹침)
  *   · 둘째 예제(일렉트로닉)의 드럼이 9번 채널에 가고 구조가 살아 있는가
  *   · **저장했다 열면 꾸밈·노랫말이 그대로 있는가** (예전에는 날아갔다)
+ *   · **노래하는 트랙도 꾸밈을 받는가** (예전에는 조용히 무시했다)
  *
  *     node scripts/audit.mjs
  */
@@ -24,7 +25,7 @@ import { demoSong } from "../src/model/demoSong.ts";
 import { DEMOS } from "../src/model/demos.ts";
 import { shakes, vibratoOf } from "../src/audio/vibrato.ts";
 import { bendCurve, MAX_BEND_CENTS } from "../src/model/ornament.ts";
-import { expressionFor } from "../src/audio/expression.ts";
+import { expressionFor, singingExpressions } from "../src/audio/expression.ts";
 import { projectToJson, projectFromJson } from "../src/export/projectFile.ts";
 
 const out = [];
@@ -336,6 +337,38 @@ const junk = projectFromJson(JSON.stringify({ ...saved,
   tracks: [{ ...saved.tracks[0], notes: [{ ...saved.tracks[0].notes[0], ornament: "쾅" }] }] }));
 ok("모르는 꾸밈 이름은 무시한다", junk.tracks[0].notes[0].ornament === undefined,
    junk.tracks[0].notes[0].ornament);
+
+// ---- 11) 노래하는 트랙도 꾸밈을 받는가 ----
+//
+// 오래 이게 비어 있었다. 노트 창에 떨림·꺾기 버튼이 다 나오고, 고르면
+// 노트에 저장되고, 피아노롤에 「〜」까지 그려지는데, **소리를 내는 쪽이
+// 그걸 아예 안 봤다.** 눈에 보이는 건 전부 맞으니 눈으로는 못 잡는다.
+const singTrack = {
+  id: "t", name: "테토", source: { kind: "voice", bankId: "teto" },
+  volume: 0.8, pan: 0, muted: false,
+  notes: [
+    { id: "a", pitch: 62, start: 0, length: 2, velocity: 100, lyric: "か" },
+    { id: "b", pitch: 64, start: 2, length: 2, velocity: 100, lyric: "さ", ornament: "vibrato", ornamentAmount: 0.8 },
+    { id: "c", pitch: 65, start: 4, length: 2, velocity: 100, lyric: "ね", ornament: "scoop" },
+  ],
+};
+const singExprs = singingExpressions(singTrack, singTrack.notes, () => 1.2);
+ok("떨림을 고른 음이 꾸밈 목록에 든다", singExprs.get("b")?.vibrato.depth === 0.8,
+   singExprs.get("b"));
+ok("끌어올림을 고른 음은 음정 곡선을 받는다", (singExprs.get("c")?.bend.length ?? 0) > 0,
+   singExprs.get("c")?.bend);
+// 아무 꾸밈도 없는 음까지 담으면 부를 때마다 쓸데없는 노드를 만든다.
+ok("꾸밈 없는 음은 목록에 안 담는다", !singExprs.has("a"), [...singExprs.keys()]);
+// 트랙 기본 떨림은 꾸밈을 안 정한 음에만. 노래 트랙에서도 규칙이 같아야 한다.
+const singExprs2 = singingExpressions({ ...singTrack, vibrato: 0.4, vibratoDelay: 0.3 },
+  singTrack.notes, () => 1.2);
+ok("노래 트랙도 트랙 기본 떨림은 꾸밈 안 정한 음에만 건다",
+   singExprs2.get("a")?.vibrato.depth === 0.4 && singExprs2.get("c")?.vibrato.depth === 0,
+   { a: singExprs2.get("a")?.vibrato, c: singExprs2.get("c")?.vibrato });
+// 짧은 음은 떨어 봐야 흔들림이 한 번도 못 돈다. 시작 지연보다 짧으면 안 건다.
+const singShort = singingExpressions({ ...singTrack, vibrato: 0.4, vibratoDelay: 0.3 },
+  singTrack.notes, () => 0.1);
+ok("짧은 음은 떨지 않는다", !shakes(singShort.get("a").vibrato, 0.1), singShort.get("a"));
 
 let bad = 0;
 for (const r of out) { if (!r.pass) bad++; console.log(`${r.pass ? "✅" : "❌"} ${r.n}${r.pass ? "" : "  " + JSON.stringify(r.d)}`); }

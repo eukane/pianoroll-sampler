@@ -235,9 +235,6 @@ function track(
   };
 }
 
-/** 이 곡은 드럼 트랙이 있어서 사운드폰트가 없으면 반쪽이다. */
-export const EDM_NEEDS_SOUNDFONT = true;
-
 export function edmSong(): Project {
   return {
     bpm: 128,

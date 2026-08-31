@@ -35,7 +35,7 @@ import { BasicMIDI } from "spessasynth_core";
 import type { Project, Track } from "../model/types";
 import { totalBeats } from "../model/project";
 import { assignChannels } from "../model/channels";
-import { expressionFor } from "../audio/expression";
+import { expressionFor, singingExpressions } from "../audio/expression";
 import { Mixer } from "../audio/mixer";
 import { MixerState } from "../audio/mixerState";
 import { OscInstrument } from "../audio/oscInstrument";
@@ -240,6 +240,7 @@ function renderLocally(
           lyric: n.lyric ?? "",
         })),
         0,
+        singingExpressions(track, track.notes, (n) => Math.max(0.02, n.length * secPerBeat)),
       );
       continue;
     }

@@ -38,11 +38,20 @@ jobs:
       - run: npm ci
 
       # 소리가 안 나는 것보다 빌드가 깨지는 게 낫다. 타입 검사와
-      # 브라우저가 필요 없는 점검은 배포 전에 돌린다.
+      # 브라우저가 필요 없는 점검은 배포 전에 전부 돌린다.
+      #
+      # 검사를 만들어 놓고 여기 안 걸어 두면 아무도 안 돌린다. 실제로
+      # oto·audit·clipboard 는 만든 뒤로 배포 때 한 번도 안 돌고 있었다.
       - name: 점검 (브라우저 없이)
         run: |
           npm run midi
           npm run names
+          npm run clipboard
+          npm run audit
+          npm run oto
+          npm run gen-voicebank
+          npm run gen-voicezip
+          npm run zip
 
       - name: 빌드
         run: npm run build

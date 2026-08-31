@@ -48,16 +48,6 @@ export function makeNote(pitch: number, start: number, length: number, velocity 
   return { id: newId("n"), pitch, start, length, velocity };
 }
 
-export function addNote(track: Track, note: Note): void {
-  track.notes.push(note);
-  sortNotes(track);
-}
-
-export function removeNote(track: Track, noteId: string): void {
-  const i = track.notes.findIndex((n) => n.id === noteId);
-  if (i >= 0) track.notes.splice(i, 1);
-}
-
 /** 스케줄러가 순서대로 훑을 수 있게 시작 박 기준으로 정렬해 둔다. */
 export function sortNotes(track: Track): void {
   track.notes.sort((a, b) => a.start - b.start || a.pitch - b.pitch);

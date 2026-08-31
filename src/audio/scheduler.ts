@@ -25,7 +25,7 @@ import type { Mixer } from "./mixer";
 import type { MixerState } from "./mixerState";
 import { totalBeats } from "../model/project";
 import { assignChannels, channelForTrack } from "../model/channels";
-import { expressionFor } from "./expression";
+import { expressionFor, singingExpressions } from "./expression";
 import type { SungNote } from "../model/phrase";
 import type { VoiceBank } from "./voicebank";
 
@@ -40,6 +40,14 @@ const LOOKAHEAD_SEC = 0.12;
  * 누른 만큼 울린다.
  */
 const MIN_PREVIEW_MS = 250;
+
+/**
+ * 노래 들어보기 길이(초).
+ *
+ * 노트 길이를 그대로 쓰면 16분음표에서 자음만 스치고 끝나서 「か」인지
+ * 「が」인지 구분이 안 된다. 짧은 음이어도 이만큼은 불러 준다.
+ */
+const PREVIEW_SING_SEC = 0.6;
 
 /** 미리듣기의 최대 길이(초). 꾸밈 곡선을 그릴 때 음 길이 대신 쓴다. */
 const MAX_PREVIEW = 2;
@@ -325,7 +333,13 @@ export class Scheduler {
         muted: false,
         send: track.reverbSend ?? 0,
       });
-      const result = bank.sing(this.engine.ctx, this.mixer.input(channel), notes, base);
+      const result = bank.sing(
+        this.engine.ctx,
+        this.mixer.input(channel),
+        notes,
+        base,
+        singingExpressions(track, track.notes, (n) => Math.max(0.02, n.length * spb)),
+      );
       if (result.missing.length > 0) this.onMissingLyrics?.(result.missing.map((m) => m.lyric));
     }
   }
@@ -443,8 +457,10 @@ export class Scheduler {
     bank.sing(
       this.engine.ctx,
       this.mixer.input(channel),
-      [{ id: note.id, pitch: note.pitch, startSec: 0, lengthSec: Math.max(0.6, 0.6), lyric }],
+      [{ id: note.id, pitch: note.pitch, startSec: 0, lengthSec: PREVIEW_SING_SEC, lyric }],
       this.engine.currentTime + 0.02,
+      // 들어보기도 꾸밈을 걸어 들려준다. 여기서만 안 걸리면 "적용이 안 됐나" 싶다.
+      singingExpressions(track, [note], () => PREVIEW_SING_SEC),
     );
   }
 
