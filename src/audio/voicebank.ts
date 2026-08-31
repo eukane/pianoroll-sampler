@@ -46,6 +46,8 @@ export class VoiceBank {
   readonly skipped: string[];
   /** 파일명 → 그 파일이 녹음된 음정(MIDI). 주파수표에서 읽는다. */
   private pitches = new Map<string, number>();
+  /** 늦게 꺼내 보려다 실패한 음정표. 부를 때마다 다시 뒤지지 않게. */
+  private frqTried = new Set<string>();
   /** 지금 울리고 있는(또는 예약된) 소리들. 정지·다시예약 때 끊어야 한다. */
   private active: { source: AudioBufferSourceNode; gain: GainNode; lfo?: OscillatorNode }[] = [];
 
@@ -70,8 +72,9 @@ export class VoiceBank {
     this.skipped = parsed.skipped;
     this.raw = files;
 
-    // 주파수표는 작아서(2KB 남짓) 통째로 읽어도 부담이 없다. WAV 와 달리
+    // 주파수표는 작아서(2KB 남짓) 손에 든 건 여기서 다 읽는다. WAV 와 달리
     // 디코딩도 필요 없다. 파일마다 녹음된 음정이 달라서 이게 있어야 음이 맞는다.
+    // zip 처럼 아직 안 꺼낸 음원은 여기가 비어 있고, 부를 때 하나씩 꺼낸다.
     for (const [name, bytes] of files) {
       if (!name.toLowerCase().endsWith(".frq")) continue;
       const hz = readFrqAverage(bytes);
@@ -115,6 +118,21 @@ export class VoiceBank {
       for (const entry of (key === null ? [] : this.index.get(key) ?? [])) wanted.add(entry.fileName);
     }
     for (const fileName of wanted) {
+      // 음정표부터. 이게 없으면 그 글자만 음이 틀린다(실물 「さ」가 그랬다).
+      // zip 은 여는 순간이 아니라 여기서 꺼낸다 — 음원 13개짜리 zip 의
+      // 주파수표 1900개를 미리 다 꺼내면 여는 데만 폰에서 1분이 넘는다.
+      const frqName = frqNameFor(fileName);
+      if (this.fetch && !this.pitches.has(frqName) && !this.frqTried.has(frqName)) {
+        this.frqTried.add(frqName);
+        try {
+          const frq = await this.fetch(frqName);
+          const hz = frq === null ? null : readFrqAverage(frq);
+          if (hz !== null) this.pitches.set(frqName, hzToMidi(hz));
+        } catch {
+          /* 음정표가 없거나 못 읽으면 기본 음정으로 부른다 */
+        }
+      }
+
       if (this.buffers.has(fileName)) continue;
       // 손에 든 게 없으면 그때 꺼내 온다 (zip 안에 있는 경우). 꺼내다 실패해도
       // 여기서 멈추면 안 된다 — 파일 하나 때문에 줄 전체가 안 나온다.

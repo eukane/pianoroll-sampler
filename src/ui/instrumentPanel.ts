@@ -396,24 +396,31 @@ export class InstrumentPanel {
    * 만들고는 "폴더에 문제가 있어 추출할 수 없다" 며 멈춘다. 실제로 사용자가
    * 여기서 막혔다. 앱이 직접 읽으면 풀 일 자체가 없어진다.
    *
-   * WAV 는 여기서 안 꺼낸다. 주파수표(.frq)만 미리 꺼내고 — 파일당 2KB 남짓이라
-   * 부담이 없고 음정을 맞추려면 처음부터 있어야 한다 — WAV 는 실제로 부르는
-   * 글자만 zip 에서 그때 꺼낸다. 91MB 짜리 음원을 통째로 메모리에 올리지 않는다.
+   * **여기서는 목차만 읽는다.** WAV 도 주파수표도 안 꺼낸다. 처음엔 주파수표를
+   * 미리 다 꺼냈는데, 공식 통합 음원(497MB · 음원 13개)은 주파수표만 1900개라
+   * 여는 데 데스크톱에서도 7.6초가 걸렸다 — 폰이면 1분이 넘고, 그동안 화면은
+   * 멈춘 것처럼 보인다. 지금은 음원 크기와 상관없이 즉시 열린다.
    */
   private async loadVoiceZip(file: File): Promise<void> {
-    this.cb.onStatus("압축 파일 목차 읽는 중…");
+    // 고른 파일이 무엇인지 먼저 말해 준다. 이게 없으면 실패했을 때 파일을
+    // 잘못 골랐는지, 고르는 것 자체가 안 됐는지 구분할 수가 없다.
+    const mb = (file.size / 1048576).toFixed(0);
+    this.cb.onStatus(`${file.name} (${mb}MB) 읽는 중…`);
     try {
       const { readZipIndex, readZipEntry, findVoiceBanks } = await import("../model/zip");
       const entries = await readZipIndex(file);
       if (!entries) {
-        this.cb.onStatus("zip 파일로 읽지 못했습니다. 받은 파일이 맞는지 확인해 주세요.", "error");
+        this.cb.onStatus(
+          `${file.name} 은 zip 파일이 아닌 것 같습니다 (${mb}MB). 받다가 끊겼거나 다른 파일일 수 있습니다.`,
+          "error",
+        );
         return;
       }
 
       const found = findVoiceBanks(entries);
       if (found.length === 0) {
         this.cb.onStatus(
-          `이 압축 파일 안에 UTAU 음원이 없습니다 (oto.ini 를 못 찾음, 파일 ${entries.length}개).`,
+          `${file.name} 안에 UTAU 음원이 없습니다 (파일 ${entries.length}개 중 oto.ini 를 못 찾음).`,
           "error",
         );
         return;
@@ -422,19 +429,10 @@ export class InstrumentPanel {
       const { VoiceBank, decodeOtoText } = await import("../audio/voicebank");
       const made: VoiceBank[] = [];
       for (const one of found) {
-        this.cb.onStatus(`${one.name} 읽는 중… (파일 ${one.files.size}개)`);
         const otoBytes = await readZipEntry(file, one.oto);
         if (!otoBytes) continue;
-
-        // 주파수표만 미리 꺼낸다. WAV 는 부를 때.
-        const bytes = new Map<string, ArrayBuffer>();
-        for (const [name, entry] of one.files) {
-          if (!name.toLowerCase().endsWith(".frq")) continue;
-          const frq = await readZipEntry(file, entry);
-          if (frq) bytes.set(name, frq);
-        }
-
-        const bank = new VoiceBank(one.name, decodeOtoText(otoBytes), bytes, async (fileName) => {
+        // 손에 쥐는 건 oto.ini 한 장뿐이다. WAV 도 주파수표도 부를 때 꺼낸다.
+        const bank = new VoiceBank(one.name, decodeOtoText(otoBytes), new Map(), async (fileName) => {
           const entry = one.files.get(fileName);
           return entry ? readZipEntry(file, entry) : null;
         });

@@ -1985,7 +1985,10 @@ await page.evaluate((b64) => {
   el.files = dt.files;
   el.dispatchEvent(new Event("change", { bubbles: true }));
 }, readFileSync("fixtures/voice-cp932.zip").toString("base64"));
-await page.waitForTimeout(2000);
+const zipOpenAt = Date.now();
+await page.waitForFunction(() => window.__app.project.tracks[0].source.kind === "voice", null,
+  { timeout: 20000 }).catch(() => {});
+const zipOpenMs = Date.now() - zipOpenAt;
 
 const zipped = await page.evaluate(() => ({
   source: window.__app.project.tracks[0].source,
@@ -1996,25 +1999,49 @@ check("zip 을 안 풀고 넣어도 노래하는 트랙이 된다", zipped.sourc
 // 이름이 깨졌다면 「重音テト単独音」 대신 「\u91cd\u97f3...」 같은 글자가 온다.
 check("일본어 폴더 이름이 안 깨진다", zipped.button.includes("重音テト単独音"), zipped.button);
 check("zip 안의 oto.ini 도 읽는다 (소리 6가지)", zipped.status.includes("6가지"), zipped.status);
-check("zip 안의 주파수표도 읽는다", zipped.status.includes("음정표"), zipped.status);
+// 여는 순간에는 oto.ini 한 장만 읽는다. 주파수표를 미리 다 꺼내던 때는
+// 공식 통합 음원(474MB · 음원 13개 · 주파수표 1900개)이 데스크톱에서도
+// 7.6초 걸렸다 — 폰이면 1분이 넘고 그동안 멈춘 것처럼 보인다. 지금은 0.5초.
+check("음원 크기와 상관없이 즉시 열린다", zipOpenMs < 3000, { 걸린ms: zipOpenMs });
 
-// WAV 는 zip 안에 그대로 있다. 부를 때 꺼내 오는 길이 정말 도는지 본다.
+// zip 안의 WAV 와 주파수표를 **부를 때** 꺼내 오는 길이 정말 도는가.
+// 「さ」는 반음 낮게 녹음돼 있어서, 주파수표를 늦게 못 꺼내면 여기만 틀린다.
+// 미리 꺼내기를 그만두면서 제일 깨지기 쉬워진 자리라 음정까지 잰다.
 const zipSang = await page.evaluate(async () => {
   const app = window.__app;
   const t = app.project.tracks[0];
   t.notes.length = 0;
-  t.notes.push({ id: "z0", pitch: 62, start: 0, length: 1, velocity: 100, lyric: "か" });
-  app.project.bars = 1;
+  ["か", "さ", "ね"].forEach((lyric, i) => t.notes.push({
+    id: "z" + i, pitch: [62, 64, 65][i], start: i, length: 1, velocity: 100, lyric,
+  }));
+  app.project.bars = 2;
   await app.registry.prepareVoices(app.project.tracks);
   const { renderProject } = await import("/src/export/render.ts");
   const buf = await renderProject(app.project, () => app.registry.soundfont.bankBuffer(),
     app.registry.folders.list, app.mixerState, app.registry.voices);
-  const d = buf.getChannelData(0);
+  const d = buf.getChannelData(0), sr = buf.sampleRate;
   let peak = 0;
   for (let i = 0; i < d.length; i += 1) peak = Math.max(peak, Math.abs(d[i]));
-  return +peak.toFixed(3);
+  const at = (sec) => {
+    const SUB = 2048, minLag = Math.floor(sr / 600), maxLag = Math.floor(sr / 200);
+    const s0 = Math.floor(sec * sr);
+    const r = [];
+    for (let lag = minLag; lag <= maxLag; lag += 1) {
+      let sum = 0;
+      for (let i = 0; i < SUB; i += 1) sum += d[s0 + i] * d[s0 + i + lag];
+      r.push(sum);
+    }
+    const pk = Math.max(...r);
+    let idx = r.findIndex((v) => v >= pk * 0.92);
+    while (idx + 1 < r.length && r[idx + 1] > r[idx]) idx += 1;
+    return +(69 + 12 * Math.log2(sr / (minLag + idx) / 440)).toFixed(2);
+  };
+  return { peak: +peak.toFixed(3), pitches: [0, 1, 2].map((i) => at(i * 0.6 + 0.3)) };
 });
-check("zip 안의 WAV 를 꺼내 실제로 부른다", zipSang > 0.02, { peak: zipSang });
+check("zip 안의 WAV 를 꺼내 실제로 부른다", zipSang.peak > 0.02, zipSang);
+check("zip 안의 주파수표를 부를 때 꺼내 음정을 맞춘다",
+  zipSang.pitches.every((p, i) => Math.abs(p - [62, 64, 65][i]) < 0.5),
+  { 잰음정: zipSang.pitches, 기대: [62, 64, 65] });
 
 check("콘솔 오류 없음", errors.length === 0, errors);
 

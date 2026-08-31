@@ -44,8 +44,15 @@
           <!-- UTAU 음원은 폴더 통째로 받는다 (WAV 더미 + oto.ini + 주파수표). -->
           <input id="voice-files" type="file" webkitdirectory multiple hidden />
           <!-- 받은 zip 을 안 풀고 그대로. 일본어 음원은 압축 프로그램이 이름을
-               못 읽어 못 푸는 일이 잦다 (model/zip.ts). -->
-          <input id="voice-zip" type="file" accept=".zip,application/zip" hidden />
+               못 읽어 못 푸는 일이 잦다 (model/zip.ts).
+
+               accept 를 일부러 안 걸었다. 안드로이드 파일 선택기는 accept 에
+               적힌 MIME 과 안 맞는 파일을 **회색으로 만들어 아예 못 고르게**
+               하는데, 받아 둔 zip 의 MIME 은 제공자에 따라 application/zip 이
+               아니라 octet-stream · x-zip-compressed 로 오는 일이 흔하다.
+               그러면 파일이 눈앞에 있는데 선택이 안 된다. 어차피 고른 뒤에
+               zip 인지는 내용(EOCD 표식)을 보고 판정하므로 걸 이유가 없다. -->
+          <input id="voice-zip" type="file" hidden />
           <span class="spacer"></span>
           <label>BPM <input id="bpm" type="number" min="20" max="300" step="1" value="100" /></label>
           <label>마디 <input id="bars" type="number" min="1" max="64" step="1" value="4" /></label>
