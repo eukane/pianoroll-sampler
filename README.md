@@ -59,12 +59,13 @@ AudioWorklet 이 보안 컨텍스트(https 나 localhost)에서만 동작하는�
 
 ```bash
 npm run build      # 타입 검사 + 프로덕션 빌드
-npm run smoke      # 브라우저 자동 점검 114가지 (dev 서버를 띄워 둔 상태에서)
+npm run smoke      # 브라우저 자동 점검 119가지 (dev 서버를 띄워 둔 상태에서)
 npm run midi       # MIDI 왕복 점검 20가지 (브라우저 없이, 1초)
 npm run names      # 샘플 파일명 읽기 점검 19가지 (브라우저 없이)
 npm run audit      # 고치다 옆엣것을 깨뜨리지 않았는지 51가지 (브라우저 없이)
 npm run clipboard  # 복사·붙여넣기 점검 15가지 (브라우저 없이)
 npm run oto        # UTAU 음원 읽기·이어붙이기 점검 62가지 (브라우저 없이)
+npm run zip        # 일본어 이름 zip 읽기 점검 (브라우저 없이)
 npm run gen-voicebank  # 시험용 가짜 UTAU 음원 만들기 (smoke 가 자동으로 부른다)
 npm run latency    # 이 기기에서 사운드폰트가 몇 ms 늦는지 실측 (통과/실패 아님)
 ```
@@ -78,6 +79,10 @@ npm run latency    # 이 기기에서 사운드폰트가 몇 ms 늦는지 실측
 
 - **이번에 된 것**: `🎹 악기 → ＋ 노래 음원 넣기` 로 UTAU 음원 폴더를 넣으면
   그 트랙이 **노래를 부른다.** 노트를 톡 쳐서 가사(「か」「さ」…)를 적는다.
+- **받은 zip 은 안 풀어도 된다**: `＋ 노래 음원 넣기 (받은 zip 그대로)` 로
+  내려받은 파일을 그대로 넣는다. 일본어 음원 zip 은 파일 이름이 CP932 라
+  폰 압축 프로그램이 "폴더에 문제가 있다" 며 못 푸는 일이 잦은데, 앱이 직접
+  읽으면 그 단계가 없어진다. 안에 음원이 여럿이면 전부 목록에 올라온다.
 - **왜 되는가**: UTAU 음원은 암호화가 없다 — WAV 더미 + `oto.ini` 텍스트 한
   장이다. 이 앱이 이미 갖고 있던 "폴더째로 WAV 읽기" 위에 얹었다.
 - **음원 구하기**: [重音テト 공식 UTAU 음원](https://kasaneteto.jp/utau/) 이
@@ -215,6 +220,7 @@ src/
              · ornament(음 하나에 붙는 꾸밈 — 시김새)
              · demos(예제 곡 목록) · demoSong(국악풍) · demoEdm(일렉트로닉)
              · oto(UTAU 원음설정) · frq(녹음된 음정) · phrase(이어붙이기 계획)
+             · zip(받은 음원 zip 을 안 풀고 필요한 것만 꺼내 읽기)
   audio/     engine(잠금해제) · scheduler(lookahead) · mixer(트랙별 배선)
              · instrument(인터페이스) · oscInstrument(음원 없을 때)
              · soundfont(SF2 샘플러) · folderSampler(낱개 WAV)

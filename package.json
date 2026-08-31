@@ -12,7 +12,7 @@
     "preview": "vite preview --host",
     "smoke": "node scripts/smoke.mjs",
     "gen-fixture": "node scripts/gen-fixture.mjs",
-    "presmoke": "npm run gen-fixture && npm run gen-samples && npm run gen-voicebank",
+    "presmoke": "npm run gen-fixture && npm run gen-samples && npm run gen-voicebank && npm run gen-voicezip",
     "midi": "node scripts/midi-roundtrip.mjs",
     "gen-samples": "node scripts/gen-samples.mjs",
     "names": "node scripts/samplename-test.mjs",
@@ -24,7 +24,9 @@
     "clipboard": "node scripts/clipboard-test.mjs",
     "latency": "node scripts/latency-probe.mjs",
     "oto": "node scripts/oto-test.mjs",
-    "gen-voicebank": "node scripts/gen-voicebank.mjs"
+    "gen-voicebank": "node scripts/gen-voicebank.mjs",
+    "gen-voicezip": "node scripts/gen-voicezip.mjs",
+    "zip": "node scripts/zip-test.mjs"
   },
   "devDependencies": {
     "@vitejs/plugin-basic-ssl": "^1.2.0",

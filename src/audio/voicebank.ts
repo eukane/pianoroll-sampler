@@ -47,8 +47,22 @@ export class VoiceBank {
   /** 지금 울리고 있는(또는 예약된) 소리들. 정지·다시예약 때 끊어야 한다. */
   private active: { source: AudioBufferSourceNode; gain: GainNode }[] = [];
 
-  constructor(name: string, otoText: string, files: Map<string, ArrayBuffer>) {
+  /**
+   * zip 처럼 **아직 안 꺼낸** 파일을 나중에 꺼내 오는 길. 없으면 안 쓴다.
+   *
+   * WAV 를 통째로 들고 있지 않아도 되게 하려고 열어 둔 문이다. 테토 약음원
+   * zip 은 91MB 라, 넣자마자 전부 풀면 폰이 못 버틴다.
+   */
+  private fetch: ((fileName: string) => Promise<ArrayBuffer | null>) | null;
+
+  constructor(
+    name: string,
+    otoText: string,
+    files: Map<string, ArrayBuffer>,
+    fetch: ((fileName: string) => Promise<ArrayBuffer | null>) | null = null,
+  ) {
     this.name = name;
+    this.fetch = fetch;
     const parsed = parseOto(otoText);
     this.index = indexOto(parsed.entries);
     this.skipped = parsed.skipped;
@@ -100,7 +114,8 @@ export class VoiceBank {
     }
     for (const fileName of wanted) {
       if (this.buffers.has(fileName)) continue;
-      const bytes = this.raw.get(fileName);
+      // 손에 든 게 없으면 그때 꺼내 온다 (zip 안에 있는 경우).
+      const bytes = this.raw.get(fileName) ?? (this.fetch ? await this.fetch(fileName) : null);
       if (!bytes) continue;
       try {
         // decodeAudioData 는 넘긴 버퍼를 가져가 버린다. 다시 쓸 수 있게 복사해 준다.

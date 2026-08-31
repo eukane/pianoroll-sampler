@@ -17,6 +17,7 @@ import { MAX_TRACKS, assignChannels } from "../model/channels";
 import type { InstrumentRegistry } from "../audio/registry";
 import type { Preset } from "../audio/soundfont";
 import type { SampleFolder } from "../audio/folderSampler";
+import type { VoiceBank } from "../audio/voicebank";
 import { midiToName } from "../util/music";
 
 export type PanelCallbacks = {
@@ -34,6 +35,7 @@ export class InstrumentPanel {
   private fileInput: HTMLInputElement;
   private sampleInput: HTMLInputElement;
   private voiceInput: HTMLInputElement;
+  private voiceZipInput: HTMLInputElement;
   private voiceSeq = 0;
   private mapModal: HTMLDivElement;
   private query = "";
@@ -58,6 +60,12 @@ export class InstrumentPanel {
       const files = [...(this.voiceInput.files ?? [])];
       if (files.length > 0) void this.loadVoiceBank(files);
       this.voiceInput.value = "";
+    });
+    this.voiceZipInput = document.getElementById("voice-zip") as HTMLInputElement;
+    this.voiceZipInput.addEventListener("change", () => {
+      const file = this.voiceZipInput.files?.[0];
+      if (file) void this.loadVoiceZip(file);
+      this.voiceZipInput.value = "";
     });
     this.mapModal = document.getElementById("map-modal") as HTMLDivElement;
 
@@ -235,6 +243,19 @@ export class InstrumentPanel {
       (sing.querySelector(".pname") as HTMLSpanElement).textContent = "＋ 노래 음원 넣기 (UTAU 폴더)";
       sing.addEventListener("click", () => this.voiceInput.click());
       this.listEl.appendChild(sing);
+
+      // 받은 zip 그대로. 폰에서는 이쪽이 사실상 유일한 길이다 — 일본어 음원
+      // zip 은 이름이 CP932 라 폰 압축 프로그램이 "폴더에 문제가 있다" 며
+      // 못 푸는 일이 잦고, 풀어도 안드로이드 파일 선택기가 폴더를 못 고른다.
+      const zip = document.createElement("button");
+      zip.type = "button";
+      zip.className = "preset folder";
+      zip.id = "add-voice-zip";
+      zip.innerHTML = '<span class="pname"></span><span class="badge">ZIP</span>';
+      (zip.querySelector(".pname") as HTMLSpanElement).textContent =
+        "＋ 노래 음원 넣기 (받은 zip 그대로 — 안 풀어도 됨)";
+      zip.addEventListener("click", () => this.voiceZipInput.click());
+      this.listEl.appendChild(zip);
     }
 
     // 이미 넣어 둔 노래 음원들
@@ -358,31 +379,111 @@ export class InstrumentPanel {
         return;
       }
 
-      this.voiceSeq += 1;
-      const id = `voice${this.voiceSeq}`;
-      this.registry.addVoice(bank, id);
-
-      const track = this.project.tracks[this.activeTrack];
-      if (track) {
-        track.source = { kind: "voice", bankId: id };
-        track.name = bank.name;
-        this.cb.onSourceChange();
-        this.renderTracks();
-        this.renderInstrumentButton();
-      }
-      this.closePicker();
-
-      const parts = [`${bank.name} — 소리 ${bank.soundCount}가지`];
-      if (bank.tunedCount > 0) parts.push(`음정표 ${bank.tunedCount}개`);
-      if (bank.skipped.length > 0) parts.push(`못 읽은 줄 ${bank.skipped.length}개`);
-      parts.push("노트를 눌러 가사를 적으세요");
-      this.cb.onStatus(parts.join(" · "));
+      this.useVoiceBank(bank);
     } catch (err) {
       this.cb.onStatus(
         `음원을 읽지 못했습니다: ${err instanceof Error ? err.message : String(err)}`,
         "error",
       );
     }
+  }
+
+  /**
+   * 받은 zip 을 **안 풀고** 그대로 읽는다.
+   *
+   * 이걸 만든 이유는 폰이다. 우타우 음원 zip 은 파일 이름이 CP932(Shift-JIS)
+   * 라서, UTF-8 로만 읽는 압축 프로그램은 「重音テト単独音」을 깨진 글자로
+   * 만들고는 "폴더에 문제가 있어 추출할 수 없다" 며 멈춘다. 실제로 사용자가
+   * 여기서 막혔다. 앱이 직접 읽으면 풀 일 자체가 없어진다.
+   *
+   * WAV 는 여기서 안 꺼낸다. 주파수표(.frq)만 미리 꺼내고 — 파일당 2KB 남짓이라
+   * 부담이 없고 음정을 맞추려면 처음부터 있어야 한다 — WAV 는 실제로 부르는
+   * 글자만 zip 에서 그때 꺼낸다. 91MB 짜리 음원을 통째로 메모리에 올리지 않는다.
+   */
+  private async loadVoiceZip(file: File): Promise<void> {
+    this.cb.onStatus("압축 파일 목차 읽는 중…");
+    try {
+      const { readZipIndex, readZipEntry, findVoiceBanks } = await import("../model/zip");
+      const entries = await readZipIndex(file);
+      if (!entries) {
+        this.cb.onStatus("zip 파일로 읽지 못했습니다. 받은 파일이 맞는지 확인해 주세요.", "error");
+        return;
+      }
+
+      const found = findVoiceBanks(entries);
+      if (found.length === 0) {
+        this.cb.onStatus(
+          `이 압축 파일 안에 UTAU 음원이 없습니다 (oto.ini 를 못 찾음, 파일 ${entries.length}개).`,
+          "error",
+        );
+        return;
+      }
+
+      const { VoiceBank, decodeOtoText } = await import("../audio/voicebank");
+      const made: VoiceBank[] = [];
+      for (const one of found) {
+        this.cb.onStatus(`${one.name} 읽는 중… (파일 ${one.files.size}개)`);
+        const otoBytes = await readZipEntry(file, one.oto);
+        if (!otoBytes) continue;
+
+        // 주파수표만 미리 꺼낸다. WAV 는 부를 때.
+        const bytes = new Map<string, ArrayBuffer>();
+        for (const [name, entry] of one.files) {
+          if (!name.toLowerCase().endsWith(".frq")) continue;
+          const frq = await readZipEntry(file, entry);
+          if (frq) bytes.set(name, frq);
+        }
+
+        const bank = new VoiceBank(one.name, decodeOtoText(otoBytes), bytes, async (fileName) => {
+          const entry = one.files.get(fileName);
+          return entry ? readZipEntry(file, entry) : null;
+        });
+        if (bank.soundCount > 0) made.push(bank);
+      }
+
+      if (made.length === 0) {
+        this.cb.onStatus("oto.ini 를 읽었지만 쓸 수 있는 소리가 없습니다.", "error");
+        return;
+      }
+
+      // 여럿이면 나머지도 전부 등록해 둔다. 목록에서 골라 쓸 수 있다.
+      for (const bank of made.slice(1)) this.registerVoice(bank);
+      this.useVoiceBank(made[0], made.length > 1 ? [`음원 ${made.length}가지 — 목록에서 바꿀 수 있음`] : []);
+    } catch (err) {
+      this.cb.onStatus(
+        `압축 파일을 읽지 못했습니다: ${err instanceof Error ? err.message : String(err)}`,
+        "error",
+      );
+    }
+  }
+
+  private registerVoice(bank: VoiceBank): string {
+    this.voiceSeq += 1;
+    const id = `voice${this.voiceSeq}`;
+    this.registry.addVoice(bank, id);
+    return id;
+  }
+
+  /** 음원을 등록하고 지금 트랙에 붙인다. 폴더로 넣든 zip 으로 넣든 여기로 온다. */
+  private useVoiceBank(bank: VoiceBank, extra: string[] = []): void {
+    const id = this.registerVoice(bank);
+
+    const track = this.project.tracks[this.activeTrack];
+    if (track) {
+      track.source = { kind: "voice", bankId: id };
+      track.name = bank.name;
+      this.cb.onSourceChange();
+      this.renderTracks();
+      this.renderInstrumentButton();
+    }
+    this.closePicker();
+
+    const parts = [`${bank.name} — 소리 ${bank.soundCount}가지`];
+    if (bank.tunedCount > 0) parts.push(`음정표 ${bank.tunedCount}개`);
+    if (bank.skipped.length > 0) parts.push(`못 읽은 줄 ${bank.skipped.length}개`);
+    parts.push(...extra);
+    parts.push("노트를 눌러 가사를 적으세요");
+    this.cb.onStatus(parts.join(" · "));
   }
 
   private chooseFolder(folder: SampleFolder): void {
