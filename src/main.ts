@@ -208,6 +208,15 @@ barsInput.addEventListener("change", () => {
 
 snapSelect.addEventListener("change", () => {
   roll.snapUnit = Number(snapSelect.value);
+  // 잘게 쪼갠 격자는 배율이 낮으면 화면에 선이 안 그려진다. 고르기만 하고
+  // 화면이 그대로면 "안 먹었나" 싶다. 보일 만큼 확대해 주고, 확대했다는
+  // 사실도 말해 준다 — 화면이 말없이 움직이는 것도 놀라운 일이다.
+  const label = snapSelect.options[snapSelect.selectedIndex]?.textContent ?? "";
+  if (roll.zoomToSnap()) {
+    showStatus(`${label} 격자가 보이도록 확대했습니다`);
+  } else {
+    showStatus(`${label} 격자`);
+  }
 });
 
 waveSelect.addEventListener("change", () => {

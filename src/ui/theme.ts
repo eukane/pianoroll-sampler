@@ -13,6 +13,18 @@ export const RULER = 36;
 export const PLAYHEAD_GRAB = 26;
 
 export const MIN_PX_PER_BEAT = 18;
+/**
+ * 최대 가로 배율(1박당 px).
+ *
+ * 1/32·1/64 격자를 넣으면서 이 값이 모자란 줄 알고 올리려다 다시 쟀다.
+ * 320 에서 노트 폭이 이렇다.
+ *
+ *     1/16  80px    1/32  40px    1/64  20px
+ *
+ * 1/64 가 20px 이면 손끝(40px 언저리)보다 좁지만, 옮기기·길이 조절은 폭에
+ * 비례하는 판정(EDGE_GRAB)이라 그대로 잡힌다. 게다가 320 이면 폰 화면에
+ * **1박만** 들어온다 — 더 키워 봐야 볼 수 있는 게 줄기만 한다. 그대로 둔다.
+ */
 export const MAX_PX_PER_BEAT = 320;
 export const MIN_KEY_HEIGHT = 10;
 export const MAX_KEY_HEIGHT = 40;

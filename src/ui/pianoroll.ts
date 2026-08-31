@@ -240,16 +240,64 @@ export class PianoRoll {
     }
   }
 
+  /**
+   * 지금 배율에서 실제로 그릴 수 있는 가장 잘은 격자 단위. 없으면 null.
+   *
+   * 고른 격자가 너무 촘촘하면 한 단계씩 넓혀 가며 들어가는 것을 찾는다.
+   * 셋잇단은 2로 나누면 박에 안 맞는 자리가 나오므로 그대로 두고 포기한다.
+   */
+  private visibleGridUnit(): number | null {
+    const fits = (u: number) => u * this.pxPerBeat >= 8;
+    if (fits(this.snapUnit)) return this.snapUnit;
+    // 셋잇단(1/3 계열)은 넓히면 격자가 어긋난다. 2배씩만 넓혀 본다.
+    for (let u = this.snapUnit * 2; u <= 1; u *= 2) if (fits(u)) return u;
+    return null;
+  }
+
+  /** 고른 격자가 화면에 보이는가. 안 보이면 화면이 알려 줘야 한다. */
+  get snapVisible(): boolean {
+    return this.snapUnit * this.pxPerBeat >= 8;
+  }
+
+  /**
+   * 고른 격자가 편하게 보이려면 1박이 몇 px 이어야 하는가.
+   *
+   * 그리는 최소값(8px)보다 조금 여유를 둔다. 선이 딱 8px 간격이면 보이긴
+   * 해도 그 사이를 손가락으로 겨누지는 못한다.
+   */
+  get pxPerBeatForSnap(): number {
+    return 12 / this.snapUnit;
+  }
+
+  /**
+   * 고른 격자가 보일 만큼 확대한다. **넓히지는 않는다** — 잘게 쪼개려고
+   * 고른 건데 화면이 넓어지면 반대로 간다. 이미 충분하면 아무것도 안 한다.
+   */
+  zoomToSnap(): boolean {
+    const want = Math.min(MAX_PX_PER_BEAT, this.pxPerBeatForSnap);
+    if (this.pxPerBeat >= want) return false;
+    const anchorBeat = this.xToBeat(this.width / 2);
+    this.pxPerBeat = want;
+    this.scrollX = anchorBeat * this.pxPerBeat - (this.width / 2 - GUTTER);
+    this.clampScroll();
+    this.render();
+    return true;
+  }
+
   private drawGrid(bpb: number): void {
     const g = this.ctx2d;
     const startBeat = Math.max(0, Math.floor(this.xToBeat(GUTTER)));
     const endBeat = Math.ceil(this.xToBeat(this.width));
 
-    // 잘게 나눈 선은 너무 촘촘하면 지저분하다. 8px 이하로 붙으면 그리지 않는다.
-    const subVisible = this.snapUnit * this.pxPerBeat >= 8;
-    if (subVisible) {
+    // 잘게 나눈 선. 너무 촘촘하면 지저분해서 8px 이하로 붙으면 안 그린다.
+    //
+    // 예전에는 고른 격자가 안 보이면 **아무것도** 안 그렸다. 1/32 을 골라
+    // 놓고 확대를 안 했으면 화면에는 박 선만 남아서, 격자를 바꾼 게 화면에
+    // 하나도 안 나타난다. 그 대신 **보이는 것 중 제일 잘게** 그린다.
+    const step = this.visibleGridUnit();
+    if (step !== null) {
       g.fillStyle = C.lineSub;
-      for (let b = snapFloor(startBeat, this.snapUnit); b <= endBeat; b += this.snapUnit) {
+      for (let b = snapFloor(startBeat, step); b <= endBeat; b += step) {
         const x = Math.round(this.beatToX(b));
         g.fillRect(x, RULER, 1, this.height - RULER);
       }

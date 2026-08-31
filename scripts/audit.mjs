@@ -15,6 +15,7 @@
  *   · 둘째 예제(일렉트로닉)의 드럼이 9번 채널에 가고 구조가 살아 있는가
  *   · **저장했다 열면 꾸밈·노랫말이 그대로 있는가** (예전에는 날아갔다)
  *   · **노래하는 트랙도 꾸밈을 받는가** (예전에는 조용히 무시했다)
+ *   · 잘게 쪼갠 격자(1/32·1/64)가 MIDI 틱에 정확히 떨어지는가
  *
  *     node scripts/audit.mjs
  */
@@ -27,6 +28,7 @@ import { shakes, vibratoOf } from "../src/audio/vibrato.ts";
 import { bendCurve, MAX_BEND_CENTS } from "../src/model/ornament.ts";
 import { expressionFor, singingExpressions } from "../src/audio/expression.ts";
 import { projectToJson, projectFromJson } from "../src/export/projectFile.ts";
+import { MAX_PX_PER_BEAT } from "../src/ui/theme.ts";
 
 const out = [];
 const ok = (n, pass, d) => out.push({ n, pass: !!pass, d });
@@ -369,6 +371,41 @@ ok("노래 트랙도 트랙 기본 떨림은 꾸밈 안 정한 음에만 건다"
 const singShort = singingExpressions({ ...singTrack, vibrato: 0.4, vibratoDelay: 0.3 },
   singTrack.notes, () => 0.1);
 ok("짧은 음은 떨지 않는다", !shakes(singShort.get("a").vibrato, 0.1), singShort.get("a"));
+
+// ---- 12) 잘게 쪼갠 격자가 MIDI 로 정확히 나가는가 ----
+//
+// 4/4 라도 16분음표보다 잘게 쪼개 쓰고 싶다는 요청에서 나왔다. 넣기 전에
+// **정확히 표현되는지부터** 봤다. PPQ 480 은 2·3·4·5·6·8·10·12·16 으로
+// 나누어떨어져서 32분음표(60틱)도 64분음표(30틱)도 32분 셋잇단(40틱)도
+// 전부 정수다. 소수점이 남으면 마디마다 조금씩 밀려서 나중에 어긋난다.
+const PPQ = 480;
+const UNITS = {
+  "1/4": 1, "1/8": 0.5, "1/16": 0.25, "1/32": 0.125, "1/64": 0.0625,
+  "1/8셋": 1 / 3, "1/16셋": 1 / 6, "1/32셋": 1 / 12,
+};
+for (const [label, u] of Object.entries(UNITS)) {
+  const ticks = u * PPQ;
+  ok(`${label} 이 MIDI 틱에 정수로 떨어진다 (${ticks}틱)`,
+     Math.abs(ticks - Math.round(ticks)) < 1e-9, ticks);
+}
+// 왕복까지 본다. 틱이 정수여도 읽는 쪽에서 반올림을 잘못하면 소용없다.
+const fine = {
+  bpm: 120, bars: 2, timeSig: [4, 4],
+  tracks: [{ id: "t", name: "t", source: { kind: "sf2", presetId: 0 },
+    volume: 0.8, pan: 0, muted: false,
+    notes: Object.values(UNITS).map((u, i) => ({
+      id: "f" + i, pitch: 60 + i, start: i * 0.5, length: u, velocity: 100 })) }],
+};
+const fineBack = midiToProject(projectToMidi(fine)).tracks[0].notes;
+ok("잘게 쪼갠 길이가 MIDI 왕복에서 안 변한다",
+   Object.values(UNITS).every((u, i) => Math.abs(fineBack[i].length - u) < 1e-9),
+   Object.values(UNITS).map((u, i) => `${u.toFixed(4)}→${fineBack[i].length.toFixed(4)}`));
+
+// 화면에서 실제로 잡을 수 있는 크기인가. 최대 배율을 올릴 뻔했다가 다시 재서
+// 안 올린 자리라, 숫자를 여기 남겨 둔다.
+ok("최대 배율에서 1/32 노트는 40px, 1/64 는 20px",
+   MAX_PX_PER_BEAT * 0.125 === 40 && MAX_PX_PER_BEAT * 0.0625 === 20,
+   { "1/32": MAX_PX_PER_BEAT * 0.125, "1/64": MAX_PX_PER_BEAT * 0.0625 });
 
 let bad = 0;
 for (const r of out) { if (!r.pass) bad++; console.log(`${r.pass ? "✅" : "❌"} ${r.n}${r.pass ? "" : "  " + JSON.stringify(r.d)}`); }

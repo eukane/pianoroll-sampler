@@ -8,6 +8,7 @@
  *   · 몸통 드래그 = 이동, 오른쪽 끝 드래그 = 길이 (서로 안 잡아먹는가)
  *   · 천천히 눌러도 안 지워지고 세부 설정 창이 열리는가
  *   · 상자를 끌어 여러 노트를 고르고, 고른 것만 지우고 복사할 수 있는가
+ *   · 16분음표보다 잘게(1/32·1/64) 쪼개 찍고 소리까지 나는가
  *   · 재생 헤드가 BPM 에 맞는 속도로 나아가는가
  *   · 루프 구간을 벗어나지 않고 되돌아오는가
  *   · SF2 를 읽고 프리셋 목록·검색이 되는가
@@ -2203,6 +2204,85 @@ const chords = await page.evaluate(() => {
 // 고른 화음이 그대로 두 번 더 붙어야 한다 — 이게 "코드 진행 반복" 이다.
 check("고른 화음을 붙여넣기 연타로 반복할 수 있다",
   chords.n === 9 && chords.starts.length === 3, chords);
+
+// ---- 16분음표보다 잘게 쪼개기 ----
+//
+// "4/4 라도 16분음표로 악기를 쓰거나 하는 등 더 작게 쪼개 써야 하지 않나"
+// 라는 물음에서 나왔다. 값이 MIDI 틱에 정확히 떨어지는지는 audit 이 보고,
+// 여기서는 **화면에서 실제로 되는지**를 본다.
+await page.reload({ waitUntil: "networkidle" });
+await page.locator("#unlock").tap();
+await page.waitForTimeout(300);
+
+const snapOpts = await page.evaluate(() =>
+  [...document.getElementById("snap").options].map((o) => o.textContent.trim()));
+check("1/32 · 1/64 격자를 고를 수 있다",
+  snapOpts.includes("1/32") && snapOpts.includes("1/64"), snapOpts);
+check("셋잇단도 1/32 까지 있다", snapOpts.includes("1/32 셋잇단"), snapOpts);
+
+// 잘은 격자를 고르면 보일 만큼 확대해 준다. 안 그러면 격자를 바꿨는데
+// 화면이 하나도 안 변해서 "안 먹었나" 가 된다.
+await page.evaluate(() => { window.__app.roll.pxPerBeat = 40; window.__app.roll.render(); });
+await page.selectOption("#snap", "0.0625");
+await page.waitForTimeout(250);
+const zoomed = await page.evaluate(() => ({
+  px: window.__app.roll.pxPerBeat,
+  visible: window.__app.roll.snapVisible,
+  status: document.getElementById("status")?.textContent ?? "",
+}));
+check("잘은 격자를 고르면 보일 만큼 확대한다", zoomed.visible && zoomed.px > 40, zoomed);
+check("확대했다는 사실을 말해 준다", zoomed.status.includes("확대"), zoomed.status);
+
+// 이미 충분히 확대돼 있으면 건드리지 않는다 — 화면이 제멋대로 움직이면 안 된다.
+await page.evaluate(() => { window.__app.roll.pxPerBeat = 320; window.__app.roll.render(); });
+await page.selectOption("#snap", "0.125");
+await page.waitForTimeout(200);
+check("이미 보이면 배율을 안 건드린다",
+  (await page.evaluate(() => window.__app.roll.pxPerBeat)) === 320);
+
+// 1/32 격자로 실제로 찍어 본다. 격자가 잘아도 찍히는 자리와 길이가 맞아야 한다.
+await page.evaluate(() => {
+  const app = window.__app, r = app.roll;
+  app.project.tracks[0].notes.length = 0;
+  r.scrollX = 0;
+  r.scrollToPitch(60);
+  r.render();
+});
+const fineBox = await page.locator("#roll").boundingBox();
+for (let i = 0; i < 4; i += 1) {
+  const pos = await page.evaluate((k) => {
+    const r = window.__app.roll;
+    return { x: 46 + (k * 0.125 + 0.06) * r.pxPerBeat - r.scrollX,
+             y: 36 + (127 - 60) * r.keyHeight - r.scrollY + r.keyHeight / 2 };
+  }, i);
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: fineBox.x + pos.x, y: fineBox.y + pos.y }] });
+  await page.waitForTimeout(80);
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+  await page.waitForTimeout(120);
+}
+const fine = await page.evaluate(() => window.__app.project.tracks[0].notes
+  .map((n) => ({ start: n.start, length: n.length })).sort((a, b) => a.start - b.start));
+check("1/32 격자에 노트 넷이 붙는다", fine.length === 4, fine);
+check("1/32 자리에 정확히 떨어진다",
+  fine.every((n, i) => Math.abs(n.start - i * 0.125) < 1e-9), fine.map((n) => n.start));
+check("찍은 노트 길이도 1/32 이다",
+  fine.every((n) => Math.abs(n.length - 0.125) < 1e-9), fine.map((n) => n.length));
+
+// 소리까지 난다. 128BPM 에서 1/32 은 58ms 인데, 그 정도로 짧은 노트가
+// 스케줄러·렌더를 지나 실제로 소리가 되는지는 재 봐야 안다.
+const fineSound = await page.evaluate(async () => {
+  const app = window.__app;
+  app.project.bpm = 128;
+  app.project.bars = 1;
+  const { renderProject } = await import("/src/export/render.ts");
+  const buf = await renderProject(app.project, () => app.registry.soundfont.bankBuffer(),
+    app.registry.folders.list, app.mixerState, app.registry.voices);
+  const d = buf.getChannelData(0);
+  let peak = 0;
+  for (let i = 0; i < d.length; i += 1) peak = Math.max(peak, Math.abs(d[i]));
+  return { peak: +peak.toFixed(3), ms: +(0.125 * (60 / 128) * 1000).toFixed(0) };
+});
+check("1/32 짜리 짧은 노트도 실제로 소리가 난다", fineSound.peak > 0.02, fineSound);
 
 check("콘솔 오류 없음", errors.length === 0, errors);
 
