@@ -96,10 +96,7 @@ const singingTrack = () => {
 
 const notePanel = new NotePanel(() => project, {
   isSinging: () => singingTrack() !== null,
-  canSing: (lyric) => {
-    const bank = singingTrack();
-    return bank ? bank.sounds.includes(lyric) : false;
-  },
+  canSing: (lyric) => singingTrack()?.canSing(lyric) ?? false,
   onBeforeChange: () => history.begin(),
   onAfterChange: () => {
     history.commit();

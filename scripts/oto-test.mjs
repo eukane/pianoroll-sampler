@@ -13,7 +13,7 @@
  */
 
 import { readFileSync, readdirSync, existsSync } from "node:fs";
-import { parseOto, indexOto, pickEntry, regionOf, splitAlias, vowelOf } from "../src/model/oto.ts";
+import { parseOto, indexOto, pickEntry, regionOf, resolveSound, splitAlias, vowelOf } from "../src/model/oto.ts";
 import { planPhrase, DEFAULT_RECORDED_PITCH, RELEASE } from "../src/model/phrase.ts";
 import { readFrqAverage, frqNameFor, hzToMidi } from "../src/model/frq.ts";
 
@@ -79,6 +79,30 @@ ok("きゃ 의 모음은 a (i 가 아니다)", vowelOf("きゃ") === "a");
 ok("ん 은 n", vowelOf("ん") === "n");
 ok("가타카나도 읽는다", vowelOf("ヴァ") === "a", vowelOf("ヴァ"));
 ok("모를 글자는 null", vowelOf("?") === null);
+
+// ---- 꼬리표가 붙은 음원 ----
+//
+// 음원마다 별칭에 창법 꼬리표가 붙어 있다. 사용자는 「か」라고 적지 꼬리표까지
+// 적지 않는다. 이걸 안 맞춰 주면 **공식 테토 음원 여섯 개 중 넷이 한 글자도
+// 못 부른다** — 실제로 그랬다.
+//
+//     기본       「か」      속삭임 「か囁」
+//     약한 음원  「か弱」     매끄러운 「か滑」
+const suffixed = indexOto(parseOto(`
+_あ.wav=あ囁,10,60,-800,25,20
+_あ.wav=- あ囁,10,60,-800,25,20
+_か.wav=か囁,10,60,-800,25,20
+_かぁ.wav=かぁ囁,10,60,-800,25,20
+`).entries);
+ok("꼬리표가 붙어 있어도 그 글자를 찾는다", resolveSound(suffixed, "か") === "か囁");
+ok("찾은 이름으로 설정까지 나온다", pickEntry(suffixed, "か", null)?.alias === "か囁");
+// 「か」가 「かぁ囁」로 새면 엉뚱한 소리가 난다. 짧은 쪽을 고른다.
+ok("더 긴 이름으로 새지 않는다", resolveSound(suffixed, "か") !== "かぁ囁");
+ok("없는 글자는 여전히 null", resolveSound(suffixed, "ぴ") === null);
+// 정확한 이름이 언제나 먼저다 — 사용자가 꼬리표까지 적었을 수도 있다.
+ok("정확한 이름이 우선", resolveSound(suffixed, "か囁") === "か囁");
+const plain = indexOto(parseOto("_あ.wav=あ,10,60,-800,25,20\n_い.wav=い,10,60,-800,25,20\n").entries);
+ok("꼬리표가 없는 음원은 그대로", resolveSound(plain, "あ") === "あ");
 
 // ---- 주파수표(.frq) — 파일마다 녹음된 음정 ----
 //
@@ -159,6 +183,27 @@ if (existsSync(`${real}/oto.ini`)) {
 } else {
   console.log("(실물 음원이 없어 실물 검사는 건너뜀 — .teto/ 에 풀어 두면 같이 본다)\n");
 }
+
+// ---- 공식 테토 음원 여러 종류가 다 되는가 ----
+//
+// 파싱만 되는 게 아니라 **실제로 그 글자를 찾을 수 있어야** 한다. 꼬리표
+// 때문에 넷이 한 글자도 못 부르던 걸 여기서 잡는다.
+const OTHERS = [
+  [".teto/bank/重音テト音声ライブラリー/重音テト単独音", "단독음"],
+  [".teto/banks/TETO-sasayakitan-100925/重音テト音声ライブラリー/重音テトささやき単独音", "속삭임"],
+  [".teto/banks/TETO-jakuongen210725/重音テト音声ライブラリー/重音テト弱単独音", "약한 단독음"],
+  [".teto/banks/TETO-jakuongen210725/重音テト音声ライブラリー/重音テト弱連続音", "약한 연속음"],
+  [".teto/banks/TETO-namerakaongen211125/重音テト音声ライブラリー/重音テト滑らか音源", "매끄러운"],
+  [".teto/banks/TETO-renzokubeta-091020", "연속음 실험판"],
+];
+for (const [dir, label] of OTHERS) {
+  if (!existsSync(`${dir}/oto.ini`)) continue;
+  const idx = indexOto(parseOto(new TextDecoder("shift_jis").decode(readFileSync(`${dir}/oto.ini`))).entries);
+  const found = ["か", "さ", "ね", "て", "と"].filter((k) => resolveSound(idx, k) !== null);
+  ok(`[실물] ${label} 음원으로 「かさねてと」를 부를 수 있다`, found.length === 5,
+     { 찾은글자: found.length });
+}
+
 
 // ---- 이어붙이기 계획 ----
 //

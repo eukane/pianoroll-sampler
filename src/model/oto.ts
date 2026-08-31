@@ -115,6 +115,33 @@ export function splitAlias(alias: string): { prefix: string; sound: string } {
   return { prefix: "", sound: alias };
 }
 
+/**
+ * 사용자가 적은 글자를 이 음원의 소리 이름으로 바꾼다.
+ *
+ * 음원마다 별칭에 **꼬리표**가 붙어 있는 경우가 많다. 같은 성우의 다른 창법을
+ * 한 이름 공간에서 구분하려고 UTAU 가 쓰는 관습이다.
+ *
+ *     기본 단독음    「か」
+ *     속삭임 음원    「か囁」   (囁 = 속삭임)
+ *     약한 음원      「か弱」
+ *     매끄러운 음원  「か滑」
+ *
+ * 사용자는 「か」라고 적지 실제 꼬리표까지 적지 않는다. 그대로 찾으면 못 찾고,
+ * **음원 여섯 개 중 넷이 아예 한 글자도 못 부르는 상태**가 된다. 실제로 그랬다.
+ *
+ * 그래서 정확히 없으면 **그 글자로 시작하는 가장 짧은 이름**을 쓴다. 정확한
+ * 이름이 언제나 먼저이고, 짧은 쪽을 고르니 「か」가 「かぁ」로 새지 않는다.
+ */
+export function resolveSound(index: OtoIndex, sound: string): string | null {
+  if (index.has(sound)) return sound;
+  let best: string | null = null;
+  for (const key of index.keys()) {
+    if (!key.startsWith(sound)) continue;
+    if (best === null || key.length < best.length) best = key;
+  }
+  return best;
+}
+
 /** 소리별로 묶는다. 가사 「あ」로 찾으면 「あ」「- あ」「* あ」가 다 나온다. */
 export function indexOto(entries: OtoEntry[]): OtoIndex {
   const index: OtoIndex = new Map();
@@ -141,7 +168,8 @@ export function indexOto(entries: OtoEntry[]): OtoIndex {
  * 녹음돼 있어서, 그걸 곡 중간에 쓰면 매번 새로 말하는 것처럼 들린다.
  */
 export function pickEntry(index: OtoIndex, sound: string, afterVowel: string | null): OtoEntry | null {
-  const list = index.get(sound);
+  const key = resolveSound(index, sound);
+  const list = key === null ? undefined : index.get(key);
   if (!list || list.length === 0) return null;
   const byPrefix = (p: string) => list.find((e) => e.prefix === p) ?? null;
 

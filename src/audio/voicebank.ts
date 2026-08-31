@@ -24,7 +24,7 @@
  * 듣고 나서** 정할 일이라 지금은 그대로 둔다.
  */
 
-import { indexOto, parseOto, type OtoIndex } from "../model/oto";
+import { indexOto, parseOto, resolveSound, type OtoIndex } from "../model/oto";
 import { frqNameFor, hzToMidi, readFrqAverage } from "../model/frq";
 import { planPhrase, type PhrasePlan, type SungNote } from "../model/phrase";
 
@@ -78,6 +78,15 @@ export class VoiceBank {
   }
 
   /**
+   * 이 글자를 부를 수 있는가. 꼬리표(「か」 → 「か囁」)까지 감안한다.
+   * 화면이 "이 음원에 없는 소리" 를 띄울지 정하는 자리라, 여기가 틀리면
+   * 멀쩡한 글자를 없다고 한다.
+   */
+  canSing(lyric: string): boolean {
+    return resolveSound(this.index, lyric.trim()) !== null;
+  }
+
+  /**
    * 이 줄에 필요한 파일만 디코딩한다.
    *
    * UTAU 음원은 파일이 백 개가 넘는다. 폴더를 넣자마자 전부 디코딩하면 폰에서
@@ -86,7 +95,8 @@ export class VoiceBank {
   async prepare(ctx: BaseAudioContext, lyrics: string[]): Promise<void> {
     const wanted = new Set<string>();
     for (const lyric of lyrics) {
-      for (const entry of this.index.get(lyric) ?? []) wanted.add(entry.fileName);
+      const key = resolveSound(this.index, lyric.trim() || "あ");
+      for (const entry of (key === null ? [] : this.index.get(key) ?? [])) wanted.add(entry.fileName);
     }
     for (const fileName of wanted) {
       if (this.buffers.has(fileName)) continue;
