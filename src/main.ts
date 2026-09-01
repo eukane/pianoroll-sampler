@@ -48,6 +48,7 @@ const posLabel = $<HTMLSpanElement>("pos");
 const bpmInput = $<HTMLInputElement>("bpm");
 const barsInput = $<HTMLInputElement>("bars");
 const snapSelect = $<HTMLSelectElement>("snap");
+const timeSigSelect = $<HTMLSelectElement>("timesig");
 const waveSelect = $<HTMLSelectElement>("wave");
 const unlockOverlay = $<HTMLDivElement>("unlock");
 
@@ -206,6 +207,40 @@ barsInput.addEventListener("change", () => {
   scheduler.invalidate();
 });
 
+/**
+ * 박자표 바꾸기.
+ *
+ * **노트는 움직이지 않는다.** 노트의 시각은 박이고 박자표는 그 박을 몇 개씩
+ * 묶어 마디로 볼지만 정한다. 그래서 마디 선과 마디 번호가 다시 그어질 뿐,
+ * 찍어 둔 것은 그대로다 (다른 DAW 도 그렇게 동작한다).
+ *
+ * 분모가 4 가 아닌 박자(6/8·12/8·2/2)는 마디 선까지는 정확히 맞는데,
+ * **BPM 과 격자는 4분음표 기준**이라 세는 단위가 다르다. 6/8 을 골랐을 때
+ * 위치 표시가 1:1~1:3 으로 나오는 게 그 때문이다. 조용히 두면 고장으로
+ * 보이니 고를 때 말해 준다.
+ */
+timeSigSelect.addEventListener("change", () => {
+  const [num, den] = timeSigSelect.value.split("/").map(Number);
+  history.begin();
+  project.timeSig = [num, den];
+  history.commit();
+  refreshHistoryButtons();
+
+  // 마디 길이가 바뀌면 곡 전체 길이도 바뀐다. 루프가 곡 밖으로 나가면
+  // 재생이 빈 데를 돈다.
+  if (scheduler.loopEnd > totalBeats(project)) scheduler.loopEnd = totalBeats(project);
+  scheduler.invalidate();
+  roll.render();
+
+  const bpb = beatsPerBar(project);
+  showStatus(
+    den === 4
+      ? `${num}/${den} 박자 — 한 마디가 ${bpb}박입니다`
+      : `${num}/${den} 박자 — 한 마디가 4분음표 ${bpb}개 길이입니다.` +
+        " BPM 과 격자는 4분음표 기준이라 위치 표시도 4분음표로 셉니다.",
+  );
+});
+
 snapSelect.addEventListener("change", () => {
   roll.snapUnit = Number(snapSelect.value);
   // 잘게 쪼갠 격자는 배율이 낮으면 화면에 선이 안 그려진다. 고르기만 하고
@@ -280,6 +315,10 @@ function applyProject(loaded: Project, { keepHistory = true } = {}): void {
 
   bpmInput.value = String(project.bpm);
   barsInput.value = String(project.bars);
+  // 불러온 곡(또는 되돌리기)의 박자표를 칸에 맞춘다. 목록에 없는 박자표면
+  // 그대로 두고 건드리지 않는다 — 화면이 거짓말을 하느니 비워 두는 게 낫다.
+  const sig = `${project.timeSig[0]}/${project.timeSig[1]}`;
+  if ([...timeSigSelect.options].some((o) => o.value === sig)) timeSigSelect.value = sig;
   if (scheduler.loopEnd > totalBeats(project)) scheduler.loopEnd = totalBeats(project);
 
   panel.activeTrack = Math.min(panel.activeTrack, project.tracks.length - 1);

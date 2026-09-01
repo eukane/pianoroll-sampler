@@ -16,12 +16,14 @@
  *   · **저장했다 열면 꾸밈·노랫말이 그대로 있는가** (예전에는 날아갔다)
  *   · **노래하는 트랙도 꾸밈을 받는가** (예전에는 조용히 무시했다)
  *   · 잘게 쪼갠 격자(1/32·1/64)가 MIDI 틱에 정확히 떨어지는가
+ *   · 박자표를 바꿔도 마디 계산과 MIDI 왕복이 맞는가
  *
  *     node scripts/audit.mjs
  */
 import { projectToMidi, midiToProject } from "../src/export/midi.ts";
 import { packPresetId, unpackPresetId, isDrumPreset } from "../src/model/preset.ts";
 import { assignChannels, channelForTrack } from "../src/model/channels.ts";
+import { beatsPerBar } from "../src/model/project.ts";
 import { demoSong } from "../src/model/demoSong.ts";
 import { DEMOS } from "../src/model/demos.ts";
 import { shakes, vibratoOf } from "../src/audio/vibrato.ts";
@@ -406,6 +408,47 @@ ok("잘게 쪼갠 길이가 MIDI 왕복에서 안 변한다",
 ok("최대 배율에서 1/32 노트는 40px, 1/64 는 20px",
    MAX_PX_PER_BEAT * 0.125 === 40 && MAX_PX_PER_BEAT * 0.0625 === 20,
    { "1/32": MAX_PX_PER_BEAT * 0.125, "1/64": MAX_PX_PER_BEAT * 0.0625 });
+
+// ---- 13) 박자표 ----
+//
+// 화면에 고르는 칸을 만들면서, 고를 수 있는 박자표가 전부 말이 되는지 본다.
+// 목록에 올린 것은 **마디 길이가 4분음표 정수 개**인 것들이다. 7/8(3.5박)
+// 같은 건 화면·위치 표시·격자가 전부 4분음표 기준인 지금 셈법과 안 맞아서
+// 일부러 뺐다 — 뺀 이유를 여기 남겨 둔다.
+const SIGS = [[4,4],[3,4],[2,4],[5,4],[6,8],[12,8],[2,2]];
+for (const [n, d] of SIGS) {
+  const bpb = beatsPerBar({ timeSig: [n, d] });
+  ok(`${n}/${d} 의 마디 길이가 4분음표 정수 개다 (${bpb}박)`, Number.isInteger(bpb), bpb);
+}
+ok("7/8 은 정수가 아니라서 목록에 없다", !Number.isInteger(beatsPerBar({ timeSig: [7, 8] })),
+   beatsPerBar({ timeSig: [7, 8] }));
+
+// 박자표가 MIDI 로 나갔다 그대로 돌아오는가. 분모를 2의 지수로 적는 자리라
+// 한 칸만 틀려도 4/4 가 4/8 이 되어 다른 DAW 에서 마디가 반토막 난다.
+for (const [n, d] of SIGS) {
+  const round = midiToProject(projectToMidi({
+    bpm: 120, bars: 2, timeSig: [n, d],
+    tracks: [{ id: "t", name: "t", source: { kind: "sf2", presetId: 0 },
+      volume: 0.8, pan: 0, muted: false,
+      notes: [{ id: "a", pitch: 60, start: 0, length: 1, velocity: 100 }] }],
+  }));
+  ok(`${n}/${d} 가 MIDI 왕복에서 그대로다`,
+     round.timeSig[0] === n && round.timeSig[1] === d, round.timeSig);
+}
+
+// 박자표를 바꿔도 노트는 안 움직인다. 노트 시각은 박이고 박자표는 그 박을
+// 몇 개씩 묶어 볼지만 정한다. 여기가 어긋나면 박자표를 바꾸는 순간 곡이 밀린다.
+{
+  const notes = [{ id: "a", pitch: 60, start: 5, length: 1, velocity: 100 }];
+  const p44 = { bpm: 120, bars: 4, timeSig: [4, 4], tracks: [{ id: "t", name: "t",
+    source: { kind: "sf2", presetId: 0 }, volume: 0.8, pan: 0, muted: false, notes }] };
+  const p34 = { ...p44, timeSig: [3, 4] };
+  ok("박자표를 바꿔도 노트 위치는 그대로다", p34.tracks[0].notes[0].start === 5);
+  // 대신 그 노트가 몇 마디째인지는 바뀐다 — 그게 박자표를 바꾼다는 뜻이다.
+  ok("몇 마디째인지는 바뀐다 (4/4 는 2마디째, 3/4 는 2마디째 아님)",
+     Math.floor(5 / beatsPerBar(p44)) === 1 && Math.floor(5 / beatsPerBar(p34)) === 1,
+     { "4/4": Math.floor(5 / beatsPerBar(p44)) + 1, "3/4": Math.floor(5 / beatsPerBar(p34)) + 1 });
+}
 
 let bad = 0;
 for (const r of out) { if (!r.pass) bad++; console.log(`${r.pass ? "✅" : "❌"} ${r.n}${r.pass ? "" : "  " + JSON.stringify(r.d)}`); }

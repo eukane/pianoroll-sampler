@@ -9,6 +9,7 @@
  *   · 천천히 눌러도 안 지워지고 세부 설정 창이 열리는가
  *   · 상자를 끌어 여러 노트를 고르고, 고른 것만 지우고 복사할 수 있는가
  *   · 16분음표보다 잘게(1/32·1/64) 쪼개 찍고 소리까지 나는가
+ *   · 박자표를 바꾸면 마디 선이 실제로 옮겨 그려지는가 (캔버스 픽셀로 확인)
  *   · 재생 헤드가 BPM 에 맞는 속도로 나아가는가
  *   · 루프 구간을 벗어나지 않고 되돌아오는가
  *   · SF2 를 읽고 프리셋 목록·검색이 되는가
@@ -2283,6 +2284,96 @@ const fineSound = await page.evaluate(async () => {
   return { peak: +peak.toFixed(3), ms: +(0.125 * (60 / 128) * 1000).toFixed(0) };
 });
 check("1/32 짜리 짧은 노트도 실제로 소리가 난다", fineSound.peak > 0.02, fineSound);
+
+// ---- 박자표 바꾸기 ----
+//
+// 마디 선이 **실제로 그려진 자리**를 캔버스 픽셀에서 읽는다. 함수를 불러
+// 보는 걸로는 못 잡는 버그가 여기 있었다 — 마디 길이가 정수 박이 아니면
+// (7/8 = 3.5박) 마디 선이 하나도 안 그려졌다. 정수 박만 훑으면서
+// `b % bpb === 0` 인 자리를 칠하고 있었기 때문이다.
+await page.reload({ waitUntil: "networkidle" });
+await page.locator("#unlock").tap();
+await page.waitForTimeout(300);
+
+const barLinesAt = async (sig) => await page.evaluate((sigValue) => {
+  const app = window.__app, roll = app.roll;
+  if (sigValue) {
+    const [n, d] = sigValue.split("/").map(Number);
+    app.project.timeSig = [n, d];
+  }
+  app.project.bars = 8;
+  roll.scrollX = 0;
+  roll.pxPerBeat = 50;
+  roll.render();
+  const c = document.getElementById("roll");
+  const g = c.getContext("2d");
+  const dpr = c.width / c.clientWidth;
+  const row = g.getImageData(0, Math.round(200 * dpr), c.width, 1).data;
+  const at = (x) => {
+    const i = Math.round(x * dpr) * 4;
+    return row[i] === 0x45 && row[i + 1] === 0x4e && row[i + 2] === 0x63;
+  };
+  const found = [];
+  for (let x = 47; x < c.clientWidth; x += 1) {
+    if (at(x) && !at(x - 1)) found.push(+((x - 46) / roll.pxPerBeat).toFixed(2));
+  }
+  return found;
+}, sig);
+
+const sigSelect = await page.locator("#timesig").count();
+check("박자 고르는 칸이 있다", sigSelect === 1);
+
+const bars44 = await barLinesAt("4/4");
+check("4/4 는 4박마다 마디 선", bars44.every((b, i) => Math.abs(b - (i + 1) * 4) < 0.1) && bars44.length >= 1, bars44);
+const bars34 = await barLinesAt("3/4");
+check("3/4 는 3박마다 마디 선", bars34.every((b, i) => Math.abs(b - (i + 1) * 3) < 0.1) && bars34.length >= 1, bars34);
+const bars54 = await barLinesAt("5/4");
+check("5/4 는 5박마다 마디 선", bars54.every((b, i) => Math.abs(b - (i + 1) * 5) < 0.1) && bars54.length >= 1, bars54);
+// 고친 자리. 마디 길이가 정수 박이 아니어도 선이 나와야 한다.
+const bars78 = await barLinesAt("7/8");
+// 화면이 좁아서 첫 마디 선(3.5박) 하나만 들어온다. 그 하나가 핵심이다 —
+// 고치기 전에는 3.5 가 정수 박이 아니라서 **빈 배열**이 나왔다.
+check("7/8(3.5박)도 마디 선이 그려진다",
+  bars78.length >= 1 && Math.abs(bars78[0] - 3.5) < 0.1, bars78);
+
+// 박자표를 바꿔도 노트는 안 움직인다. 여기가 어긋나면 곡이 통째로 밀린다.
+await page.evaluate(() => {
+  const app = window.__app;
+  app.project.timeSig = [4, 4];
+  app.project.tracks[0].notes.length = 0;
+  [0, 2, 5, 7].forEach((b, i) => app.project.tracks[0].notes.push(
+    { id: "b" + i, pitch: 60, start: b, length: 1, velocity: 100 }));
+  app.roll.render();
+});
+const sigBefore = await page.evaluate(() => window.__app.project.tracks[0].notes.map((n) => n.start));
+await page.selectOption("#timesig", "3/4");
+await page.waitForTimeout(250);
+const afterSig = await page.evaluate(() => ({
+  starts: window.__app.project.tracks[0].notes.map((n) => n.start),
+  sig: window.__app.project.timeSig,
+  status: document.getElementById("status")?.textContent ?? "",
+}));
+check("박자표를 바꿔도 노트가 안 움직인다",
+  JSON.stringify(sigBefore) === JSON.stringify(afterSig.starts), { 전: sigBefore, 후: afterSig.starts });
+check("고른 박자표가 곡에 들어간다",
+  afterSig.sig[0] === 3 && afterSig.sig[1] === 4, afterSig.sig);
+check("한 마디가 몇 박인지 알려 준다", afterSig.status.includes("3박"), afterSig.status);
+
+// 분모가 4 가 아니면 세는 단위가 다르다는 걸 말해 준다. 조용히 두면
+// 위치 표시가 1:1~1:3 으로 나오는 게 고장으로 보인다.
+await page.selectOption("#timesig", "6/8");
+await page.waitForTimeout(250);
+check("6/8 은 4분음표 기준이라는 걸 알려 준다",
+  (await page.locator("#status").textContent())?.includes("4분음표"),
+  await page.locator("#status").textContent());
+
+// 되돌리기 한 번에 앞 박자표로 돌아와야 한다.
+await page.locator("#undo").tap();
+await page.waitForTimeout(250);
+check("박자표 바꾸기도 되돌릴 수 있다",
+  (await page.evaluate(() => window.__app.project.timeSig.join("/"))) === "3/4",
+  await page.evaluate(() => window.__app.project.timeSig.join("/")));
+await page.evaluate(() => { window.__app.project.timeSig = [4, 4]; });
 
 check("콘솔 오류 없음", errors.length === 0, errors);
 

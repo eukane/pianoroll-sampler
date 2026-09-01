@@ -303,11 +303,22 @@ export class PianoRoll {
       }
     }
 
+    // 박 선. 정수 박마다.
+    g.fillStyle = C.lineBeat;
     for (let b = startBeat; b <= endBeat; b += 1) {
-      const x = Math.round(this.beatToX(b));
-      const isBar = Math.abs(b % bpb) < 1e-6;
-      g.fillStyle = isBar ? C.lineBar : C.lineBeat;
-      g.fillRect(x, RULER, isBar ? 2 : 1, this.height - RULER);
+      g.fillRect(Math.round(this.beatToX(b)), RULER, 1, this.height - RULER);
+    }
+
+    // 마디 선은 **따로 돈다.**
+    //
+    // 예전에는 정수 박을 돌면서 `b % bpb === 0` 인 자리를 마디로 칠했다.
+    // 마디 길이가 정수가 아니면(7/8 은 3.5박) 그 조건에 걸리는 정수 박이
+    // 없어서 **마디 선이 하나도 안 그려졌다.** 실제로 재서 확인했다 —
+    // 7/8 에서 3.5·7·10.5·14 박에 있어야 할 선 중 7·14 만 나왔다.
+    // 마디 자체를 걸음 단위로 삼으면 그런 일이 없다.
+    g.fillStyle = C.lineBar;
+    for (let b = Math.floor(startBeat / bpb) * bpb; b <= endBeat; b += bpb) {
+      g.fillRect(Math.round(this.beatToX(b)), RULER, 2, this.height - RULER);
     }
   }
 
@@ -474,7 +485,7 @@ export class PianoRoll {
     const endBeat = Math.ceil(this.xToBeat(this.width));
     g.font = "600 10px system-ui, sans-serif";
     g.textBaseline = "middle";
-    for (let b = startBeat - (startBeat % bpb); b <= endBeat; b += bpb) {
+    for (let b = Math.floor(startBeat / bpb) * bpb; b <= endBeat; b += bpb) {
       const x = Math.round(this.beatToX(b));
       g.fillStyle = C.lineBar;
       g.fillRect(x, RULER - 8, 1, 8);
