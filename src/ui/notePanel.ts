@@ -276,6 +276,15 @@ export class NotePanel {
    * 하면 덮이지 않는 구간이 생기고, 거기서 음정이 어디 있는지가 정해지지 않는다.
    */
   private curveEditor(note: Note): HTMLElement {
+    /**
+     * 그리면서 점을 놓는 최소 간격(음 길이에 대한 비율).
+     *
+     * 0.01 이면 100개까지 놓인다. 화면 300px 기준으로 3px 마다 하나꼴이라
+     * 손으로 그린 모양이 그대로 남고, 그보다 촘촘하면 소리는 똑같은데
+     * 파일만 커진다.
+     */
+    const FREE_STEP = 0.01;
+
     const wrap = document.createElement("div");
     wrap.className = "curvebox";
 
@@ -385,6 +394,31 @@ export class NotePanel {
     };
 
     let dragging = false;
+    /** 지금 손가락이 곡선을 그리고 있는가 (점 하나를 옮기는 게 아니라). */
+    let drawingFree = false;
+
+    /**
+     * 손가락이 지나간 자리에 곡선을 놓는다.
+     *
+     * 지나간 구간의 옛 점은 지운다 — 안 지우면 새로 그린 선과 옛 선이 겹쳐
+     * 톱니가 된다. 너무 촘촘히 넣지도 않는다(FREE_STEP): 화면 몇 px 마다 점을
+     * 하나씩 넣으면 소리는 같은데 파일만 커진다.
+     */
+    const paint = (x: number, y: number): void => {
+      const v = toValue(x, y);
+      const pts = points().filter((p, i, arr) => {
+        if (Math.abs(p.at - v.at) > FREE_STEP) return true;
+        // 양 끝은 지우지 않는다. 곡선은 음 전체를 덮어야 한다.
+        return i === 0 || i === arr.length - 1;
+      });
+      // 양 끝 자리에 그리면 그 끝점의 높이를 바꾼다 (새로 끼우지 않는다).
+      if (v.at <= FREE_STEP) pts[0].cents = v.cents;
+      else if (v.at >= 1 - FREE_STEP) pts[pts.length - 1].cents = v.cents;
+      else pts.push(v);
+      pts.sort((a, b) => a.at - b.at);
+      save(pts);
+    };
+
     canvas.addEventListener("pointerdown", (e) => {
       e.preventDefault();
       canvas.setPointerCapture(e.pointerId);
@@ -399,25 +433,27 @@ export class NotePanel {
         draw();
         return;
       }
-      // 빈 데를 누르면 거기에 점을 하나 놓는다.
-      const pts = points();
-      if (pts.length >= MAX_CURVE_POINTS) {
-        picked = -1;
-        draw();
-        return;
-      }
-      const v = toValue(x, y);
-      pts.push(v);
-      pts.sort((a, b) => a.at - b.at);
-      picked = pts.findIndex((p) => p === v);
+      // 빈 데를 누르면 거기서부터 **그린다.** 손을 안 움직이고 떼면 점 하나가
+      // 놓이고, 끌면 지나간 자리를 따라 곡선이 그려진다. 점을 하나씩 찍어
+      // 모양을 만드는 건 폰에서 할 짓이 못 된다.
+      drawingFree = true;
+      picked = -1;
       dragging = true;
-      save(pts);
+      paint(x, y);
     });
 
     canvas.addEventListener("pointermove", (e) => {
-      if (!dragging || picked < 0) return;
+      if (!dragging) return;
       const r = canvas.getBoundingClientRect();
-      const v = toValue(e.clientX - r.left, e.clientY - r.top);
+      const x = e.clientX - r.left;
+      const y = e.clientY - r.top;
+
+      if (drawingFree) {
+        paint(x, y);
+        return;
+      }
+      if (picked < 0) return;
+      const v = toValue(x, y);
       const pts = points();
       const p = pts[picked];
       if (!p) return;
@@ -435,6 +471,7 @@ export class NotePanel {
     const end = (): void => {
       if (!dragging) return;
       dragging = false;
+      drawingFree = false;
       this.cb.onAfterChange();
       this.cb.onAudition(note);
     };
@@ -443,7 +480,7 @@ export class NotePanel {
 
     addBtn.addEventListener("click", () => {
       const pts = points();
-      if (pts.length >= MAX_CURVE_POINTS) return;
+      if (pts.length >= MAX_CURVE_POINTS) return; // 망가진 파일 방어선. 손으로는 못 닿는다.
       // 제일 넓은 사이에 하나 끼운다. 어디에 생길지 예측할 수 있어야 한다.
       let gap = 0;
       let idx = 0;

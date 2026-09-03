@@ -549,8 +549,15 @@ for (const [n, d] of SIGS) {
   ok("이상한 점만 버리고 나머지는 살린다", dirty.length === 2 && dirty[1].cents === 100, dirty);
 
   ok("곡선이 없으면 null", curveOf({}) === null && curveOf({ bend: [] }) === null);
-  ok("점이 너무 많으면 잘라 낸다",
-     curveOf({ bend: Array.from({ length: 40 }, (_, i) => ({ at: i / 40, cents: 0 })) }).length
+  // 점 개수는 막지 않는다. 12개로 막아 뒀다가 쓰던 사람이 바로 걸렸고,
+  // 걸렸을 때 화면이 아무 말도 안 해서 누른 게 조용히 무시됐다. 실제 비용을
+  // 따져 보면 막을 이유가 거의 없다 — 사운드폰트·MIDI 는 sampleBend 가
+  // 30ms 간격으로 다시 뽑아서 이벤트 수가 점 개수와 무관하다.
+  ok("손으로 그릴 만한 개수(100개)는 그대로 남는다",
+     curveOf({ bend: Array.from({ length: 100 }, (_, i) => ({ at: i / 99, cents: i })) }).length === 100);
+  // 상한은 망가진 파일로부터 화면을 지키는 선으로만 남긴다.
+  ok("터무니없이 많으면 잘라서 화면을 지킨다",
+     curveOf({ bend: Array.from({ length: 5000 }, (_, i) => ({ at: i / 4999, cents: 0 })) }).length
        <= MAX_CURVE_POINTS + 1);
 
   // 비율 → 초. 노트를 늘이면 곡선도 같이 늘어나야 한다. 초로 들고 있었으면

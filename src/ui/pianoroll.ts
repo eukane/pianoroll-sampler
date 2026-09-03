@@ -144,6 +144,18 @@ export class PianoRoll {
     canvas.addEventListener("pointercancel", this.onUp);
     canvas.addEventListener("wheel", this.onWheel, { passive: false });
     canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+    // 터치가 끝나면 브라우저가 **호환용 마우스 클릭**을 한 번 더 쏜다.
+    // `touch-action: none` 은 스크롤만 막지 이건 못 막고, 포인터 이벤트에
+    // preventDefault 를 걸어도 안 막힌다 — 터치 이벤트 쪽에서 막아야 한다.
+    //
+    // 안 막으면 이렇게 된다. 노트를 톡 쳐서 세부 설정 창이 열리는데, 그
+    // 클릭이 **방금 열린 창의 그 자리에 있던 버튼**으로 그대로 꽂힌다.
+    // 노트를 눌렀을 뿐인데 꾸밈이 저절로 걸린다. 실제로 그랬다.
+    //
+    // 손가락은 전부 포인터 이벤트로 받고 있어서 여기서 막아도 잃는 게 없다.
+    for (const type of ["touchstart", "touchend"]) {
+      canvas.addEventListener(type, (e) => e.preventDefault(), { passive: false });
+    }
 
     this.resize();
     this.scrollToPitch(60);

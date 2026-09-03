@@ -12,6 +12,7 @@
  *   · 박자표를 바꾸면 마디 선이 실제로 옮겨 그려지는가 (캔버스 픽셀로 확인)
  *   · 긴 음에서 꾸밈이 **정한 시점에** 일어나는가 (렌더한 소리의 음정을 추적)
  *   · 손으로 그린 음정 곡선이 그린 대로 소리가 되는가
+ *   · 끌어서 그릴 수 있고, 점 개수에 막히지 않는가
  *   · 재생 헤드가 BPM 에 맞는 속도로 나아가는가
  *   · 루프 구간을 벗어나지 않고 되돌아오는가
  *   · SF2 를 읽고 프리셋 목록·검색이 되는가
@@ -2513,6 +2514,16 @@ await page.waitForTimeout(120);
 await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
 await page.waitForTimeout(300);
 
+// 노트를 톡 쳤을 뿐인데 꾸밈이 저절로 걸리면 안 된다.
+//
+// 터치가 끝나면 브라우저가 호환용 마우스 클릭을 한 번 더 쏘는데, 그때는 이미
+// 창이 열려 있어서 **그 자리에 있던 버튼**으로 클릭이 꽂혔다. 노트를 눌렀을
+// 뿐인데 「꺾기」가 걸려 있었다. touch-action:none 도 포인터 이벤트의
+// preventDefault 도 이걸 못 막는다 — 터치 이벤트 쪽에서 막아야 한다.
+check("노트를 톡 쳐도 꾸밈이 저절로 걸리지 않는다",
+  (await page.evaluate(() => window.__app.project.tracks[0].notes[0].ornament)) === undefined,
+  await page.evaluate(() => window.__app.project.tracks[0].notes[0]));
+
 check("꾸밈 목록에 「직접」이 있다", (await page.locator('.orn[data-orn="free"]').count()) === 1);
 await page.locator('.orn[data-orn="free"]').click();
 await page.waitForTimeout(300);
@@ -2614,6 +2625,122 @@ check("그린 곡선대로 음정이 움직인다 — 그린 자리에서 올라
   heard.뒤 !== null && heard.뒤 > 140, heard);
 check("그리지 않은 구간은 안 건드린다",
   heard.중간 !== null && Math.abs(heard.중간) < 30, heard);
+
+// ---- 끌어서 곡선 그리기 · 점 개수 제한 없음 ----
+//
+// 처음엔 점을 12개로 막아 뒀다. 근거 없이 정한 값이었고, 쓰던 사람이 바로
+// 걸렸다. 게다가 걸렸을 때 화면이 **아무 말도 안 하고** 누른 걸 무시했다 —
+// 이 저장소가 하지 말자고 정해 둔 그 조용한 실패다.
+//
+// 점을 하나씩 찍어 모양을 만드는 것 자체가 고역이라, 끌어서 그리는 길도 같이 냈다.
+await page.reload({ waitUntil: "networkidle" });
+await page.locator("#unlock").tap();
+await page.waitForTimeout(300);
+await page.evaluate(() => {
+  const app = window.__app, r = app.roll;
+  app.project.bpm = 120; app.project.bars = 2;
+  r.scrollX = 0; r.scrollToPitch(69);
+  const t = app.project.tracks[0];
+  t.notes.length = 0;
+  t.notes.push({ id: "free", pitch: 69, start: 0, length: 8, velocity: 110,
+    ornament: "free", bend: [{ at: 0, cents: 0 }, { at: 1, cents: 0 }] });
+  app.scheduler.invalidate(); r.render();
+});
+{
+  const p = await page.evaluate(() => {
+    const r = window.__app.roll;
+    return { x: 46 + 1 * r.pxPerBeat - r.scrollX,
+             y: 36 + (127 - 69) * r.keyHeight - r.scrollY + r.keyHeight / 2 };
+  });
+  const b = await page.locator("#roll").boundingBox();
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: b.x + p.x, y: b.y + p.y }] });
+  await page.waitForTimeout(120);
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+  await page.waitForTimeout(300);
+}
+
+// 캔버스를 가로질러 산 모양으로 끈다 — 손가락으로 그리듯이.
+//
+// 창이 안 열렸거나 곡선 자리가 없으면 여기서 멈추지 말고 실패로만 남긴다.
+// 멈추면 뒤 검사가 통째로 안 돈다 (이 저장소에서 이미 두 번 겪었다).
+// 탭 한 번에 꾸밈이 바뀌면 안 된다. 터치가 끝난 뒤 오는 호환용 클릭이 방금
+// 열린 창의 버튼으로 꽂혀서, 「직접」이던 음이 「꺾기」로 바뀌어 있었다.
+check("창을 여는 탭이 창 안의 버튼을 누르지 않는다",
+  (await page.evaluate(() => window.__app.project.tracks[0].notes[0].ornament)) === "free",
+  await page.evaluate(() => window.__app.project.tracks[0].notes[0].ornament));
+
+const hasCurve = (await page.locator("#note-curve").count()) === 1;
+const fBox = hasCurve ? await page.locator("#note-curve").boundingBox() : null;
+if (!fBox) {
+  check("끌어서 그릴 곡선 자리가 열려 있다", false, "창이 안 열려 이 아래는 건너뜀");
+} else {
+  // **기존 점에서 30px 넘게 떨어진 자리**에서 시작해야 그리기가 된다.
+  // 점 위에서 시작하면 그건 그 점을 잡아 옮기는 것이고, 그것도 맞는 동작이다.
+  const steps = 24;
+  const x0 = fBox.x + fBox.width * 0.2;
+  const x1 = fBox.x + fBox.width - 12;
+  const yMid = fBox.y + fBox.height / 2;
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: x0, y: yMid - 40 }] });
+  for (let i = 1; i <= steps; i += 1) {
+    const k = i / steps;
+    const x = x0 + (x1 - x0) * k;
+    // 가운데가 제일 높은 산
+    const y = yMid - Math.sin(k * Math.PI) * (fBox.height * 0.35) - 24;
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x, y }] });
+    await page.waitForTimeout(12);
+  }
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+  await page.waitForTimeout(350);
+}
+const painted = fBox
+  ? await page.evaluate(() => window.__app.project.tracks[0].notes[0].bend)
+  : [{ at: 0, cents: 0 }, { at: 1, cents: 0 }];
+// 12개로 막혀 있었으면 여기서 걸린다. 그게 이 검사의 요점이다.
+check("끌어서 그리면 점이 12개보다 많이 남는다", painted.length > 12, { 점: painted.length });
+check("그린 모양이 산이다 (가운데가 제일 높다)", (() => {
+  const top = painted.reduce((m, p) => (p.cents > m.cents ? p : m), painted[0]);
+  return top.at > 0.3 && top.at < 0.8 && top.cents > 80;
+})(), painted.reduce((m, p) => (p.cents > m.cents ? p : m), painted[0]));
+// 양 끝은 그대로 남아야 한다. 곡선이 음 전체를 덮어야 하기 때문이다.
+check("그려도 양 끝은 남는다",
+  painted[0].at === 0 && painted[painted.length - 1].at === 1,
+  { 처음: painted[0], 끝: painted[painted.length - 1] });
+// 되짚어 그리면 옛 선이 남아 톱니가 되면 안 된다. 위치는 언제나 오름차순.
+check("점이 시간순으로 남는다",
+  painted.every((p, i) => i === 0 || p.at >= painted[i - 1].at), painted.map((p) => p.at));
+
+// 많은 점이 실제 소리까지 가는가. 점이 많다고 뭉개지면 그린 의미가 없다.
+const manySound = await page.evaluate(async () => {
+  const app = window.__app;
+  const { renderProject } = await import("/src/export/render.ts");
+  const buf = await renderProject(app.project, () => app.registry.soundfont.bankBuffer(),
+    app.registry.folders.list, app.mixerState, app.registry.voices);
+  const d = buf.getChannelData(0), sr = buf.sampleRate;
+  const at = (sec) => {
+    const SUB = 2048, minLag = Math.floor(sr / 700), maxLag = Math.floor(sr / 300);
+    const s0 = Math.floor(sec * sr);
+    let e = 0;
+    for (let i = s0; i < s0 + SUB; i += 1) e += d[i] * d[i];
+    if (Math.sqrt(e / SUB) < 0.005) return null;
+    const r = [];
+    for (let lag = minLag; lag <= maxLag; lag += 1) {
+      let sum = 0;
+      for (let i = 0; i < SUB; i += 1) sum += d[s0 + i] * d[s0 + i + lag];
+      r.push(sum);
+    }
+    const pk = Math.max(...r);
+    let idx = r.findIndex((v) => v >= pk * 0.92);
+    while (idx + 1 < r.length && r[idx + 1] > r[idx]) idx += 1;
+    return Math.round((69 + 12 * Math.log2(sr / (minLag + idx) / 440) - 69) * 100);
+  };
+  return { 앞: at(0.3), 가운데: at(2.0), 끝: at(3.7) };
+});
+// 산 모양은 **상대 비교**로 본다. 손가락으로 그린 것이라 절대값은 매번
+// 다르지만, 가운데가 양 끝보다 높다는 것은 어떻게 그리든 지켜져야 한다.
+check("점이 많아도 그린 산 모양대로 소리가 난다",
+  manySound.가운데 !== null && manySound.앞 !== null && manySound.끝 !== null &&
+  manySound.가운데 > manySound.앞 + 50 && manySound.가운데 > manySound.끝 + 50,
+  manySound);
 
 check("콘솔 오류 없음", errors.length === 0, errors);
 
