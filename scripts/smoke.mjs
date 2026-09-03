@@ -10,6 +10,7 @@
  *   · 상자를 끌어 여러 노트를 고르고, 고른 것만 지우고 복사할 수 있는가
  *   · 16분음표보다 잘게(1/32·1/64) 쪼개 찍고 소리까지 나는가
  *   · 박자표를 바꾸면 마디 선이 실제로 옮겨 그려지는가 (캔버스 픽셀로 확인)
+ *   · 긴 음에서 꾸밈이 **정한 시점에** 일어나는가 (렌더한 소리의 음정을 추적)
  *   · 재생 헤드가 BPM 에 맞는 속도로 나아가는가
  *   · 루프 구간을 벗어나지 않고 되돌아오는가
  *   · SF2 를 읽고 프리셋 목록·검색이 되는가
@@ -2374,6 +2375,109 @@ check("박자표 바꾸기도 되돌릴 수 있다",
   (await page.evaluate(() => window.__app.project.timeSig.join("/"))) === "3/4",
   await page.evaluate(() => window.__app.project.timeSig.join("/")));
 await page.evaluate(() => { window.__app.project.timeSig = [4, 4]; });
+
+// ---- 긴 음 안에서 꾸밈이 일어나는 시점 ----
+//
+// "긴 노트 안에서 내가 원하는 시점에 변화를 주고 싶어" 에서 나왔다. 곡선의
+// 모양은 audit 이 브라우저 없이 본다. 여기서는 **렌더한 소리에서 음정이
+// 실제로 언제 움직이는지**를 잰다 — 곡선을 만들어 놓고 소리에 안 걸면
+// 아무 소용이 없고, 그 실수를 이 저장소에서 이미 한 번 했다.
+await page.reload({ waitUntil: "networkidle" });
+await page.locator("#unlock").tap();
+await page.waitForTimeout(300);
+
+const bendAt = async (at) => await page.evaluate(async (atValue) => {
+  const app = window.__app;
+  app.project.bpm = 120;      // 한 박 = 0.5초
+  app.project.bars = 2;
+  const t = app.project.tracks[0];
+  t.notes.length = 0;
+  t.notes.push({ id: "long", pitch: 69, start: 0, length: 8, velocity: 110,
+    ornament: "bend", ornamentAmount: 1,
+    ...(atValue === null ? {} : { ornamentAt: atValue }) });
+  const { renderProject } = await import("/src/export/render.ts");
+  const buf = await renderProject(app.project, () => app.registry.soundfont.bankBuffer(),
+    app.registry.folders.list, app.mixerState, app.registry.voices);
+  const d = buf.getChannelData(0), sr = buf.sampleRate;
+  const at = (sec) => {
+    const SUB = 2048, minLag = Math.floor(sr / 700), maxLag = Math.floor(sr / 300);
+    const s0 = Math.floor(sec * sr);
+    let e = 0;
+    for (let i = s0; i < s0 + SUB; i += 1) e += d[i] * d[i];
+    if (Math.sqrt(e / SUB) < 0.005) return null;
+    const r = [];
+    for (let lag = minLag; lag <= maxLag; lag += 1) {
+      let sum = 0;
+      for (let i = 0; i < SUB; i += 1) sum += d[s0 + i] * d[s0 + i + lag];
+      r.push(sum);
+    }
+    const pk = Math.max(...r);
+    let idx = r.findIndex((v) => v >= pk * 0.92);
+    while (idx + 1 < r.length && r[idx + 1] > r[idx]) idx += 1;
+    return 69 + 12 * Math.log2(sr / (minLag + idx) / 440);
+  };
+  // 4초짜리 음(8박 × 0.5초)을 0.1초 간격으로 훑어 **제일 높이 올라간 시각**을 찾는다.
+  let peakSec = null, peakCents = 0;
+  for (let sec = 0.15; sec < 3.9; sec += 0.1) {
+    const p = at(sec);
+    if (p === null) continue;
+    const cents = (p - 69) * 100;
+    if (cents > peakCents) { peakCents = cents; peakSec = +sec.toFixed(2); }
+  }
+  return { 꺾인시각: peakSec, 꺾인폭센트: Math.round(peakCents) };
+}, at);
+
+const auto = await bendAt(null);
+// 4초짜리 음이면 45% 는 1.8초. 꺾고 돌아오는 데 시간이 걸리니 봉우리는 그 뒤다.
+check("시점을 안 정하면 예전처럼 음 가운데쯤에서 꺾는다",
+  auto.꺾인시각 !== null && auto.꺾인시각 > 1.5 && auto.꺾인시각 < 2.6, auto);
+
+const early = await bendAt(0.1);
+const late = await bendAt(0.8);
+check("시점을 앞으로 정하면 앞에서 꺾는다",
+  early.꺾인시각 !== null && early.꺾인시각 < 1.2, early);
+check("시점을 뒤로 정하면 뒤에서 꺾는다",
+  late.꺾인시각 !== null && late.꺾인시각 > 3.0, late);
+// 같은 음·같은 세기인데 꺾이는 자리만 달라야 한다. 이게 이 기능의 전부다.
+check("같은 음에서 꺾이는 자리가 실제로 옮겨진다",
+  late.꺾인시각 - early.꺾인시각 > 2.0,
+  { 앞: early.꺾인시각, 뒤: late.꺾인시각, 차이: +(late.꺾인시각 - early.꺾인시각).toFixed(2) });
+check("꺾이는 폭은 그대로다 (시점만 바뀌었지 세기가 바뀐 게 아니다)",
+  Math.abs(early.꺾인폭센트 - late.꺾인폭센트) < 60, { 앞: early.꺾인폭센트, 뒤: late.꺾인폭센트 });
+
+// 화면에 시점 조절기가 나오고, 값이 노트에 남는가.
+await page.evaluate(() => {
+  const app = window.__app, r = app.roll;
+  r.scrollX = 0; r.scrollToPitch(69);
+  app.project.tracks[0].notes.length = 0;
+  app.project.tracks[0].notes.push({ id: "ui", pitch: 69, start: 0, length: 4, velocity: 100 });
+  app.scheduler.invalidate(); r.render();
+});
+const uiPos = await page.evaluate(() => {
+  const r = window.__app.roll;
+  return { x: 46 + 0.5 * r.pxPerBeat - r.scrollX,
+           y: 36 + (127 - 69) * r.keyHeight - r.scrollY + r.keyHeight / 2 };
+});
+const uiBox = await page.locator("#roll").boundingBox();
+await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: uiBox.x + uiPos.x, y: uiBox.y + uiPos.y }] });
+await page.waitForTimeout(120);
+await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+await page.waitForTimeout(300);
+check("「그냥」인 음에는 시점 조절기가 없다", (await page.locator("#note-at").count()) === 0);
+await page.locator('.orn[data-orn="bend"]').click();
+await page.waitForTimeout(250);
+check("꾸밈을 고르면 시점 조절기가 따라 나온다", (await page.locator("#note-at").count()) === 1);
+// 맨 왼쪽 한 칸은 「자동」이다. 값이 없는 것과 0 은 다르다.
+check("처음에는 「자동」이다",
+  (await page.locator("#note-at").inputValue()) === "-1" &&
+  (await page.evaluate(() => window.__app.project.tracks[0].notes[0].ornamentAt)) === undefined);
+await page.locator("#note-at").fill("80");
+await page.locator("#note-at").dispatchEvent("input");
+await page.waitForTimeout(200);
+check("정한 시점이 노트에 남는다",
+  (await page.evaluate(() => window.__app.project.tracks[0].notes[0].ornamentAt)) === 0.8);
+await page.locator("#note-close").click();
+await page.waitForTimeout(150);
 
 check("콘솔 오류 없음", errors.length === 0, errors);
 

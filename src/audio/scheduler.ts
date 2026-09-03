@@ -464,10 +464,26 @@ export class Scheduler {
     );
   }
 
-  /** 노트를 끌 때처럼 한 번만 들려주면 되는 자리. */
+  /**
+   * 노트를 끌 때처럼 한 번만 들려주면 되는 자리.
+   *
+   * **꾸밈이 붙은 음은 끝까지 들려준다.** 예전에는 여기서도 250ms 만 울렸는데
+   * (MIN_PREVIEW_MS), 꾸밈 곡선은 2초짜리 창에 그려진다. 음 길이의 45% 자리에서
+   * 꺾는 음이면 0.9초에 꺾이니 **꺾이기도 전에 소리가 끝났다.** 꾸밈을 고르고
+   * 바로 들어 보는 자리인데 정작 그 꾸밈이 안 들렸다.
+   */
   preview(pitch: number, trackIndex = 0, velocity = 100, note?: Note): void {
     this.previewHold(pitch, trackIndex, velocity, note);
-    this.previewRelease();
+    if (!note || (note.ornament ?? "none") === "none") {
+      this.previewRelease();
+      return;
+    }
+    const token = this.heldPreview?.token;
+    this.clearPreviewTimer();
+    this.previewOffTimer = window.setTimeout(() => {
+      this.previewOffTimer = null;
+      if (this.heldPreview?.token === token) this.endPreview();
+    }, MAX_PREVIEW * 1000);
   }
 
   private endPreview(): void {

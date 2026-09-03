@@ -16,7 +16,7 @@
  */
 
 import type { Note, Track } from "../model/types";
-import { amountOf, bendCurve, ornamentOf, type BendPoint } from "../model/ornament.ts";
+import { amountOf, atOf, bendCurve, ornamentOf, type BendPoint } from "../model/ornament.ts";
 import { NO_VIBRATO, vibratoOf, type VibratoSetting } from "./vibrato.ts";
 
 export type Expression = {
@@ -32,11 +32,18 @@ export function expressionFor(track: Track, note: Note, durationSec: number): Ex
   if (o === undefined) return { vibrato: vibratoOf(track), bend: [] };
   if (o === "none") return PLAIN;
   if (o === "vibrato") {
-    // 음마다 세기를 따로 준다. 시작 시점은 트랙 설정을 그대로 쓴다 — 짧은
-    // 음이 안 떨게 하는 장치라 음마다 다시 정할 이유가 없다.
-    return { vibrato: { depth: amountOf(note), delay: vibratoOf(track).delay }, bend: [] };
+    // 음마다 세기를 따로 준다. 시작 시점은 **정해 줬으면 그것**, 안 정했으면
+    // 트랙 설정을 쓴다. 트랙 설정은 짧은 음이 안 떨게 하는 장치라 대부분의
+    // 음에는 그걸로 충분한데, 긴 음에서 "여기서부터 떨어라" 를 하려면
+    // 음마다 정할 수 있어야 한다.
+    const at = atOf(note);
+    const delay = at === null ? vibratoOf(track).delay : at * Math.max(0.02, durationSec);
+    return { vibrato: { depth: amountOf(note), delay }, bend: [] };
   }
-  return { vibrato: NO_VIBRATO, bend: bendCurve(ornamentOf(note), amountOf(note), durationSec) };
+  return {
+    vibrato: NO_VIBRATO,
+    bend: bendCurve(ornamentOf(note), amountOf(note), durationSec, atOf(note)),
+  };
 }
 
 /** 곡선을 곧은 구간들로 잘라 준다. MIDI 처럼 계단으로만 표현되는 쪽에서 쓴다. */

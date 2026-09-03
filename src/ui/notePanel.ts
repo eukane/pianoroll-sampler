@@ -18,7 +18,7 @@
  */
 
 import type { Note, Project } from "../model/types";
-import { amountOf, DEFAULT_AMOUNT, ORNAMENTS, type Ornament } from "../model/ornament";
+import { amountOf, atOf, DEFAULT_AMOUNT, ORNAMENTS, type Ornament } from "../model/ornament";
 
 export type NotePanelCallbacks = {
   /** 지금 트랙이 노래하는 트랙인가. 맞으면 가사칸을 띄운다. */
@@ -108,6 +108,7 @@ export class NotePanel {
     // 움직여 보고 아무 일도 안 일어나서 고장인 줄 안다.
     if ((note.ornament ?? "none") !== "none") {
       this.body.appendChild(this.strengthSlider(note));
+      this.body.appendChild(this.timingSlider(note));
     }
 
     const foot = document.createElement("div");
@@ -220,6 +221,54 @@ export class NotePanel {
     input.addEventListener("input", () => {
       note.ornamentAmount = Number(input.value);
       readout.textContent = String(Math.round(Number(input.value) * 100));
+      this.cb.onEdit();
+    });
+    input.addEventListener("change", () => {
+      this.cb.onAfterChange();
+      this.cb.onAudition(note);
+    });
+
+    wrap.append(text, input, readout);
+    return wrap;
+  }
+
+  /**
+   * 꾸밈이 **음 안에서 언제** 일어나는가.
+   *
+   * 이게 없을 때는 꺾기가 언제나 음 길이의 45% 자리에서 났다. 8분음표에서는
+   * 그게 맞는데 4박을 끄는 음에서는 안 맞는다 — "3박째에 꺾어라" 를 할 방법이
+   * 없었다.
+   *
+   * **맨 왼쪽은 「자동」이다.** 값이 없는 것과 0 은 다르다 — 없으면 꾸밈마다
+   * 알맞은 자리를 알아서 잡고(예전 그대로), 0 이면 음 맨 앞이다. 슬라이더로
+   * 「값 없음」을 표현할 수 없어서 왼쪽 끝 한 칸을 그 자리로 뒀다.
+   */
+  private timingSlider(note: Note): HTMLElement {
+    const wrap = document.createElement("label");
+    wrap.className = "mixslider";
+
+    const text = document.createElement("span");
+    text.textContent = "시점";
+
+    const input = document.createElement("input");
+    input.id = "note-at";
+    input.type = "range";
+    input.min = "-1";
+    input.max = "100";
+    input.step = "1";
+    const at = atOf(note);
+    input.value = at === null ? "-1" : String(Math.round(at * 100));
+
+    const readout = document.createElement("i");
+    const label = (v: number) => (v < 0 ? "자동" : `${v}%`);
+    readout.textContent = label(Number(input.value));
+
+    input.addEventListener("pointerdown", () => this.cb.onBeforeChange());
+    input.addEventListener("input", () => {
+      const v = Number(input.value);
+      if (v < 0) delete note.ornamentAt;
+      else note.ornamentAt = v / 100;
+      readout.textContent = label(v);
       this.cb.onEdit();
     });
     input.addEventListener("change", () => {

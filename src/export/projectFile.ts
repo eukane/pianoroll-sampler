@@ -93,6 +93,11 @@ function readNote(raw: unknown): Note | null {
   if (ORNAMENTS.some((o) => o.id === n.ornament)) {
     note.ornament = n.ornament as Ornament;
     note.ornamentAmount = clamp(num(n.ornamentAmount, DEFAULT_AMOUNT), 0, 1);
+    // 「언제」는 안 정했을 수도 있다. 없는 것과 0 은 다르다 — 없으면 알아서
+    // 잡고, 0 이면 음 맨 앞이다. 그래서 기본값으로 때우지 않고 있을 때만 넣는다.
+    if (typeof n.ornamentAt === "number" && Number.isFinite(n.ornamentAt)) {
+      note.ornamentAt = clamp(n.ornamentAt, 0, 1);
+    }
   }
   if (typeof n.lyric === "string" && n.lyric.trim()) note.lyric = n.lyric.trim();
 

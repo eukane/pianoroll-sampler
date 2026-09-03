@@ -17,6 +17,7 @@
  *   · **노래하는 트랙도 꾸밈을 받는가** (예전에는 조용히 무시했다)
  *   · 잘게 쪼갠 격자(1/32·1/64)가 MIDI 틱에 정확히 떨어지는가
  *   · 박자표를 바꿔도 마디 계산과 MIDI 왕복이 맞는가
+ *   · 꾸밈의 **시점**을 정하면 그 자리에서 일어나는가 (긴 음에서)
  *
  *     node scripts/audit.mjs
  */
@@ -27,7 +28,7 @@ import { beatsPerBar } from "../src/model/project.ts";
 import { demoSong } from "../src/model/demoSong.ts";
 import { DEMOS } from "../src/model/demos.ts";
 import { shakes, vibratoOf } from "../src/audio/vibrato.ts";
-import { bendCurve, MAX_BEND_CENTS } from "../src/model/ornament.ts";
+import { atOf, bendCurve, MAX_BEND_CENTS } from "../src/model/ornament.ts";
 import { expressionFor, singingExpressions } from "../src/audio/expression.ts";
 import { projectToJson, projectFromJson } from "../src/export/projectFile.ts";
 import { MAX_PX_PER_BEAT } from "../src/ui/theme.ts";
@@ -448,6 +449,75 @@ for (const [n, d] of SIGS) {
   ok("몇 마디째인지는 바뀐다 (4/4 는 2마디째, 3/4 는 2마디째 아님)",
      Math.floor(5 / beatsPerBar(p44)) === 1 && Math.floor(5 / beatsPerBar(p34)) === 1,
      { "4/4": Math.floor(5 / beatsPerBar(p44)) + 1, "3/4": Math.floor(5 / beatsPerBar(p34)) + 1 });
+}
+
+// ---- 14) 꾸밈의 시점 ----
+//
+// "긴 노트 안에서 내가 원하는 시점에 변화를 주고 싶어" 에서 나왔다. 예전에는
+// 꺾기가 언제나 음 길이의 **45% 자리**에서 났다. 8분음표에서는 맞는데 4박을
+// 끄는 음에서는 안 맞는다.
+//
+// 여기서 지키는 것 둘: **정하면 그 자리**, **안 정하면 예전 그대로.**
+// 뒤엣것이 깨지면 이미 만들어 둔 곡의 소리가 조용히 바뀐다.
+{
+  const D = 4; // 4초짜리 긴 음
+  // 안 정했을 때 = 예전 그대로 (45%)
+  const auto = bendCurve("bend", 0.6, D, null);
+  ok("시점을 안 정하면 예전처럼 45% 자리에서 꺾는다",
+     Math.abs(auto[1].t - D * 0.45) < 1e-9, auto[1].t);
+
+  // 정하면 그 자리
+  for (const at of [0, 0.25, 0.5, 0.75]) {
+    const c = bendCurve("bend", 0.6, D, at);
+    ok(`꺾기 시점을 ${at * 100}% 로 정하면 거기서 꺾는다`,
+       Math.abs(c[1].t - D * at) < 1e-9, { 정한곳: D * at, 실제: c[1].t });
+  }
+
+  // 끝에 붙여도 제자리로 돌아올 자리는 남겨야 한다. 안 그러면 음정이
+  // 틀어진 채로 음이 끝난다.
+  const late = bendCurve("bend", 0.6, D, 1);
+  ok("맨 끝에 붙여도 음 안에서 제자리로 돌아온다",
+     late[late.length - 1].t <= D + 1e-9 && late[late.length - 1].cents === 0,
+     late[late.length - 1]);
+
+  // 끌어올림은 그 지점까지 올라오고, 흘러내림은 그 지점부터 내려간다.
+  const scoop = bendCurve("scoop", 0.6, D, 0.5);
+  ok("끌어올림은 정한 지점까지 올라온다",
+     Math.abs(scoop[1].t - D * 0.5) < 1e-9 && scoop[1].cents === 0, scoop);
+  const fall = bendCurve("fall", 0.6, D, 0.5);
+  ok("흘러내림은 정한 지점부터 내려간다",
+     Math.abs(fall[1].t - D * 0.5) < 1e-9 && fall[2].t === D, fall);
+
+  // 곡선은 언제나 음 안에서 끝나야 한다. 밖으로 나가면 그 뒤 음까지 휜다.
+  for (const o of ["scoop", "fall", "bend"]) {
+    for (const at of [0, 0.5, 1]) {
+      const c = bendCurve(o, 1, 0.1, at); // 아주 짧은 음
+      ok(`${o} 는 시점 ${at * 100}% 라도 짧은 음 밖으로 안 나간다`,
+         c.every((p) => p.t >= -1e-9 && p.t <= 0.1 + 1e-9), c.map((p) => +p.t.toFixed(4)));
+    }
+  }
+
+  // 값이 없는 것과 0 은 다르다. 0 은 "음 맨 앞", 없음은 "알아서".
+  ok("시점 0 과 「안 정함」은 다르다", atOf({ ornamentAt: 0 }) === 0 && atOf({}) === null);
+  ok("이상한 값은 안 정한 것으로 본다", atOf({ ornamentAt: NaN }) === null);
+  ok("범위를 벗어난 값은 잘라 준다", atOf({ ornamentAt: 5 }) === 1 && atOf({ ornamentAt: -3 }) === 0);
+}
+
+// 저장했다 열면 시점이 남아야 한다. 꾸밈과 노랫말이 예전에 조용히 날아간
+// 적이 있어서, 새 필드를 넣을 때마다 여기를 같이 본다.
+{
+  const withAt = {
+    bpm: 120, bars: 2, timeSig: [4, 4],
+    tracks: [{ id: "t", name: "t", source: { kind: "sf2", presetId: 0 },
+      volume: 0.8, pan: 0, muted: false, notes: [
+        { id: "a", pitch: 60, start: 0, length: 4, velocity: 100,
+          ornament: "bend", ornamentAmount: 0.5, ornamentAt: 0.75 },
+        { id: "b", pitch: 62, start: 4, length: 1, velocity: 100, ornament: "bend" },
+      ] }],
+  };
+  const back = projectFromJson(projectToJson(withAt)).tracks[0].notes;
+  ok("저장했다 열어도 꾸밈 시점이 남는다", back[0].ornamentAt === 0.75, back[0]);
+  ok("시점을 안 정한 음은 안 정한 채로 남는다", back[1].ornamentAt === undefined, back[1]);
 }
 
 let bad = 0;

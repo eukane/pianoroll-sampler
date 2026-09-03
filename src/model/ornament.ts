@@ -65,7 +65,20 @@ export const DEFAULT_AMOUNT = 0.6;
 /** 음정 곡선의 한 점. `t` 는 음이 시작하고 몇 초 뒤인가. */
 export type BendPoint = { t: number; cents: number };
 
-export type NoteLike = { ornament?: Ornament; ornamentAmount?: number };
+export type NoteLike = { ornament?: Ornament; ornamentAmount?: number; ornamentAt?: number };
+
+/**
+ * 이 꾸밈이 **음 안에서 언제** 일어나는가 (0~1, 음 길이에 대한 비율).
+ *
+ * 안 정하면 `null` 이고, 그러면 아래 `bendCurve` 가 알아서 잡는다(예전 그대로).
+ * 정해 두면 그 자리에 딱 붙는다 — 긴 음에서 "3박째에 꺾어라" 를 하려면
+ * 이게 있어야 한다.
+ */
+export function atOf(note: NoteLike): number | null {
+  const a = note.ornamentAt;
+  if (typeof a !== "number" || !Number.isFinite(a)) return null;
+  return Math.max(0, Math.min(1, a));
+}
 
 export function ornamentOf(note: NoteLike): Ornament {
   return note.ornament ?? "none";
@@ -79,44 +92,74 @@ export function amountOf(note: NoteLike): number {
 /**
  * 이 음의 음정 곡선. 점 사이는 곧게 잇는다.
  *
- * 짧은 음에서도 모양이 살아 있어야 한다. 그래서 구간 길이를 초로 못 박지 않고
- * **음 길이의 비율과 초 중 짧은 쪽**을 쓴다. 0.1초짜리 16분음표에 0.15초짜리
- * 끌어올림을 붙이면 음이 끝날 때까지 제 음정에 도착하지 못한다.
+ * ## 두 가지가 곡선을 정한다 — **얼마나**(amount)와 **언제**(at)
+ *
+ * 처음에는 「언제」가 없었다. 꺾기는 언제나 음 길이의 **45% 자리**에서
+ * 났고, 끌어올림은 머리, 흘러내림은 꼬리에 붙박이였다. 8분음표에서는 그게
+ * 맞는데 **긴 음에서는 안 맞는다** — 4박을 끄는 음에서 "3박째에 꺾어라" 를
+ * 할 방법이 없었다. 사용자가 정확히 그걸 지적했다.
+ *
+ * 그래서 음마다 `ornamentAt`(0~1)을 둔다. 네 꾸밈에서 뜻이 하나로 통한다.
+ *
+ *     끌어올림   그 지점**까지** 올라온다
+ *     흘러내림   그 지점**부터** 내려간다
+ *     꺾기       그 지점**에서** 꺾는다
+ *     떨림       그 지점**부터** 떨린다 (audio/expression.ts)
+ *
+ * 안 정하면 예전 그대로다. 이미 만들어 둔 곡의 소리가 바뀌면 안 된다.
+ *
+ * ## 짧은 음에서도 모양이 살아 있어야 한다
+ *
+ * 구간 길이를 초로 못 박지 않고 **음 길이의 비율과 초 중 짧은 쪽**을 쓴다.
+ * 0.1초짜리 16분음표에 0.15초짜리 끌어올림을 붙이면 음이 끝날 때까지 제
+ * 음정에 도착하지 못한다.
  */
-export function bendCurve(o: Ornament, amount: number, durationSec: number): BendPoint[] {
+export function bendCurve(
+  o: Ornament,
+  amount: number,
+  durationSec: number,
+  at: number | null = null,
+): BendPoint[] {
   const d = Math.max(0.02, durationSec);
   const cents = Math.round(amount * MAX_BEND_CENTS);
   if (cents === 0) return [];
   const span = (seconds: number, ratio: number) => Math.min(seconds, d * ratio);
+  /** 정해 준 지점(초). 음 밖으로 못 나간다. */
+  const point = at === null ? null : Math.max(0, Math.min(d, d * at));
 
   switch (o) {
     case "scoop": {
-      // 아래에서 붙여 올린다. 도착이 늦으면 음정이 틀린 것처럼 들려서 앞쪽만 쓴다.
-      const rise = span(0.13, 0.3);
+      // 아래에서 붙여 올린다. 도착이 늦으면 음정이 틀린 것처럼 들려서
+      // 안 정했을 땐 앞쪽만 쓴다. 정해 주면 거기까지 끌어올린다.
+      const rise = point ?? span(0.13, 0.3);
       return [
         { t: 0, cents: -cents },
-        { t: rise, cents: 0 },
+        { t: Math.max(0.01, rise), cents: 0 },
       ];
     }
     case "fall": {
       // 끝에서 떨어뜨린다. 음이 끝나는 순간까지 내려간다.
-      const drop = span(0.18, 0.35);
+      const from = point ?? d - span(0.18, 0.35);
       return [
         { t: 0, cents: 0 },
-        { t: d - drop, cents: 0 },
+        { t: Math.min(d - 0.01, Math.max(0, from)), cents: 0 },
         { t: d, cents: -cents },
       ];
     }
     case "bend": {
-      // 한 번 위로 꺾었다 제자리. 중간보다 조금 뒤에서 꺾어야 "꺾었다" 로 들린다.
+      // 한 번 위로 꺾었다 제자리. 안 정했을 땐 중간보다 조금 뒤에서 꺾는다 —
+      // 정확히 가운데면 "꺾었다" 보다 "흔들렸다" 로 들린다.
       const up = span(0.09, 0.18);
       const back = span(0.14, 0.28);
-      const at = d * 0.45;
+      // 꺾고 돌아오는 데 걸리는 만큼은 음 안에 남겨 둔다. 끝에 붙여 두면
+      // 제자리로 돌아오기 전에 음이 끝나서 음정이 틀어진 채로 끝난다.
+      const room = Math.max(0, d - up - back);
+      const start = Math.min(point ?? d * 0.45, room);
       return [
         { t: 0, cents: 0 },
-        { t: at, cents: 0 },
-        { t: at + up, cents },
-        { t: at + up + back, cents: 0 },
+        { t: start, cents: 0 },
+        { t: start + up, cents },
+        { t: start + up + back, cents: 0 },
       ];
     }
     default:
