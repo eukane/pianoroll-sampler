@@ -18,7 +18,18 @@
  */
 
 import type { Note, Project } from "../model/types";
-import { amountOf, atOf, DEFAULT_AMOUNT, ORNAMENTS, type Ornament } from "../model/ornament";
+import {
+  amountOf,
+  atOf,
+  curveOf,
+  DEFAULT_AMOUNT,
+  FLAT_CURVE,
+  MAX_BEND_CENTS,
+  MAX_CURVE_POINTS,
+  ORNAMENTS,
+  type CurvePoint,
+  type Ornament,
+} from "../model/ornament";
 
 export type NotePanelCallbacks = {
   /** 지금 트랙이 노래하는 트랙인가. 맞으면 가사칸을 띄운다. */
@@ -106,7 +117,11 @@ export class NotePanel {
 
     // 「그냥」에는 세기가 없다. 있을 이유가 없는 조절기를 띄워 두면
     // 움직여 보고 아무 일도 안 일어나서 고장인 줄 안다.
-    if ((note.ornament ?? "none") !== "none") {
+    // 「직접」은 곡선을 그리는 것이라 세기·시점 슬라이더가 뜻이 없다.
+    // 곡선이 그 둘을 통째로 대신한다.
+    if ((note.ornament ?? "none") === "free") {
+      this.body.appendChild(this.curveEditor(note));
+    } else if ((note.ornament ?? "none") !== "none") {
       this.body.appendChild(this.strengthSlider(note));
       this.body.appendChild(this.timingSlider(note));
     }
@@ -192,6 +207,9 @@ export class NotePanel {
     this.cb.onBeforeChange();
     note.ornament = o;
     if (o !== "none" && note.ornamentAmount === undefined) note.ornamentAmount = DEFAULT_AMOUNT;
+    // 「직접」을 처음 고르면 그릴 것이 있어야 한다. 빈 화면에서 시작하면
+    // 무엇을 하라는 건지 알 수가 없다. 평평한 선에서 시작한다.
+    if (o === "free" && curveOf(note) === null) note.bend = FLAT_CURVE.map((p) => ({ ...p }));
     this.cb.onEdit();
     this.cb.onAfterChange();
     this.render();
@@ -229,6 +247,243 @@ export class NotePanel {
     });
 
     wrap.append(text, input, readout);
+    return wrap;
+  }
+
+  /**
+   * 곡선을 손으로 그리는 자리 — 보카로의 그 곡선.
+   *
+   * ## 왜 노트 위가 아니라 여기인가
+   *
+   * "노트를 꾹 누르면 파형을 노트 위에 표시하고 조정" 이 원래 요청이었다.
+   * 둘 다 안 되는 이유가 있었다.
+   *
+   * **꾹 누르기**: 바로 앞에서 없앤 동작이다. 노트 탭이 이미 이 창을 여는데,
+   * 그 옆에 누른 시간으로 갈리는 동작을 또 두면 "창이 뜨기도 하고 지워지기도
+   * 하는" 그 문제가 그대로 돌아온다.
+   *
+   * **노트 위에서 조정**: 세로가 안 나온다. 노트 한 칸이 기본 20px(최대
+   * 40px)인데 벤드 범위는 ±200센트다. 한 칸에 담으면 1px = 10센트가 되고,
+   * 손끝 접촉면 40px 이 곧 400센트 — **범위 전체**다. 겨눌 수가 없다.
+   *
+   * 이 창은 화면 폭을 다 쓰므로 세로 140px 을 준다. 400센트를 140px 에
+   * 펴면 1px ≈ 2.9센트. 그제야 손가락으로 고를 수 있는 크기가 된다.
+   * 보여 주는 건 노트 위에 그대로 하고(ui/pianoroll.ts), 고치는 건 여기서.
+   *
+   * ## 양 끝은 세로로만 움직인다
+   *
+   * 곡선은 음의 처음부터 끝까지를 덮어야 한다. 양 끝을 가로로 옮길 수 있게
+   * 하면 덮이지 않는 구간이 생기고, 거기서 음정이 어디 있는지가 정해지지 않는다.
+   */
+  private curveEditor(note: Note): HTMLElement {
+    const wrap = document.createElement("div");
+    wrap.className = "curvebox";
+
+    const canvas = document.createElement("canvas");
+    canvas.id = "note-curve";
+    canvas.className = "curve";
+    const H = 140;
+
+    const readout = document.createElement("i");
+    const foot = document.createElement("div");
+    foot.className = "curvefoot";
+    const addBtn = document.createElement("button");
+    addBtn.type = "button";
+    addBtn.id = "curve-add";
+    addBtn.textContent = "＋ 점";
+    const delBtn = document.createElement("button");
+    delBtn.type = "button";
+    delBtn.id = "curve-del";
+    delBtn.textContent = "− 점";
+    const flatBtn = document.createElement("button");
+    flatBtn.type = "button";
+    flatBtn.id = "curve-flat";
+    flatBtn.textContent = "↔ 평평하게";
+    foot.append(addBtn, delBtn, flatBtn, readout);
+
+    const points = (): CurvePoint[] => curveOf(note) ?? FLAT_CURVE.map((p) => ({ ...p }));
+    let picked = -1;
+
+    const draw = (): void => {
+      const dpr = window.devicePixelRatio || 1;
+      const w = canvas.clientWidth || 300;
+      canvas.width = Math.round(w * dpr);
+      canvas.height = Math.round(H * dpr);
+      const g = canvas.getContext("2d");
+      if (!g) return;
+      g.setTransform(dpr, 0, 0, dpr, 0, 0);
+      g.clearRect(0, 0, w, H);
+
+      const px = (at: number) => 10 + at * (w - 20);
+      const py = (cents: number) => H / 2 - (cents / MAX_BEND_CENTS) * (H / 2 - 12);
+
+      // 눈금 — 가운데(제 음정)와 위아래 반음. 기준선이 없으면 얼마나 휘었는지 모른다.
+      g.strokeStyle = "#2b3140";
+      g.lineWidth = 1;
+      for (const c of [-200, -100, 0, 100, 200]) {
+        g.globalAlpha = c === 0 ? 1 : 0.55;
+        g.beginPath();
+        g.moveTo(8, py(c));
+        g.lineTo(w - 8, py(c));
+        g.stroke();
+      }
+      g.globalAlpha = 1;
+      g.fillStyle = "#8b95a8";
+      g.font = "10px system-ui, sans-serif";
+      g.textBaseline = "middle";
+      g.fillText("+1", 10, py(100));
+      g.fillText("−1", 10, py(-100));
+
+      const pts = points();
+      g.strokeStyle = "#4ec9b0";
+      g.lineWidth = 2;
+      g.beginPath();
+      pts.forEach((p, i) => (i === 0 ? g.moveTo(px(p.at), py(p.cents)) : g.lineTo(px(p.at), py(p.cents))));
+      g.stroke();
+
+      pts.forEach((p, i) => {
+        g.fillStyle = i === picked ? "#ffd479" : "#8ff0dc";
+        g.beginPath();
+        // 손가락으로 잡을 것이라 점을 크게 그린다. 작으면 못 잡는다.
+        g.arc(px(p.at), py(p.cents), i === picked ? 8 : 6, 0, Math.PI * 2);
+        g.fill();
+      });
+
+      readout.textContent =
+        picked >= 0 && pts[picked]
+          ? `${Math.round(pts[picked].at * 100)}% · ${pts[picked].cents > 0 ? "+" : ""}${pts[picked].cents}센트`
+          : `점 ${pts.length}개`;
+    };
+
+    const save = (pts: CurvePoint[]): void => {
+      note.bend = pts;
+      this.cb.onEdit();
+      draw();
+    };
+
+    const nearest = (x: number, y: number): number => {
+      const w = canvas.clientWidth || 300;
+      const px = (at: number) => 10 + at * (w - 20);
+      const py = (c: number) => H / 2 - (c / MAX_BEND_CENTS) * (H / 2 - 12);
+      let best = -1;
+      let bestD = 30; // 손끝만 한 거리 안에 있어야 잡은 것으로 본다
+      points().forEach((p, i) => {
+        const d = Math.hypot(px(p.at) - x, py(p.cents) - y);
+        if (d < bestD) {
+          bestD = d;
+          best = i;
+        }
+      });
+      return best;
+    };
+
+    const toValue = (x: number, y: number): CurvePoint => {
+      const w = canvas.clientWidth || 300;
+      const at = Math.max(0, Math.min(1, (x - 10) / Math.max(1, w - 20)));
+      const cents = Math.round(((H / 2 - y) / (H / 2 - 12)) * MAX_BEND_CENTS);
+      return { at, cents: Math.max(-MAX_BEND_CENTS, Math.min(MAX_BEND_CENTS, cents)) };
+    };
+
+    let dragging = false;
+    canvas.addEventListener("pointerdown", (e) => {
+      e.preventDefault();
+      canvas.setPointerCapture(e.pointerId);
+      const r = canvas.getBoundingClientRect();
+      const x = e.clientX - r.left;
+      const y = e.clientY - r.top;
+      const hit = nearest(x, y);
+      this.cb.onBeforeChange();
+      if (hit >= 0) {
+        picked = hit;
+        dragging = true;
+        draw();
+        return;
+      }
+      // 빈 데를 누르면 거기에 점을 하나 놓는다.
+      const pts = points();
+      if (pts.length >= MAX_CURVE_POINTS) {
+        picked = -1;
+        draw();
+        return;
+      }
+      const v = toValue(x, y);
+      pts.push(v);
+      pts.sort((a, b) => a.at - b.at);
+      picked = pts.findIndex((p) => p === v);
+      dragging = true;
+      save(pts);
+    });
+
+    canvas.addEventListener("pointermove", (e) => {
+      if (!dragging || picked < 0) return;
+      const r = canvas.getBoundingClientRect();
+      const v = toValue(e.clientX - r.left, e.clientY - r.top);
+      const pts = points();
+      const p = pts[picked];
+      if (!p) return;
+      // 양 끝은 세로로만. 곡선이 음 전체를 덮어야 한다.
+      p.cents = v.cents;
+      if (picked !== 0 && picked !== pts.length - 1) {
+        // 이웃을 넘어가지 않게 막는다. 넘어가면 곡선이 뒤로 접힌다.
+        const lo = pts[picked - 1].at + 0.01;
+        const hi = pts[picked + 1].at - 0.01;
+        p.at = Math.max(lo, Math.min(hi, v.at));
+      }
+      save(pts);
+    });
+
+    const end = (): void => {
+      if (!dragging) return;
+      dragging = false;
+      this.cb.onAfterChange();
+      this.cb.onAudition(note);
+    };
+    canvas.addEventListener("pointerup", end);
+    canvas.addEventListener("pointercancel", end);
+
+    addBtn.addEventListener("click", () => {
+      const pts = points();
+      if (pts.length >= MAX_CURVE_POINTS) return;
+      // 제일 넓은 사이에 하나 끼운다. 어디에 생길지 예측할 수 있어야 한다.
+      let gap = 0;
+      let idx = 0;
+      for (let i = 1; i < pts.length; i += 1) {
+        const d = pts[i].at - pts[i - 1].at;
+        if (d > gap) {
+          gap = d;
+          idx = i;
+        }
+      }
+      const at = (pts[idx].at + pts[idx - 1].at) / 2;
+      const cents = Math.round((pts[idx].cents + pts[idx - 1].cents) / 2);
+      this.cb.onBeforeChange();
+      pts.splice(idx, 0, { at, cents });
+      picked = idx;
+      save(pts);
+      this.cb.onAfterChange();
+    });
+
+    delBtn.addEventListener("click", () => {
+      const pts = points();
+      // 양 끝은 못 지운다. 지우면 곡선이 음 전체를 안 덮는다.
+      if (picked <= 0 || picked >= pts.length - 1) return;
+      this.cb.onBeforeChange();
+      pts.splice(picked, 1);
+      picked = -1;
+      save(pts);
+      this.cb.onAfterChange();
+    });
+
+    flatBtn.addEventListener("click", () => {
+      this.cb.onBeforeChange();
+      picked = -1;
+      save(FLAT_CURVE.map((p) => ({ ...p })));
+      this.cb.onAfterChange();
+    });
+
+    wrap.append(canvas, foot);
+    // 창에 붙은 뒤라야 폭을 안다. 다음 프레임에 그린다.
+    requestAnimationFrame(draw);
     return wrap;
   }
 

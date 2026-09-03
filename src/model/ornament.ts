@@ -46,7 +46,7 @@
  */
 
 /** 음 하나에 붙는 꾸밈. 없으면 `none`. */
-export type Ornament = "none" | "vibrato" | "scoop" | "fall" | "bend";
+export type Ornament = "none" | "vibrato" | "scoop" | "fall" | "bend" | "free";
 
 export const ORNAMENTS: { id: Ornament; label: string; hint: string }[] = [
   { id: "none", label: "그냥", hint: "꾸미지 않는다" },
@@ -54,7 +54,57 @@ export const ORNAMENTS: { id: Ornament; label: string; hint: string }[] = [
   { id: "scoop", label: "끌어올림", hint: "아래에서 붙여 올린다" },
   { id: "fall", label: "흘러내림", hint: "끝에서 떨어뜨린다" },
   { id: "bend", label: "꺾기", hint: "위로 꺾었다 제자리로" },
+  { id: "free", label: "직접", hint: "곡선을 그려서" },
 ];
+
+/**
+ * 직접 그린 곡선의 한 점.
+ *
+ * `at` 은 **음 안에서의 위치(0~1)** 다. 초가 아니다 — 초로 들고 있으면 노트
+ * 길이를 늘였을 때 곡선이 앞쪽에 뭉치고, BPM 을 바꾸면 모양이 통째로 달라진다.
+ * 비율로 들고 있으면 늘이든 줄이든 그린 모양 그대로 따라온다.
+ */
+export type CurvePoint = { at: number; cents: number };
+
+/** 처음 「직접」을 골랐을 때. 평평한 선에서 시작한다. */
+export const FLAT_CURVE: CurvePoint[] = [
+  { at: 0, cents: 0 },
+  { at: 1, cents: 0 },
+];
+
+/** 곡선에 넣을 수 있는 점 개수. 폰에서 손가락으로 다루는 것이라 많으면 못 쓴다. */
+export const MAX_CURVE_POINTS = 12;
+
+/**
+ * 노트가 들고 있는 곡선을 읽는다. **사람이 손으로 고칠 수 있는 파일**에서
+ * 오는 값이라 이상한 것은 걸러 낸다 (models 의 sanitize 와 같은 태도다).
+ *
+ * 양 끝(0 과 1)은 언제나 있어야 한다. 없으면 곡선이 음의 일부만 덮어서,
+ * 나머지 구간에서 음정이 어디 있는지가 정해지지 않는다.
+ */
+export function curveOf(note: NoteLike): CurvePoint[] | null {
+  const raw = note.bend;
+  if (!Array.isArray(raw)) return null;
+  const clean = raw
+    .filter((p): p is CurvePoint =>
+      !!p && Number.isFinite(p.at) && Number.isFinite(p.cents))
+    .map((p) => ({
+      at: Math.max(0, Math.min(1, p.at)),
+      cents: Math.max(-MAX_BEND_CENTS, Math.min(MAX_BEND_CENTS, Math.round(p.cents))),
+    }))
+    .sort((a, b) => a.at - b.at)
+    .slice(0, MAX_CURVE_POINTS);
+  if (clean.length === 0) return null;
+  if (clean[0].at > 0) clean.unshift({ at: 0, cents: clean[0].cents });
+  if (clean[clean.length - 1].at < 1) clean.push({ at: 1, cents: clean[clean.length - 1].cents });
+  return clean;
+}
+
+/** 그린 곡선(비율) → 실제 음정 곡선(초). 음 길이를 곱하기만 한다. */
+export function curveToBend(points: CurvePoint[], durationSec: number): BendPoint[] {
+  const d = Math.max(0.02, durationSec);
+  return points.map((p) => ({ t: p.at * d, cents: p.cents }));
+}
 
 /** 피치 벤드의 기본 범위(±2반음)를 넘지 않는다. */
 export const MAX_BEND_CENTS = 200;
@@ -65,7 +115,13 @@ export const DEFAULT_AMOUNT = 0.6;
 /** 음정 곡선의 한 점. `t` 는 음이 시작하고 몇 초 뒤인가. */
 export type BendPoint = { t: number; cents: number };
 
-export type NoteLike = { ornament?: Ornament; ornamentAmount?: number; ornamentAt?: number };
+export type NoteLike = {
+  ornament?: Ornament;
+  ornamentAmount?: number;
+  ornamentAt?: number;
+  /** 「직접」일 때 그려 둔 곡선. 비율 기준이다. */
+  bend?: CurvePoint[];
+};
 
 /**
  * 이 꾸밈이 **음 안에서 언제** 일어나는가 (0~1, 음 길이에 대한 비율).

@@ -12,7 +12,7 @@
  * 계산할 필요가 없어야 하기 때문이다. 초로의 환산은 재생/렌더 시점에만 한다.
  */
 
-import type { Ornament } from "./ornament";
+import type { CurvePoint, Ornament } from "./ornament";
 
 export type Note = {
   id: string;
@@ -36,6 +36,11 @@ export type Note = {
    * "여기서 꺾어라" 를 정하려고 둔 값이다. 자세한 건 model/ornament.ts.
    */
   ornamentAt?: number;
+  /**
+   * 「직접」 꾸밈일 때 손으로 그린 음정 곡선. 점의 위치는 **음 안에서의
+   * 비율(0~1)** 이라 노트를 늘이거나 BPM 을 바꿔도 모양이 따라온다.
+   */
+  bend?: CurvePoint[];
   /**
    * 노랫말 한 글자(「か」「さ」…). 노래하는 트랙에서만 쓴다.
    *

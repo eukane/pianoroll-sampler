@@ -18,6 +18,7 @@
  *   · 잘게 쪼갠 격자(1/32·1/64)가 MIDI 틱에 정확히 떨어지는가
  *   · 박자표를 바꿔도 마디 계산과 MIDI 왕복이 맞는가
  *   · 꾸밈의 **시점**을 정하면 그 자리에서 일어나는가 (긴 음에서)
+ *   · 손으로 그린 음정 곡선이 제대로 읽히고 저장되는가
  *
  *     node scripts/audit.mjs
  */
@@ -28,7 +29,7 @@ import { beatsPerBar } from "../src/model/project.ts";
 import { demoSong } from "../src/model/demoSong.ts";
 import { DEMOS } from "../src/model/demos.ts";
 import { shakes, vibratoOf } from "../src/audio/vibrato.ts";
-import { atOf, bendCurve, MAX_BEND_CENTS } from "../src/model/ornament.ts";
+import { atOf, bendCurve, curveOf, curveToBend, MAX_BEND_CENTS, MAX_CURVE_POINTS } from "../src/model/ornament.ts";
 import { expressionFor, singingExpressions } from "../src/audio/expression.ts";
 import { projectToJson, projectFromJson } from "../src/export/projectFile.ts";
 import { MAX_PX_PER_BEAT } from "../src/ui/theme.ts";
@@ -518,6 +519,78 @@ for (const [n, d] of SIGS) {
   const back = projectFromJson(projectToJson(withAt)).tracks[0].notes;
   ok("저장했다 열어도 꾸밈 시점이 남는다", back[0].ornamentAt === 0.75, back[0]);
   ok("시점을 안 정한 음은 안 정한 채로 남는다", back[1].ornamentAt === undefined, back[1]);
+}
+
+// ---- 15) 손으로 그린 음정 곡선 (「직접」) ----
+//
+// 프리셋 넷은 결국 이 곡선을 대신 만들어 주는 것이다. 사람이 직접 그리면
+// 그게 우선이다. 곡선은 **사람이 열어 고칠 수 있는 파일**에서 오므로 그대로
+// 믿으면 안 된다 — 걸러 내는 규칙을 여기서 본다.
+{
+  // 양 끝이 없으면 채워 준다. 없으면 곡선이 음의 일부만 덮어서, 나머지
+  // 구간에서 음정이 어디 있는지가 정해지지 않는다.
+  const half = curveOf({ bend: [{ at: 0.4, cents: 100 }] });
+  ok("양 끝이 없으면 채워 준다", half.length === 3 && half[0].at === 0 && half[2].at === 1, half);
+  ok("채운 양 끝은 이웃 값을 따라간다", half[0].cents === 100 && half[2].cents === 100, half);
+
+  // 순서가 뒤죽박죽이어도 시간순으로 세운다.
+  const messy = curveOf({ bend: [{ at: 1, cents: 0 }, { at: 0.5, cents: 50 }, { at: 0, cents: 0 }] });
+  ok("점을 시간순으로 세운다", messy.map((p) => p.at).join(",") === "0,0.5,1", messy);
+
+  // 범위를 벗어난 값은 자른다. ±200센트는 MIDI 피치 벤드의 기본 범위다.
+  const wild = curveOf({ bend: [{ at: -5, cents: 9999 }, { at: 9, cents: -9999 }] });
+  ok("음정 범위를 넘으면 자른다",
+     wild.every((p) => Math.abs(p.cents) <= MAX_BEND_CENTS), wild);
+  ok("위치 범위를 넘으면 자른다", wild.every((p) => p.at >= 0 && p.at <= 1), wild);
+
+  // 쓰레기가 섞여 있어도 나머지는 살린다. 하나 때문에 곡선 전체를 버리면
+  // 사용자가 그려 둔 게 통째로 날아간다.
+  const dirty = curveOf({ bend: [{ at: 0, cents: 0 }, { at: NaN, cents: 5 }, null, { at: 1, cents: 100 }] });
+  ok("이상한 점만 버리고 나머지는 살린다", dirty.length === 2 && dirty[1].cents === 100, dirty);
+
+  ok("곡선이 없으면 null", curveOf({}) === null && curveOf({ bend: [] }) === null);
+  ok("점이 너무 많으면 잘라 낸다",
+     curveOf({ bend: Array.from({ length: 40 }, (_, i) => ({ at: i / 40, cents: 0 })) }).length
+       <= MAX_CURVE_POINTS + 1);
+
+  // 비율 → 초. 노트를 늘이면 곡선도 같이 늘어나야 한다. 초로 들고 있었으면
+  // 앞쪽에 뭉치고, BPM 을 바꿀 때마다 모양이 달라진다.
+  const c = [{ at: 0, cents: 0 }, { at: 0.5, cents: 200 }, { at: 1, cents: 0 }];
+  const short = curveToBend(c, 1);
+  const long = curveToBend(c, 4);
+  ok("노트를 늘이면 곡선도 같이 늘어난다",
+     short[1].t === 0.5 && long[1].t === 2, { 짧게: short[1].t, 길게: long[1].t });
+  ok("늘여도 휘는 폭은 그대로다", short[1].cents === long[1].cents);
+}
+
+// 직접 그린 곡선이 프리셋보다 우선인가. 「직접」인데 프리셋 모양이 나오면
+// 그린 게 무시되는 것이다.
+{
+  const drawn = { ornament: "free", bend: [{ at: 0, cents: 0 }, { at: 0.3, cents: -150 }, { at: 1, cents: 0 }] };
+  const e = expressionFor({ vibrato: 0 }, drawn, 2);
+  ok("「직접」은 그린 곡선을 그대로 쓴다",
+     e.bend.length === 3 && e.bend[1].cents === -150 && Math.abs(e.bend[1].t - 0.6) < 1e-9, e.bend);
+  ok("「직접」에는 떨림이 안 붙는다", e.vibrato.depth === 0);
+  // 그린 게 없으면 조용히 프리셋으로 새지 않는다. 안 휘는 게 맞다.
+  ok("「직접」인데 그린 게 없으면 안 휜다",
+     expressionFor({ vibrato: 0 }, { ornament: "free" }, 2).bend.length === 0);
+}
+
+// 저장했다 열면 곡선이 남아야 한다. 꾸밈·노랫말·시점이 조용히 날아간 적이
+// 있어서 새 필드를 넣을 때마다 여기를 같이 본다.
+{
+  const drawnProject = {
+    bpm: 120, bars: 2, timeSig: [4, 4],
+    tracks: [{ id: "t", name: "t", source: { kind: "sf2", presetId: 0 },
+      volume: 0.8, pan: 0, muted: false, notes: [
+        { id: "a", pitch: 60, start: 0, length: 4, velocity: 100, ornament: "free",
+          bend: [{ at: 0, cents: -50 }, { at: 0.5, cents: 120 }, { at: 1, cents: 0 }] },
+      ] }],
+  };
+  const back = projectFromJson(projectToJson(drawnProject)).tracks[0].notes[0];
+  ok("저장했다 열어도 그린 곡선이 남는다",
+     back.bend?.length === 3 && back.bend[1].cents === 120, back.bend);
+  ok("곡선과 함께 꾸밈 종류도 남는다", back.ornament === "free", back.ornament);
 }
 
 let bad = 0;

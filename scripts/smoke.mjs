@@ -11,6 +11,7 @@
  *   · 16분음표보다 잘게(1/32·1/64) 쪼개 찍고 소리까지 나는가
  *   · 박자표를 바꾸면 마디 선이 실제로 옮겨 그려지는가 (캔버스 픽셀로 확인)
  *   · 긴 음에서 꾸밈이 **정한 시점에** 일어나는가 (렌더한 소리의 음정을 추적)
+ *   · 손으로 그린 음정 곡선이 그린 대로 소리가 되는가
  *   · 재생 헤드가 BPM 에 맞는 속도로 나아가는가
  *   · 루프 구간을 벗어나지 않고 되돌아오는가
  *   · SF2 를 읽고 프리셋 목록·검색이 되는가
@@ -2478,6 +2479,141 @@ check("정한 시점이 노트에 남는다",
   (await page.evaluate(() => window.__app.project.tracks[0].notes[0].ornamentAt)) === 0.8);
 await page.locator("#note-close").click();
 await page.waitForTimeout(150);
+
+// ---- 음정 곡선을 손으로 그리기 (「직접」) ----
+//
+// "노트를 꾹 누르면 파형을 노트 위에 표시하고 조정" 이 요청이었다. 꾹 누르기는
+// 바로 앞에서 없앤 동작이고(창 열기와 부딪힌다), 노트 위는 세로가 20px 뿐이라
+// ±200센트를 담으면 손끝 하나가 범위 전체가 된다. 그래서 **보여 주는 건 노트
+// 위에, 고치는 건 창 안 캔버스(140px)** 로 갈랐다.
+await page.reload({ waitUntil: "networkidle" });
+await page.locator("#unlock").tap();
+await page.waitForTimeout(300);
+
+await page.evaluate(() => {
+  const app = window.__app, r = app.roll;
+  app.project.bpm = 120;
+  app.project.bars = 2;
+  r.scrollX = 0;
+  r.scrollToPitch(69);
+  const t = app.project.tracks[0];
+  t.notes.length = 0;
+  t.notes.push({ id: "curve", pitch: 69, start: 0, length: 8, velocity: 110 });
+  app.scheduler.invalidate();
+  r.render();
+});
+const curvePos = await page.evaluate(() => {
+  const r = window.__app.roll;
+  return { x: 46 + 1 * r.pxPerBeat - r.scrollX,
+           y: 36 + (127 - 69) * r.keyHeight - r.scrollY + r.keyHeight / 2 };
+});
+const curveBox = await page.locator("#roll").boundingBox();
+await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: curveBox.x + curvePos.x, y: curveBox.y + curvePos.y }] });
+await page.waitForTimeout(120);
+await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+await page.waitForTimeout(300);
+
+check("꾸밈 목록에 「직접」이 있다", (await page.locator('.orn[data-orn="free"]').count()) === 1);
+await page.locator('.orn[data-orn="free"]').click();
+await page.waitForTimeout(300);
+check("「직접」을 고르면 곡선 그리는 자리가 나온다",
+  (await page.locator("#note-curve").count()) === 1);
+// 세기·시점 슬라이더는 곡선이 통째로 대신하므로 안 나와야 한다.
+check("「직접」에는 세기·시점 슬라이더가 없다",
+  (await page.locator("#note-amount").count()) === 0 &&
+  (await page.locator("#note-at").count()) === 0);
+check("처음에는 평평한 선에서 시작한다",
+  JSON.stringify(await page.evaluate(() => window.__app.project.tracks[0].notes[0].bend))
+    === JSON.stringify([{ at: 0, cents: 0 }, { at: 1, cents: 0 }]));
+
+// 캔버스가 손가락으로 겨눌 만한 크기인가. 이게 이 설계의 근거다.
+const curveSize = await page.evaluate(() => {
+  const c = document.getElementById("note-curve");
+  const r = c.getBoundingClientRect();
+  return { w: Math.round(r.width), h: Math.round(r.height), 센트당px: +(r.height / 400).toFixed(2) };
+});
+check("곡선 캔버스가 세로 140px 은 된다 (노트 한 칸은 20px)",
+  curveSize.h >= 130, curveSize);
+
+// 빈 데를 눌러 점을 놓고, 끌어서 올린다 — 진짜 터치로.
+const cBox = await page.locator("#note-curve").boundingBox();
+{
+  const X = cBox.x + cBox.width * 0.5;
+  const Y = cBox.y + cBox.height * 0.5;
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: X, y: Y }] });
+  await page.waitForTimeout(80);
+  // 위로 끌면 음정이 올라간다
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: X, y: cBox.y + cBox.height * 0.2 }] });
+  await page.waitForTimeout(80);
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+  await page.waitForTimeout(300);
+}
+const drawn = await page.evaluate(() => window.__app.project.tracks[0].notes[0].bend);
+check("빈 데를 누르면 점이 생긴다", drawn.length === 3, drawn);
+check("위로 끌면 음정이 올라간다", drawn[1].cents > 80, drawn);
+check("가운데쯤에 놓인다", drawn[1].at > 0.35 && drawn[1].at < 0.65, drawn);
+
+// 「＋ 점」 / 「− 점」 / 「평평하게」
+await page.locator("#curve-add").click();
+await page.waitForTimeout(200);
+check("＋ 점 을 누르면 점이 하나 는다",
+  (await page.evaluate(() => window.__app.project.tracks[0].notes[0].bend.length)) === 4);
+await page.locator("#curve-del").click();
+await page.waitForTimeout(200);
+check("− 점 을 누르면 방금 넣은 점이 빠진다",
+  (await page.evaluate(() => window.__app.project.tracks[0].notes[0].bend.length)) === 3);
+await page.locator("#curve-flat").click();
+await page.waitForTimeout(200);
+check("평평하게 를 누르면 두 점만 남는다",
+  (await page.evaluate(() => window.__app.project.tracks[0].notes[0].bend.length)) === 2);
+// 그린 것도 되돌릴 수 있어야 한다. 손으로 그리는 자리는 실수가 잦다.
+// 창이 툴바를 덮고 있으니 닫고 나서 누른다 — 사람도 그렇게 한다.
+await page.locator("#note-close").click();
+await page.waitForTimeout(200);
+await page.locator("#undo").tap();
+await page.waitForTimeout(250);
+check("그린 것을 되돌릴 수 있다",
+  (await page.evaluate(() => window.__app.project.tracks[0].notes[0].bend.length)) === 3,
+  await page.evaluate(() => window.__app.project.tracks[0].notes[0].bend));
+
+// 그린 곡선이 **실제 소리**가 되는가. 곡선을 만들어 놓고 소리에 안 걸면
+// 아무 소용이 없고, 이 저장소에서 이미 한 번 그 실수를 했다.
+const heard = await page.evaluate(async () => {
+  const app = window.__app;
+  const t = app.project.tracks[0];
+  t.notes.length = 0;
+  t.notes.push({ id: "c", pitch: 69, start: 0, length: 8, velocity: 110, ornament: "free",
+    bend: [{ at: 0, cents: 0 }, { at: 0.75, cents: 0 }, { at: 0.85, cents: 190 }, { at: 1, cents: 190 }] });
+  const { renderProject } = await import("/src/export/render.ts");
+  const buf = await renderProject(app.project, () => app.registry.soundfont.bankBuffer(),
+    app.registry.folders.list, app.mixerState, app.registry.voices);
+  const d = buf.getChannelData(0), sr = buf.sampleRate;
+  const at = (sec) => {
+    const SUB = 2048, minLag = Math.floor(sr / 700), maxLag = Math.floor(sr / 300);
+    const s0 = Math.floor(sec * sr);
+    let e = 0;
+    for (let i = s0; i < s0 + SUB; i += 1) e += d[i] * d[i];
+    if (Math.sqrt(e / SUB) < 0.005) return null;
+    const r = [];
+    for (let lag = minLag; lag <= maxLag; lag += 1) {
+      let sum = 0;
+      for (let i = 0; i < SUB; i += 1) sum += d[s0 + i] * d[s0 + i + lag];
+      r.push(sum);
+    }
+    const pk = Math.max(...r);
+    let idx = r.findIndex((v) => v >= pk * 0.92);
+    while (idx + 1 < r.length && r[idx + 1] > r[idx]) idx += 1;
+    return Math.round((69 + 12 * Math.log2(sr / (minLag + idx) / 440) - 69) * 100);
+  };
+  // 4초짜리 음. 3초까지는 제 음정, 3.4초 뒤로는 온음 가까이 올라가 있어야 한다.
+  return { 앞: at(1.0), 중간: at(2.5), 뒤: at(3.6) };
+});
+check("그린 곡선대로 음정이 움직인다 — 앞은 제 음정",
+  heard.앞 !== null && Math.abs(heard.앞) < 30, heard);
+check("그린 곡선대로 음정이 움직인다 — 그린 자리에서 올라간다",
+  heard.뒤 !== null && heard.뒤 > 140, heard);
+check("그리지 않은 구간은 안 건드린다",
+  heard.중간 !== null && Math.abs(heard.중간) < 30, heard);
 
 check("콘솔 오류 없음", errors.length === 0, errors);
 

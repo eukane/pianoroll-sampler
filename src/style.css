@@ -633,3 +633,34 @@ button.danger {
 .lyricrow i.bad {
   color: var(--bad);
 }
+
+/* 음정 곡선 그리는 자리. 노트 위에서는 세로가 안 나와서(한 칸 20px 에
+   ±200센트) 여기서 고친다 — 140px 면 1px 이 3센트쯤이라 손가락으로 겨눈다. */
+.curvebox {
+  margin-bottom: 10px;
+}
+
+.curve {
+  display: block;
+  width: 100%;
+  height: 140px;
+  background: #14161c;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  /* 곡선을 끄는 동안 화면이 같이 스크롤되면 점을 못 놓는다. */
+  touch-action: none;
+}
+
+.curvefoot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.curvefoot i {
+  margin-left: auto;
+  font-style: normal;
+  color: var(--dim);
+  font-variant-numeric: tabular-nums;
+}

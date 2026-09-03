@@ -22,7 +22,14 @@ import type { Note, Project } from "../model/types";
 import { boxFrom, notesInBox, pruneSelection, type SelectBox } from "../model/selection";
 import { beatsPerBar, makeNote, snap, snapFloor, sortNotes, totalBeats } from "../model/project";
 import { clampPitch, isBlackKey, isC, midiToName } from "../util/music";
-import type { Ornament } from "../model/ornament";
+import {
+  amountOf,
+  atOf,
+  bendCurve,
+  curveOf,
+  ornamentOf,
+  type Ornament,
+} from "../model/ornament";
 import {
   C,
   EDGE_GRAB,
@@ -45,6 +52,7 @@ const ORNAMENT_MARK: Record<Ornament, string> = {
   scoop: "↗",
   fall: "↘",
   bend: "∧",
+  free: "✎",
 };
 
 type Ptr = { x: number; y: number; downX: number; downY: number; downAt: number };
@@ -392,6 +400,13 @@ export class PianoRoll {
         g.fillText(midiToName(n.pitch), x + 5, y + h / 2);
       }
 
+      // 음정 곡선을 노트 위에 그대로 그린다.
+      //
+      // 표시만으로는 "무엇이 걸렸나" 는 알아도 "어떻게 휘나" 는 모른다.
+      // 세로는 **음높이 그대로** 쓴다 — 100센트가 한 칸이라, 온음 꺾는 음은
+      // 눈에도 두 칸 올라간다. 눈금을 따로 만들면 또 배워야 한다.
+      if (active) this.drawNoteCurve(n, x, y, w, h);
+
       // 꾸밈이 걸린 음은 눈에 보여야 한다. 안 보이면 "어디에 걸었더라" 를
       // 하나씩 눌러 확인해야 하고, 그건 조교가 아니라 수색이다.
       const mark = ORNAMENT_MARK[n.ornament ?? "none"];
@@ -406,6 +421,56 @@ export class PianoRoll {
         g.globalAlpha = 1;
       }
     }
+  }
+
+  /**
+   * 그 음의 음정 곡선을 노트 위에 얹는다.
+   *
+   * 떨림은 안 그린다 — 8Hz 로 흔들리는 걸 그리면 노트가 털뭉치가 된다.
+   * 그건 「〜」 표시로 충분하다.
+   */
+  private drawNoteCurve(n: Note, x: number, y: number, w: number, h: number): void {
+    if (w < 6) return; // 너무 좁으면 곡선이 아니라 점이 된다
+    const orn = n.ornament ?? "none";
+    if (orn === "none" || orn === "vibrato") return;
+
+
+    // **실제 길이(초)로 계산한다.** 프리셋 꾸밈은 구간을 초로도 재기 때문에
+    // (0.13초짜리 끌어올림), 1초로 뭉뚱그려 그리면 긴 음에서 화면과 소리가
+    // 다른 모양이 된다. 화면이 거짓말을 하면 그리는 의미가 없다.
+    const durationSec = (n.length * 60) / Math.max(1, this.getProject().bpm);
+    const orn2 = ornamentOf(n);
+    const pts =
+      orn2 === "free"
+        ? (curveOf(n) ?? []).map((p) => ({ t: p.at * durationSec, cents: p.cents }))
+        : bendCurve(orn2, amountOf(n), durationSec, atOf(n));
+    if (pts.length < 2) return;
+    const scale = 1 / Math.max(1e-6, durationSec);
+
+    const g = this.ctx2d;
+    const mid = y + h / 2;
+    // 100센트 = 한 칸. 음높이 축과 같은 눈금이라 따로 읽는 법을 안 배워도 된다.
+    const cy = (cents: number) => mid - (cents / 100) * this.keyHeight;
+
+    g.save();
+    g.strokeStyle = C.noteActive;
+    g.lineWidth = 1.5;
+    g.globalAlpha = 0.95;
+    g.beginPath();
+    g.moveTo(x, cy(pts[0].cents));
+    for (const p of pts.slice(1)) g.lineTo(x + p.t * scale * w, cy(p.cents));
+    g.stroke();
+
+    // 직접 그린 곡선은 점도 찍어 준다. 어디를 잡아 고쳤는지 보여야 한다.
+    if (orn === "free") {
+      g.fillStyle = C.noteActive;
+      for (const p of pts) {
+        g.beginPath();
+        g.arc(x + p.t * scale * w, cy(p.cents), 2, 0, Math.PI * 2);
+        g.fill();
+      }
+    }
+    g.restore();
   }
 
   private roundRect(x: number, y: number, w: number, h: number, r: number): void {

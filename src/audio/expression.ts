@@ -16,7 +16,15 @@
  */
 
 import type { Note, Track } from "../model/types";
-import { amountOf, atOf, bendCurve, ornamentOf, type BendPoint } from "../model/ornament.ts";
+import {
+  amountOf,
+  atOf,
+  bendCurve,
+  curveOf,
+  curveToBend,
+  ornamentOf,
+  type BendPoint,
+} from "../model/ornament.ts";
 import { NO_VIBRATO, vibratoOf, type VibratoSetting } from "./vibrato.ts";
 
 export type Expression = {
@@ -31,6 +39,12 @@ export function expressionFor(track: Track, note: Note, durationSec: number): Ex
   const o = note.ornament;
   if (o === undefined) return { vibrato: vibratoOf(track), bend: [] };
   if (o === "none") return PLAIN;
+  // 직접 그린 곡선이 있으면 그대로 쓴다. 프리셋 넷은 결국 이 곡선을 대신
+  // 만들어 주는 것이라, 사람이 직접 그렸으면 그게 우선이다.
+  if (o === "free") {
+    const drawn = curveOf(note);
+    return { vibrato: NO_VIBRATO, bend: drawn ? curveToBend(drawn, durationSec) : [] };
+  }
   if (o === "vibrato") {
     // 음마다 세기를 따로 준다. 시작 시점은 **정해 줬으면 그것**, 안 정했으면
     // 트랙 설정을 쓴다. 트랙 설정은 짧은 음이 안 떨게 하는 장치라 대부분의

@@ -13,7 +13,13 @@ import type { Note, Project, Track } from "../model/types";
 import { emptyTrack, newId, sortNotes } from "../model/project.ts";
 import { MAX_TRACKS } from "../model/channels.ts";
 import { MAX_PRESET_ID } from "../model/preset.ts";
-import { DEFAULT_AMOUNT, ORNAMENTS, type Ornament } from "../model/ornament.ts";
+import {
+  curveOf,
+  DEFAULT_AMOUNT,
+  ORNAMENTS,
+  type CurvePoint,
+  type Ornament,
+} from "../model/ornament.ts";
 
 export const FILE_VERSION = 1;
 
@@ -98,6 +104,10 @@ function readNote(raw: unknown): Note | null {
     if (typeof n.ornamentAt === "number" && Number.isFinite(n.ornamentAt)) {
       note.ornamentAt = clamp(n.ornamentAt, 0, 1);
     }
+    // 손으로 그린 음정 곡선. curveOf 가 이상한 점을 걸러 내고 양 끝을 채운다 —
+    // 사람이 열어 고칠 수 있는 파일이라 그대로 믿으면 안 된다.
+    const curve = curveOf({ bend: n.bend as CurvePoint[] | undefined });
+    if (curve) note.bend = curve;
   }
   if (typeof n.lyric === "string" && n.lyric.trim()) note.lyric = n.lyric.trim();
 
