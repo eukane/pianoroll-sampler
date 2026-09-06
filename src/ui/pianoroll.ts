@@ -26,7 +26,6 @@ import {
   amountOf,
   atOf,
   bendCurve,
-  curveOf,
   ornamentOf,
   type Ornament,
 } from "../model/ornament";
@@ -442,7 +441,8 @@ export class PianoRoll {
    * 그건 「〜」 표시로 충분하다.
    */
   private drawNoteCurve(n: Note, x: number, y: number, w: number, h: number): void {
-    if (w < 6) return; // 너무 좁으면 곡선이 아니라 점이 된다
+    // 좁으면 곡선이 아니라 얼룩이 된다. 보여 줄 게 없는데 그리는 값만 든다.
+    if (w < 24) return;
     const orn = n.ornament ?? "none";
     if (orn === "none" || orn === "vibrato") return;
 
@@ -452,12 +452,21 @@ export class PianoRoll {
     // 다른 모양이 된다. 화면이 거짓말을 하면 그리는 의미가 없다.
     const durationSec = (n.length * 60) / Math.max(1, this.getProject().bpm);
     const orn2 = ornamentOf(n);
+    // 직접 그린 곡선은 **있는 그대로 읽는다.** curveOf 는 걸러 내고 정렬까지
+    // 하는데, 그건 파일을 읽을 때와 손으로 고칠 때 할 일이지 **매 프레임**
+    // 할 일이 아니다. 재 보니 노트 200개에 점 40개씩이면 한 프레임 7.29ms —
+    // 꾸밈 없을 때(0.17ms)의 43배였다. 폰이면 60fps 예산을 그냥 넘긴다.
     const pts =
       orn2 === "free"
-        ? (curveOf(n) ?? []).map((p) => ({ t: p.at * durationSec, cents: p.cents }))
-        : bendCurve(orn2, amountOf(n), durationSec, atOf(n));
+        ? n.bend ?? []
+        : bendCurve(orn2, amountOf(n), durationSec, atOf(n)).map((p) => ({
+            at: p.t / Math.max(1e-6, durationSec),
+            cents: p.cents,
+          }));
     if (pts.length < 2) return;
-    const scale = 1 / Math.max(1e-6, durationSec);
+    // 점이 화면 폭보다 촘촘하면 건너뛰며 그린다. 1px 에 점 두 개를 찍어 봐야
+    // 눈에는 똑같고 시간만 든다.
+    const stride = Math.max(1, Math.ceil(pts.length / Math.max(2, w / 2)));
 
     const g = this.ctx2d;
     const mid = y + h / 2;
@@ -470,15 +479,22 @@ export class PianoRoll {
     g.globalAlpha = 0.95;
     g.beginPath();
     g.moveTo(x, cy(pts[0].cents));
-    for (const p of pts.slice(1)) g.lineTo(x + p.t * scale * w, cy(p.cents));
+    for (let i = stride; i < pts.length; i += stride) {
+      g.lineTo(x + pts[i].at * w, cy(pts[i].cents));
+    }
+    // 마지막 점은 건너뛰더라도 반드시 찍는다. 안 그러면 곡선이 음 끝에
+    // 도달하기 전에 잘려서, 화면이 소리와 다른 말을 한다.
+    const last = pts[pts.length - 1];
+    g.lineTo(x + last.at * w, cy(last.cents));
     g.stroke();
 
     // 직접 그린 곡선은 점도 찍어 준다. 어디를 잡아 고쳤는지 보여야 한다.
-    if (orn === "free") {
+    // 다만 촘촘하면 점이 선을 덮어 버려서, 널찍할 때만 찍는다.
+    if (orn === "free" && stride === 1 && pts.length <= 24) {
       g.fillStyle = C.noteActive;
       for (const p of pts) {
         g.beginPath();
-        g.arc(x + p.t * scale * w, cy(p.cents), 2, 0, Math.PI * 2);
+        g.arc(x + p.at * w, cy(p.cents), 2, 0, Math.PI * 2);
         g.fill();
       }
     }

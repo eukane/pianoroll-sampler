@@ -19,6 +19,7 @@
  *   · 박자표를 바꿔도 마디 계산과 MIDI 왕복이 맞는가
  *   · 꾸밈의 **시점**을 정하면 그 자리에서 일어나는가 (긴 음에서)
  *   · 손으로 그린 음정 곡선이 제대로 읽히고 저장되는가
+ *   · **복사·붙여넣기가 조교한 것을 들고 가는가** (예전에는 다 버렸다)
  *
  *     node scripts/audit.mjs
  */
@@ -33,6 +34,7 @@ import { atOf, bendCurve, curveOf, curveToBend, MAX_BEND_CENTS, MAX_CURVE_POINTS
 import { expressionFor, singingExpressions } from "../src/audio/expression.ts";
 import { projectToJson, projectFromJson } from "../src/export/projectFile.ts";
 import { MAX_PX_PER_BEAT } from "../src/ui/theme.ts";
+import { copyNotes, pasteAt } from "../src/model/clipboard.ts";
 
 const out = [];
 const ok = (n, pass, d) => out.push({ n, pass: !!pass, d });
@@ -598,6 +600,45 @@ for (const [n, d] of SIGS) {
   ok("저장했다 열어도 그린 곡선이 남는다",
      back.bend?.length === 3 && back.bend[1].cents === 120, back.bend);
   ok("곡선과 함께 꾸밈 종류도 남는다", back.ornament === "free", back.ornament);
+}
+
+// ---- 16) 복사·붙여넣기가 조교한 것을 들고 가는가 ----
+//
+// 예전에는 음높이·시작·길이·세기 **넷만** 옮겼다. 그래서 공들여 조교한 음을
+// 복사해 붙이면 꾸밈도 음정 곡선도 노랫말도 조용히 사라졌다. 붙여넣기는
+// **같은 것을 반복하려고** 쓰는 기능인데 반복되는 게 반쪽이었다.
+{
+  const rich = [{
+    id: "a", pitch: 60, start: 0, length: 2, velocity: 77,
+    ornament: "free", ornamentAmount: 0.8, ornamentAt: 0.7,
+    bend: [{ at: 0, cents: 0 }, { at: 0.5, cents: 150 }, { at: 1, cents: 0 }],
+    lyric: "か",
+  }];
+  const clip = copyNotes(rich, 0, 2);
+  const dest = { id: "t", name: "t", source: { kind: "sf2", presetId: 0 },
+    volume: 0.8, pan: 0, muted: false, notes: [] };
+  const put = pasteAt(dest, clip, 4)[0];
+
+  for (const key of ["ornament", "ornamentAmount", "ornamentAt", "lyric"]) {
+    ok(`붙여넣어도 ${key} 가 남는다`, put[key] === rich[0][key], { 기대: rich[0][key], 실제: put[key] });
+  }
+  ok("붙여넣어도 세기가 남는다", put.velocity === 77, put.velocity);
+  ok("붙여넣어도 음정 곡선이 남는다",
+     put.bend?.length === 3 && put.bend[1].cents === 150, put.bend);
+  ok("붙여넣은 노트는 새 id 를 받는다", put.id !== rich[0].id);
+
+  // 곡선 배열을 같이 쓰면 붙여넣은 음을 고쳤을 때 원본까지 바뀐다.
+  // 눈에는 안 보이고 나중에야 드러나는 종류의 버그다.
+  //
+  // 곡선 자체가 안 딸려 왔으면 여기서 **죽지 말고** 실패로 남긴다. 죽으면
+  // 뒤 검사가 통째로 안 돈다 (이 저장소에서 이미 세 번 겪었다).
+  if (put.bend) {
+    put.bend[1].cents = -99;
+    ok("붙여넣은 음의 곡선을 고쳐도 원본이 안 바뀐다", rich[0].bend[1].cents === 150,
+       rich[0].bend[1].cents);
+  } else {
+    ok("붙여넣은 음의 곡선을 고쳐도 원본이 안 바뀐다", false, "곡선이 안 딸려 왔다");
+  }
 }
 
 let bad = 0;

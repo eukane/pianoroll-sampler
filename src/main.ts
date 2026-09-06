@@ -23,7 +23,7 @@ import { MixerPanel } from "./ui/mixerPanel";
 import { NotePanel } from "./ui/notePanel";
 import { History } from "./history";
 import { copyNotes, copyRegion, pasteAt, lastBeat, type Clipboard } from "./model/clipboard";
-import { boxFrom, deleteSelected, selectionRange } from "./model/selection";
+import { boxFrom, deleteSelected, selectionRange, transpose } from "./model/selection";
 
 const project = emptyProject();
 
@@ -354,6 +354,8 @@ const copyBtn = $<HTMLButtonElement>("copy");
 const pasteBtn = $<HTMLButtonElement>("paste");
 const selectBtn = $<HTMLButtonElement>("select-mode");
 const deleteBtn = $<HTMLButtonElement>("delete-selected");
+const upBtn = $<HTMLButtonElement>("move-up");
+const downBtn = $<HTMLButtonElement>("move-down");
 let clipboard: Clipboard | null = null;
 
 /**
@@ -366,6 +368,8 @@ let clipboard: Clipboard | null = null;
  */
 function refreshSelection(count = roll.selectedCount): void {
   deleteBtn.disabled = count === 0;
+  upBtn.disabled = count === 0;
+  downBtn.disabled = count === 0;
   deleteBtn.textContent = count > 0 ? `🗑 ${count}` : "🗑";
   copyBtn.title =
     count > 0 ? `고른 노트 ${count}개 복사` : "루프 구간(없으면 이 마디) 복사";
@@ -381,6 +385,53 @@ selectBtn.addEventListener("click", () => {
       : "고르기를 껐습니다.",
   );
 });
+
+/**
+ * 고른 음을 통째로 올리고 내린다.
+ *
+ * **누르고 있으면 계속 옮긴다.** 한 옥타브를 열두 번 누르게 할 수는 없다.
+ * 누른 시간으로 동작이 갈리는 게 아니라 같은 동작이 반복될 뿐이라, 앞서
+ * 물렸던 "길게 누르면 다른 일이 일어난다" 와는 다른 얘기다.
+ */
+function moveSelection(semitones: number): void {
+  const track = project.tracks[panel.activeTrack];
+  const ids = new Set(roll.selectedNotes().map((n) => n.id));
+  if (!track || ids.size === 0) return;
+  history.begin();
+  const moved = transpose(track, ids, semitones);
+  history.commit();
+  refreshHistoryButtons();
+  if (!moved) {
+    // 조용히 안 움직이면 고장으로 보인다. 왜 안 되는지 말해 준다.
+    showStatus("더 옮기면 음역(0~127)을 벗어나는 음이 있습니다", "error");
+    return;
+  }
+  scheduler.invalidate();
+  roll.render();
+  showStatus(`${ids.size}개 음을 ${semitones > 0 ? "올렸습니다" : "내렸습니다"}`);
+}
+
+for (const [btn, step] of [[upBtn, 1], [downBtn, -1]] as [HTMLButtonElement, number][]) {
+  let timer: number | null = null;
+  const stop = (): void => {
+    if (timer === null) return;
+    // 처음 것은 타임아웃, 그 뒤는 인터벌이다. 둘 다 걷어낸다.
+    clearTimeout(timer);
+    clearInterval(timer);
+    timer = null;
+  };
+  btn.addEventListener("pointerdown", () => {
+    moveSelection(step);
+    stop();
+    // 처음 한 번은 바로, 그 다음부터 반복. 한 번만 누르려는 손을 방해하지 않는다.
+    timer = window.setTimeout(() => {
+      timer = window.setInterval(() => moveSelection(step), 110);
+    }, 400) as unknown as number;
+  });
+  for (const type of ["pointerup", "pointercancel", "pointerleave"]) {
+    btn.addEventListener(type, stop);
+  }
+}
 
 deleteBtn.addEventListener("click", () => {
   const track = project.tracks[panel.activeTrack];

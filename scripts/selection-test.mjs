@@ -7,7 +7,7 @@
  *     node scripts/selection-test.mjs
  */
 
-import { boxFrom, notesInBox, selectionRange, deleteSelected, pruneSelection }
+import { boxFrom, notesInBox, selectionRange, deleteSelected, pruneSelection, transpose }
   from "../src/model/selection.ts";
 import { copyNotes, pasteAt } from "../src/model/clipboard.ts";
 
@@ -94,6 +94,31 @@ ok("걸친 노트는 통째로 든다", picked.find((n) => n.id === "e")?.length
   const alive = pruneSelection(gone, new Set(["a", "b"]));
   ok("사라진 노트의 id 는 걷어낸다", alive.size === 1 && alive.has("b"), [...alive]);
   ok("트랙이 없어도 터지지 않는다", pruneSelection(undefined, new Set(["a"])).size === 0);
+}
+
+// 고른 음 통째로 올리고 내리기.
+{
+  const t = track();
+  ok("고른 것만 올라간다", transpose(t, new Set(["a", "b"]), 2)
+     && t.notes.find((n) => n.id === "a").pitch === 62
+     && t.notes.find((n) => n.id === "b").pitch === 66
+     && t.notes.find((n) => n.id === "c").pitch === 60,
+     t.notes.map((n) => `${n.id}:${n.pitch}`));
+  ok("음정 간격이 유지된다 (화음이 안 망가진다)",
+     t.notes.find((n) => n.id === "b").pitch - t.notes.find((n) => n.id === "a").pitch === 4);
+
+  // 하나라도 음역 밖으로 나가면 아무것도 안 옮긴다. 나갈 것만 빼고 옮기면
+  // 화음 모양이 조용히 망가진다 — 옮긴 게 아니라 부순 것이다.
+  const edge = track();
+  edge.notes = [note("lo", 1, 0, 1), note("hi", 60, 0, 1)];
+  ok("하나라도 음역을 벗어나면 아무것도 안 옮긴다",
+     transpose(edge, new Set(["lo", "hi"]), -5) === false
+     && edge.notes[0].pitch === 1 && edge.notes[1].pitch === 60,
+     edge.notes.map((n) => n.pitch));
+  ok("위쪽 끝에서도 마찬가지",
+     transpose({ ...edge, notes: [note("top", 126, 0, 1)] }, new Set(["top"]), 3) === false);
+  ok("고른 게 없으면 아무 일도 안 한다", transpose(track(), new Set(), 1) === false);
+  ok("0 반음은 옮긴 게 아니다", transpose(track(), new Set(["a"]), 0) === false);
 }
 
 for (const r of out) console.log(`${r.pass ? "✅" : "❌"} ${r.name}${r.pass || r.d === undefined ? "" : "  " + JSON.stringify(r.d)}`);

@@ -91,3 +91,21 @@ export function pruneSelection(track: Track | undefined, ids: ReadonlySet<string
   for (const n of track?.notes ?? []) if (ids.has(n.id)) alive.add(n.id);
   return alive;
 }
+
+/**
+ * 고른 음을 통째로 올리거나 내린다.
+ *
+ * 화음을 한 옥타브 옮기려고 음을 하나씩 끌어 올리는 건 폰에서 할 짓이 못 된다.
+ * 특히 **다른 트랙에 겹쳐 찍은 음**은 끌다가 손이 미끄러지면 박자까지 어긋난다.
+ *
+ * 하나라도 음역(0~127) 밖으로 나가면 **아무것도 안 옮긴다.** 나갈 것만 빼고
+ * 옮기면 화음의 모양이 조용히 망가진다 — 옮긴 게 아니라 부순 것이다.
+ * 돌려주는 값은 실제로 옮겼는가.
+ */
+export function transpose(track: Track, ids: ReadonlySet<string>, semitones: number): boolean {
+  const picked = track.notes.filter((n) => ids.has(n.id));
+  if (picked.length === 0 || semitones === 0) return false;
+  if (picked.some((n) => n.pitch + semitones < 0 || n.pitch + semitones > 127)) return false;
+  for (const n of picked) n.pitch += semitones;
+  return true;
+}

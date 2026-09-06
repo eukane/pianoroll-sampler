@@ -26,7 +26,7 @@
  */
 
 import type { Note, Track } from "./types";
-import { makeNote, sortNotes } from "./project.ts";
+import { newId, sortNotes } from "./project.ts";
 
 export type Clipboard = {
   /** 구간 시작을 0 으로 옮긴 노트들. */
@@ -60,9 +60,25 @@ export function copyNotes(notes: Note[], startBeat: number, endBeat: number): Cl
   const start = Math.min(startBeat, endBeat);
   const end = Math.max(startBeat, endBeat);
   return {
-    notes: notes.map((n) => ({ ...n, start: n.start - start })),
+    notes: notes.map((n) => cloneNote(n, n.start - start)),
     lengthBeats: Math.max(0, end - start),
   };
+}
+
+/**
+ * 노트를 통째로 베낀다. **id 와 시작 위치만 새로 준다.**
+ *
+ * 예전에는 음높이·길이·세기 넷만 옮겼다. 그래서 조교해 둔 음을 복사해
+ * 붙이면 **꾸밈도 음정 곡선도 노랫말도 조용히 사라졌다.** 붙여넣기는
+ * 같은 것을 반복하려고 쓰는 기능인데, 반복되는 게 반쪽이었다.
+ *
+ * 곡선은 **점까지 새로 만든다.** 배열을 같이 쓰면 붙여넣은 음의 곡선을
+ * 고쳤을 때 원본까지 같이 바뀐다 — 눈에는 안 보이고 나중에야 드러난다.
+ */
+function cloneNote(n: Note, start: number): Note {
+  const copy: Note = { ...n, start };
+  if (n.bend) copy.bend = n.bend.map((p) => ({ ...p }));
+  return copy;
 }
 
 /**
@@ -71,9 +87,7 @@ export function copyNotes(notes: Note[], startBeat: number, endBeat: number): Cl
  */
 export function pasteAt(track: Track, clip: Clipboard, atBeat: number): Note[] {
   const at = Math.max(0, atBeat);
-  const added = clip.notes.map((n) =>
-    makeNote(n.pitch, at + n.start, n.length, n.velocity),
-  );
+  const added = clip.notes.map((n) => ({ ...cloneNote(n, at + n.start), id: newId("n") }));
   track.notes.push(...added);
   sortNotes(track);
   return added;

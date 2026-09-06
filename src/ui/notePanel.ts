@@ -98,6 +98,10 @@ export class NotePanel {
     // 노래하는 트랙이면 가사가 제일 위다. 꾸밈보다 먼저 정할 것이다.
     if (this.cb.isSinging()) this.body.appendChild(this.lyricInput(note));
 
+    // 음의 세기. 꾸밈보다 먼저 오는 이유는 **더 기본이기 때문**이다 —
+    // 꾸밈은 안 걸어도 곡이 되지만 세기는 모든 음이 갖고 있다.
+    this.body.appendChild(this.velocitySlider(note));
+
     const row = document.createElement("div");
     row.className = "ornaments";
     for (const o of ORNAMENTS) {
@@ -239,6 +243,50 @@ export class NotePanel {
     input.addEventListener("input", () => {
       note.ornamentAmount = Number(input.value);
       readout.textContent = String(Math.round(Number(input.value) * 100));
+      this.cb.onEdit();
+    });
+    input.addEventListener("change", () => {
+      this.cb.onAfterChange();
+      this.cb.onAudition(note);
+    });
+
+    wrap.append(text, input, readout);
+    return wrap;
+  }
+
+  /**
+   * 음의 세기(벨로시티).
+   *
+   * 이걸 만들기 전까지는 **바꿀 방법이 아예 없었다.** 찍는 순간 100 으로
+   * 고정되고 그걸로 끝이었다. 강약이 없으면 다 찍어 놓고도 기계처럼 들리는데,
+   * 정작 화면 어디에도 손댈 자리가 없었다.
+   *
+   * 눈으로도 보인다 — 피아노롤이 세기에 따라 노트를 진하게 그린다(예전부터
+   * 그랬다). 그동안 전부 같은 진하기였던 건 값이 전부 100 이어서였다.
+   */
+  private velocitySlider(note: Note): HTMLElement {
+    const wrap = document.createElement("label");
+    wrap.className = "mixslider";
+
+    const text = document.createElement("span");
+    text.textContent = "세게";
+
+    const input = document.createElement("input");
+    input.id = "note-velocity";
+    input.type = "range";
+    // 0 은 MIDI 에서 「소리 끄기」 라 음이 사라진다. 1 부터 받는다.
+    input.min = "1";
+    input.max = "127";
+    input.step = "1";
+    input.value = String(note.velocity);
+
+    const readout = document.createElement("i");
+    readout.textContent = String(note.velocity);
+
+    input.addEventListener("pointerdown", () => this.cb.onBeforeChange());
+    input.addEventListener("input", () => {
+      note.velocity = Number(input.value);
+      readout.textContent = input.value;
       this.cb.onEdit();
     });
     input.addEventListener("change", () => {

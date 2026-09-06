@@ -13,6 +13,9 @@
  *   · 긴 음에서 꾸밈이 **정한 시점에** 일어나는가 (렌더한 소리의 음정을 추적)
  *   · 손으로 그린 음정 곡선이 그린 대로 소리가 되는가
  *   · 끌어서 그릴 수 있고, 점 개수에 막히지 않는가
+ *   · 음의 세기를 바꿀 수 있고 소리가 실제로 커지는가
+ *   · 고른 음을 통째로 올리고 내릴 수 있는가
+ *   · **붙여넣기가 조교한 것을 들고 가는가**
  *   · 재생 헤드가 BPM 에 맞는 속도로 나아가는가
  *   · 루프 구간을 벗어나지 않고 되돌아오는가
  *   · SF2 를 읽고 프리셋 목록·검색이 되는가
@@ -2741,6 +2744,141 @@ check("점이 많아도 그린 산 모양대로 소리가 난다",
   manySound.가운데 !== null && manySound.앞 !== null && manySound.끝 !== null &&
   manySound.가운데 > manySound.앞 + 50 && manySound.가운데 > manySound.끝 + 50,
   manySound);
+
+// ---- 음의 세기 · 고른 음 옮기기 ----
+//
+// 세기는 **바꿀 방법이 아예 없었다.** 찍는 순간 100 으로 고정되고 끝이었다.
+// 강약이 없으면 다 찍어 놓고도 기계처럼 들린다.
+await page.reload({ waitUntil: "networkidle" });
+await page.locator("#unlock").tap();
+await page.waitForTimeout(300);
+await page.evaluate(() => {
+  const app = window.__app, r = app.roll;
+  r.scrollX = 0; r.scrollToPitch(64);
+  const t = app.project.tracks[0];
+  t.notes.length = 0;
+  [60, 64, 67].forEach((p, i) => t.notes.push(
+    { id: "v" + i, pitch: p, start: 0, length: 2, velocity: 100 }));
+  app.project.bars = 2;
+  app.scheduler.invalidate(); r.render();
+});
+{
+  const pos = await page.evaluate(() => {
+    const r = window.__app.roll;
+    return { x: 46 + 0.5 * r.pxPerBeat - r.scrollX,
+             y: 36 + (127 - 64) * r.keyHeight - r.scrollY + r.keyHeight / 2 };
+  });
+  const b = await page.locator("#roll").boundingBox();
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: b.x + pos.x, y: b.y + pos.y }] });
+  await page.waitForTimeout(120);
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+  await page.waitForTimeout(300);
+}
+check("노트 창에 세기 조절이 있다", (await page.locator("#note-velocity").count()) === 1);
+if ((await page.locator("#note-velocity").count()) === 1) {
+  await page.locator("#note-velocity").fill("40");
+  await page.locator("#note-velocity").dispatchEvent("input");
+  await page.waitForTimeout(200);
+  check("바꾼 세기가 노트에 남는다",
+    (await page.evaluate(() => window.__app.project.tracks[0].notes[1].velocity)) === 40);
+  await page.locator("#note-close").click();
+  await page.waitForTimeout(150);
+}
+
+// 세기가 실제 소리 크기로 이어지는가. 조절기만 움직이고 소리가 그대로면
+// 아무 소용이 없다 — 이 저장소에서 이미 한 번 그랬다.
+const loudness = await page.evaluate(async () => {
+  const app = window.__app;
+  const { renderProject } = await import("/src/export/render.ts");
+  const peak = async (v) => {
+    app.project.tracks[0].notes.forEach((n) => (n.velocity = v));
+    const buf = await renderProject(app.project, () => app.registry.soundfont.bankBuffer(),
+      app.registry.folders.list, app.mixerState, app.registry.voices);
+    const d = buf.getChannelData(0);
+    let m = 0;
+    for (let i = 0; i < d.length; i += 1) m = Math.max(m, Math.abs(d[i]));
+    return +m.toFixed(4);
+  };
+  return { 약하게: await peak(30), 세게: await peak(120) };
+});
+check("세기를 올리면 실제로 더 크게 난다",
+  loudness.세게 > loudness.약하게 * 1.5, loudness);
+
+// 고른 음을 통째로 올리고 내리기.
+await page.evaluate(() => {
+  const app = window.__app;
+  app.project.tracks[0].notes.forEach((n) => (n.velocity = 100));
+  app.roll.selectMode = true;
+  app.roll.render();
+});
+await page.locator("#select-mode").tap();
+await page.waitForTimeout(100);
+await page.locator("#select-mode").tap();  // 껐다 켜서 화면 버튼 상태를 맞춘다
+await page.waitForTimeout(150);
+{
+  // 세 음을 상자로 고른다.
+  const a = await page.evaluate(() => {
+    const r = window.__app.roll;
+    return { x: 46 - r.scrollX + 4, y: 36 + (127 - 69) * r.keyHeight - r.scrollY };
+  });
+  const bb = await page.evaluate(() => {
+    const r = window.__app.roll;
+    return { x: 46 + 1.5 * r.pxPerBeat - r.scrollX, y: 36 + (127 - 58) * r.keyHeight - r.scrollY };
+  });
+  const box = await page.locator("#roll").boundingBox();
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: box.x + Math.max(48, a.x), y: box.y + a.y }] });
+  await page.waitForTimeout(60);
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: box.x + bb.x, y: box.y + bb.y }] });
+  await page.waitForTimeout(60);
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+  await page.waitForTimeout(250);
+}
+const beforeShift = await page.evaluate(() => ({
+  n: window.__app.roll.selectedCount,
+  pitches: window.__app.project.tracks[0].notes.map((x) => x.pitch),
+  upOff: document.getElementById("move-up").disabled,
+}));
+check("고르면 옮기기 버튼이 켜진다", beforeShift.n === 3 && !beforeShift.upOff, beforeShift);
+if (beforeShift.n === 3) {
+  await page.locator("#move-up").tap();
+  await page.waitForTimeout(250);
+  const afterUp = await page.evaluate(() => window.__app.project.tracks[0].notes.map((x) => x.pitch));
+  check("고른 음이 반음 올라간다",
+    afterUp.every((p, i) => p === beforeShift.pitches[i] + 1), { 전: beforeShift.pitches, 후: afterUp });
+  // 화음 모양이 유지되어야 한다. 하나만 어긋나면 화음이 아니라 불협이 된다.
+  check("화음 간격이 그대로다",
+    afterUp[1] - afterUp[0] === beforeShift.pitches[1] - beforeShift.pitches[0], afterUp);
+  await page.locator("#undo").tap();
+  await page.waitForTimeout(250);
+  check("옮긴 것을 되돌릴 수 있다",
+    JSON.stringify(await page.evaluate(() => window.__app.project.tracks[0].notes.map((x) => x.pitch)))
+      === JSON.stringify(beforeShift.pitches));
+}
+
+// 붙여넣기가 조교한 것을 들고 가는가 — 화면에서도 확인한다.
+await page.evaluate(() => {
+  const app = window.__app;
+  app.roll.clearSelection();
+  const t = app.project.tracks[0];
+  t.notes.length = 0;
+  t.notes.push({ id: "rich", pitch: 64, start: 0, length: 2, velocity: 88,
+    ornament: "free", lyric: "か",
+    bend: [{ at: 0, cents: 0 }, { at: 0.5, cents: 150 }, { at: 1, cents: 0 }] });
+  app.scheduler.loopEnabled = false;
+  app.scheduler.seek(0);
+  app.roll.render();
+});
+await page.locator("#copy").tap();
+await page.waitForTimeout(200);
+await page.locator("#paste").tap();
+await page.waitForTimeout(250);
+const pasted = await page.evaluate(() => {
+  const ns = window.__app.project.tracks[0].notes;
+  return ns.find((n) => n.id !== "rich") ?? null;
+});
+check("붙여넣은 음이 꾸밈·곡선·가사·세기를 그대로 들고 온다",
+  !!pasted && pasted.ornament === "free" && pasted.lyric === "か" &&
+  pasted.velocity === 88 && pasted.bend?.length === 3, pasted);
 
 check("콘솔 오류 없음", errors.length === 0, errors);
 
