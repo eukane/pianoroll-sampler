@@ -13,6 +13,7 @@
 import type { Project } from "./types";
 import { demoSong } from "./demoSong.ts";
 import { edmSong } from "./demoEdm.ts";
+import { minorSong } from "./demoMinor.ts";
 
 export type Demo = {
   id: string;
@@ -31,6 +32,13 @@ export const DEMOS: Demo[] = [
     hint: "8마디 · 3트랙 — 악기를 바꿔 보라고 넣어 뒀다",
     needsDrums: false,
     make: demoSong,
+  },
+  {
+    id: "minor",
+    title: "🎻 예제 곡 · 단조 아르페지오",
+    hint: "16마디 · 4트랙 — 달리는 아르페지오 위의 선율. 직접 그린 곡선이 하나 들어 있다",
+    needsDrums: false,
+    make: minorSong,
   },
   {
     id: "edm",

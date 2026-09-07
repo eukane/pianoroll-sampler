@@ -20,6 +20,7 @@
  *   · 꾸밈의 **시점**을 정하면 그 자리에서 일어나는가 (긴 음에서)
  *   · 손으로 그린 음정 곡선이 제대로 읽히고 저장되는가
  *   · **복사·붙여넣기가 조교한 것을 들고 가는가** (예전에는 다 버렸다)
+ *   · 셋째 예제(단조 아르페지오)가 헤더에 적어 둔 대로 되어 있는가
  *
  *     node scripts/audit.mjs
  */
@@ -639,6 +640,81 @@ for (const [n, d] of SIGS) {
   } else {
     ok("붙여넣은 음의 곡선을 고쳐도 원본이 안 바뀐다", false, "곡선이 안 딸려 왔다");
   }
+}
+
+// ---- 17) 셋째 예제 — 단조 아르페지오 ----
+//
+// 손으로 적은 음표 목록이라 한 줄 어긋나기 쉽고, 어긋나도 소리로는 잘 안
+// 들린다. 헤더가 약속한 것을 그대로 검사로 옮긴다 (앞의 두 예제와 같은 방식).
+{
+  const m = DEMOS.find((d) => d.id === "minor").make();
+  const [melody, arp, pad, bass] = m.tracks;
+
+  ok("16마디 4트랙이다", m.bars === 16 && m.tracks.length === 4,
+     { 마디: m.bars, 트랙: m.tracks.length });
+  ok("드럼이 없다 (아르페지오가 곡을 민다)", !m.tracks.some((t) => isDrumPreset(t.source.presetId)));
+  ok("네 트랙이 다 다른 악기다",
+     new Set(m.tracks.map((t) => t.source.presetId)).size === 4,
+     m.tracks.map((t) => t.source.presetId));
+
+  // 1/16 격자에 떨어져야 한다. 기본 스냅으로 열어 손대도 격자가 안 어긋난다.
+  const all = m.tracks.flatMap((t) => t.notes);
+  ok("모든 음이 1/16 격자에 떨어진다",
+     all.every((n) => Math.abs(n.start * 4 - Math.round(n.start * 4)) < 1e-9));
+  ok("곡 길이를 넘는 음이 없다",
+     all.every((n) => n.start + n.length <= m.bars * 4 + 1e-9),
+     Math.max(...all.map((n) => n.start + n.length)));
+
+  // E 자연단음계 (E F# G A B C D) 밖으로 나가면 안 된다. 한 음만 틀려도
+  // 곡 전체가 이상해지는데 눈으로는 못 잡는다.
+  const EMINOR = new Set([4, 6, 7, 9, 11, 0, 2]);
+  ok("모든 음이 E 자연단음계 안에 있다",
+     all.every((n) => EMINOR.has(((n.pitch % 12) + 12) % 12)),
+     all.filter((n) => !EMINOR.has(((n.pitch % 12) + 12) % 12)).map((n) => n.pitch));
+
+  // 같은 트랙에서 같은 음이 겹치면 앞 음의 noteOff 가 뒤 음을 끊는다.
+  for (const t of m.tracks) {
+    const seen = new Map();
+    let overlap = 0;
+    for (const n of [...t.notes].sort((a, b) => a.start - b.start)) {
+      const end = seen.get(n.pitch);
+      if (end !== undefined && n.start < end - 1e-9) overlap += 1;
+      seen.set(n.pitch, n.start + n.length);
+    }
+    ok(`${t.name} 트랙에 같은 음 겹침이 없다`, overlap === 0, overlap);
+  }
+
+  // 아르페지오는 쉬지 않고 달려야 한다 — 그게 이 곡을 미는 것이다.
+  ok("아르페지오가 16마디 내내 16분음표로 돈다", arp.notes.length === 16 * 16,
+     arp.notes.length);
+  ok("아르페지오는 마디 첫 박만 세다",
+     arp.notes.filter((n) => n.velocity >= 100).length === 16,
+     arp.notes.filter((n) => n.velocity >= 100).length);
+
+  // 곡이 열리는 자리 — 선율은 5마디(16박), 패드·베이스는 3마디(8박)부터.
+  ok("선율은 5마디부터 들어온다", Math.min(...melody.notes.map((n) => n.start)) === 16);
+  ok("패드·베이스는 3마디부터 들어온다",
+     Math.min(...pad.notes.map((n) => n.start)) === 8 &&
+     Math.min(...bass.notes.map((n) => n.start)) === 8);
+
+  // 마지막 마디는 으뜸화음으로 돌아와야 한다. 안 그러면 안 끝난 것처럼 들린다.
+  ok("마지막 마디가 으뜸화음(Em)으로 끝난다",
+     bass.notes.filter((n) => n.start >= 60).every((n) => n.pitch === 40),
+     bass.notes.filter((n) => n.start >= 60).map((n) => n.pitch));
+
+  // 기교는 아껴 써야 기교다.
+  const orn = melody.notes.filter((n) => n.ornament);
+  ok("손본 자리가 넷이다", orn.length === 4, orn.map((n) => `${n.start}박 ${n.ornament}`));
+  // 이 곡의 자랑거리 — 직접 그린 곡선이 하나 들어 있다.
+  const drawn = melody.notes.find((n) => n.ornament === "free");
+  ok("직접 그린 곡선이 하나 들어 있다", (drawn?.bend?.length ?? 0) >= 4, drawn?.bend);
+  ok("그 곡선이 제자리에서 시작해 제자리로 끝난다",
+     drawn.bend[drawn.bend.length - 1].cents === 0, drawn.bend);
+  ok("그 곡선이 음정 범위를 안 넘는다",
+     drawn.bend.every((p) => Math.abs(p.cents) <= MAX_BEND_CENTS));
+  // 곡선을 부르면 실제 음정 곡선이 나와야 한다 (꾸밈이 조용히 무시되면 안 된다).
+  ok("그 음이 실제로 휘는 계획을 만든다",
+     expressionFor(melody, drawn, 1.8).bend.length === drawn.bend.length);
 }
 
 let bad = 0;

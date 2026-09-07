@@ -16,6 +16,7 @@
  *   · 음의 세기를 바꿀 수 있고 소리가 실제로 커지는가
  *   · 고른 음을 통째로 올리고 내릴 수 있는가
  *   · **붙여넣기가 조교한 것을 들고 가는가**
+ *   · 셋째 예제 곡이 소리가 나고 곡이 열리는가
  *   · 재생 헤드가 BPM 에 맞는 속도로 나아가는가
  *   · 루프 구간을 벗어나지 않고 되돌아오는가
  *   · SF2 를 읽고 프리셋 목록·검색이 되는가
@@ -2879,6 +2880,100 @@ const pasted = await page.evaluate(() => {
 check("붙여넣은 음이 꾸밈·곡선·가사·세기를 그대로 들고 온다",
   !!pasted && pasted.ornament === "free" && pasted.lyric === "か" &&
   pasted.velocity === 88 && pasted.bend?.length === 3, pasted);
+
+// ---- 셋째 예제 곡 (단조 아르페지오) ----
+//
+// 저작권 있는 남의 곡을 옮겨 적을 수 없어서 짜임새만 가져와 직접 쓴 곡이다.
+// 음표 목록이 맞는지는 audit 이 보고, 여기서는 **실제로 소리가 나고 곡이
+// 열리는지**를 잰다.
+await page.reload({ waitUntil: "networkidle" });
+await page.locator("#unlock").tap();
+await page.waitForTimeout(300);
+await page.locator("#export").click();
+await page.waitForTimeout(200);
+check("예제 곡이 셋이 된다", (await page.locator("#demo-list button").count()) >= 3);
+await page.locator("#open-demo-minor").click();
+await page.waitForTimeout(400);
+const minorLoaded = await page.evaluate(() => ({
+  bars: window.__app.project.bars,
+  tracks: window.__app.project.tracks.length,
+  bpm: window.__app.project.bpm,
+  names: window.__app.project.tracks.map((t) => t.name),
+}));
+check("단조 예제가 16마디 4트랙으로 들어온다",
+  minorLoaded.bars === 16 && minorLoaded.tracks === 4 && minorLoaded.bpm === 132, minorLoaded);
+
+const minorSound = await page.evaluate(async () => {
+  const app = window.__app;
+  const { renderProject } = await import("/src/export/render.ts");
+  const buf = await renderProject(app.project, () => app.registry.soundfont.bankBuffer(),
+    app.registry.folders.list, app.mixerState, app.registry.voices);
+  const d = buf.getChannelData(0), sr = buf.sampleRate;
+  // 132BPM 이라 한 마디가 1.818초.
+  const bar = 60 / 132 * 4;
+  const rms = (from, to) => {
+    let sum = 0, n = 0;
+    for (let i = Math.floor(from * sr); i < Math.floor(to * sr) && i < d.length; i += 1) {
+      sum += d[i] * d[i];
+      n += 1;
+    }
+    return n ? +Math.sqrt(sum / n).toFixed(4) : 0;
+  };
+  let peak = 0;
+  for (let i = 0; i < d.length; i += 1) peak = Math.max(peak, Math.abs(d[i]));
+  return {
+    peak: +peak.toFixed(3),
+    초: +buf.duration.toFixed(1),
+    아르페지오만: rms(0.2, bar * 2 - 0.1),
+    선율까지: rms(bar * 5, bar * 8),
+    절정: rms(bar * 12, bar * 15),
+  };
+});
+check("단조 예제가 실제로 소리가 난다 (찌그러지지 않고)",
+  minorSound.peak > 0.05 && minorSound.peak < 0.99, minorSound);
+// 아르페지오만 → 선율까지 → 절정 순으로 커져야 곡이 열리는 느낌이 난다.
+// 이게 없으면 16마디 내내 같은 소리라 예제 노릇을 못 한다.
+check("아르페지오만 → 선율 → 절정 순으로 커진다",
+  minorSound.아르페지오만 < minorSound.선율까지 &&
+  minorSound.선율까지 <= minorSound.절정 * 1.05, minorSound);
+
+// 직접 그린 곡선이 이 곡 안에서 실제로 소리가 되는가. 예제에 넣어 놓고
+// 안 들리면 "직접 그리기" 를 보여 주려던 목적이 사라진다.
+const swell = await page.evaluate(async () => {
+  const app = window.__app;
+  // 선율만 남기고 그 긴 음(56박)만 렌더한다 — 다른 트랙에 묻히지 않게.
+  app.project.tracks = [app.project.tracks[0]];
+  app.project.tracks[0].notes = app.project.tracks[0].notes.filter((n) => n.start === 56);
+  app.project.tracks[0].notes[0].start = 0;
+  app.project.bars = 2;
+  const { renderProject } = await import("/src/export/render.ts");
+  const buf = await renderProject(app.project, () => app.registry.soundfont.bankBuffer(),
+    app.registry.folders.list, app.mixerState, app.registry.voices);
+  const d = buf.getChannelData(0), sr = buf.sampleRate;
+  const at = (sec) => {
+    const SUB = 2048, minLag = Math.floor(sr / 700), maxLag = Math.floor(sr / 300);
+    const s0 = Math.floor(sec * sr);
+    let e = 0;
+    for (let i = s0; i < s0 + SUB; i += 1) e += d[i] * d[i];
+    if (Math.sqrt(e / SUB) < 0.004) return null;
+    const r = [];
+    for (let lag = minLag; lag <= maxLag; lag += 1) {
+      let sum = 0;
+      for (let i = 0; i < SUB; i += 1) sum += d[s0 + i] * d[s0 + i + lag];
+      r.push(sum);
+    }
+    const pk = Math.max(...r);
+    let idx = r.findIndex((v) => v >= pk * 0.92);
+    while (idx + 1 < r.length && r[idx + 1] > r[idx]) idx += 1;
+    return Math.round((69 + 12 * Math.log2(sr / (minLag + idx) / 440) - 71) * 100);
+  };
+  // 4박 × (60/132) = 1.818초. 곡선은 0.62 지점에서 가장 부푼다.
+  const d4 = (60 / 132) * 4;
+  return { 시작: at(0.06), 부푼곳: at(d4 * 0.62), 끝: at(d4 * 0.95) };
+});
+check("예제 안의 그린 곡선이 실제로 부풀었다 돌아온다",
+  swell.부푼곳 !== null && swell.시작 !== null &&
+  swell.부푼곳 > swell.시작 + 60 && swell.부푼곳 > (swell.끝 ?? 0) + 40, swell);
 
 check("콘솔 오류 없음", errors.length === 0, errors);
 

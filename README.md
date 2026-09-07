@@ -59,10 +59,10 @@ AudioWorklet 이 보안 컨텍스트(https 나 localhost)에서만 동작하는�
 
 ```bash
 npm run build      # 타입 검사 + 프로덕션 빌드
-npm run smoke      # 브라우저 자동 점검 192가지 (dev 서버를 띄워 둔 상태에서)
+npm run smoke      # 브라우저 자동 점검 197가지 (dev 서버를 띄워 둔 상태에서)
 npm run midi       # MIDI 왕복 점검 20가지 (브라우저 없이, 1초)
 npm run names      # 샘플 파일명 읽기 점검 19가지 (브라우저 없이)
-npm run audit      # 고치다 옆엣것을 깨뜨리지 않았는지 129가지 (브라우저 없이)
+npm run audit      # 고치다 옆엣것을 깨뜨리지 않았는지 149가지 (브라우저 없이)
 npm run built-check # 빌드된 결과물이 실제로 도는지 10가지 (build 뒤에)
 npm run clipboard  # 복사·붙여넣기 점검 15가지 (브라우저 없이)
 npm run select     # 상자로 고르기 점검 25가지 (브라우저 없이)
@@ -243,6 +243,7 @@ src/
              · selection(상자로 고르기) · clipboard(복사·붙여넣기)
              · ornament(음 하나에 붙는 꾸밈 — 시김새, 세기와 시점)
              · demos(예제 곡 목록) · demoSong(국악풍) · demoEdm(일렉트로닉)
+             · demoMinor(단조 아르페지오)
              · oto(UTAU 원음설정) · frq(녹음된 음정) · phrase(이어붙이기 계획)
              · zip(받은 음원 zip 을 안 풀고 필요한 것만 꺼내 읽기)
   audio/     engine(잠금해제) · scheduler(lookahead) · mixer(트랙별 배선)
