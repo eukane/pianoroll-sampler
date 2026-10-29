@@ -1067,3 +1067,6 @@ mixerState.apply(project, mixer);
 if (!canUseSoundFont()) {
   showStatus(INSECURE_HINT, "error");
 }
+
+// 지난번에 넣어 둔 사운드폰트가 있으면 알아서 올린다 (없으면 조용히 넘어간다).
+void panel.restoreSaved();

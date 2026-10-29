@@ -77,6 +77,14 @@ if (process.env.CHROMIUM_PATH) launchOptions.executablePath = process.env.CHROMI
 
 const browser = await chromium.launch(launchOptions);
 const context = await browser.newContext({ ...devices["Pixel 5"], acceptDownloads: true });
+// 사운드폰트는 한 번 넣으면 브라우저가 기억했다가 다음에 열 때 알아서 올린다.
+// 이 검사는 곳곳에서 새로고침하며 "음원 없는 상태" 를 전제하므로, 페이지가 뜨기 전에
+// 기억을 지워 둔다. 기억 기능 자체는 scripts/persist-test.mjs 가 따로 본다.
+await context.addInitScript(() => {
+  try {
+    indexedDB.deleteDatabase("pianoroll-sampler");
+  } catch {}
+});
 const page = await context.newPage();
 // 진짜 터치 이벤트를 보내려면 CDP 가 필요하다. Playwright 의 touchscreen.tap 은
 // 0ms 만에 정확한 좌표를 찍어서, 손가락이 흔들리는 걸 흉내낼 수가 없다.
@@ -2996,6 +3004,11 @@ check("예제 안의 그린 곡선이 실제로 부풀었다 돌아온다",
     deviceScaleFactor: 1.5,
     isMobile: true,
     hasTouch: true,
+  });
+  await tab.addInitScript(() => {
+    try {
+      indexedDB.deleteDatabase("pianoroll-sampler");
+    } catch {}
   });
   const tp = await tab.newPage();
   tp.on("console", (m) => m.type() === "error" && errors.push("tab: " + m.text()));

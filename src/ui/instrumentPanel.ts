@@ -24,6 +24,7 @@ import type { SampleFolder } from "../audio/folderSampler";
 import { VoiceBank, decodeOtoText } from "../audio/voicebank";
 import { readZipIndex, readZipEntry, findVoiceBanks } from "../model/zip";
 import { midiToName } from "../util/music";
+import { saveSoundfont, loadSavedSoundfont } from "../audio/sfStore";
 
 export type PanelCallbacks = {
   onTrackChange: (index: number) => void;
@@ -128,7 +129,18 @@ export class InstrumentPanel {
 
   // ------------------------------------------------------------ 사운드폰트
 
-  async loadFile(file: File): Promise<void> {
+  /**
+   * 지난번에 넣어 둔 사운드폰트가 있으면 말없이 다시 올린다. 없으면 아무 일도
+   * 하지 않는다 (처음 쓰는 사람에게 "없습니다" 를 띄울 이유가 없다).
+   */
+  async restoreSaved(): Promise<void> {
+    const saved = await loadSavedSoundfont();
+    // 읽는 사이에 사용자가 먼저 직접 넣었으면 그쪽이 이긴다.
+    if (!saved || this.registry.soundfont.presetList.length > 0) return;
+    await this.loadFile(saved.file, { fromSaved: true });
+  }
+
+  async loadFile(file: File, opts: { fromSaved?: boolean } = {}): Promise<void> {
     if (!/\.(sf2|sf3|dls)$/i.test(file.name)) {
       this.cb.onStatus(`${file.name} 은(는) 사운드폰트 파일이 아닙니다 (.sf2 / .sf3)`, "error");
       return;
@@ -141,7 +153,17 @@ export class InstrumentPanel {
       this.cb.onSourceChange();
       this.renderTracks();
       this.renderInstrumentButton();
-      const summary = `${this.registry.soundfont.name} — 악기 ${this.registry.soundfont.presetList.length}개`;
+      let summary = `${this.registry.soundfont.name} — 악기 ${this.registry.soundfont.presetList.length}개`;
+      if (opts.fromSaved) {
+        summary += " (저장해 둔 음원)";
+      } else {
+        // 직접 고른 파일만 새로 기억한다. 기억해 둔 걸 다시 쓰는 중이면 또 쓸 필요 없다.
+        const why = await saveSoundfont(file);
+        summary += why === null ? " · 다음부터 자동으로 불러옵니다" : "";
+        if (why !== null) {
+          this.cb.onStatus(`음원은 불러왔지만 기억해 두지는 못했습니다: ${why}`, "error");
+        }
+      }
       this.cb.onStatus(summary);
       // 박자 보정은 뒤에서 2초쯤 걸린다. 다 재고 나면 숫자를 덧붙인다.
       // 폰마다 다른 값이라, 박자가 이상할 때 사용자가 제일 먼저 볼 수 있는
