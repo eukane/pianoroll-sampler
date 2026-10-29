@@ -48,6 +48,15 @@
  *   · 예제 곡이 열리고 실제로 소리가 나는가 (덮어쓰기 전에 물어보는가)
  *   · 둘째 예제(일렉트로닉)가 드럼을 9번 채널에 놓고, 드롭에서 커지는가
  *   · UTAU 음원을 넣으면 노래하는 트랙이 되고, 가사대로 실제로 부르는가
+ *   · (패드 가로 화면) 위 줄이 두 줄로 줄었고 안내 줄이 거짓말을 안 하는가
+ *   · 연주 건반이 실제 크기(2.3cm)이고, 세 손가락 화음이 다 울리고 하나씩 떼도 다 찍히는가
+ *   · 같은 음은 겹쳐 찍지 않는가 · 한 칸 길이 · 쉼표 · 마디 늘리기 · 재생 중엔 안 찍는가
+ *   · 건반 크기를 맞추면 기억하고, 처음 값으로 돌리면 지우는가
+ *   · 조를 정하면 그 음 줄이 실제로 밝게 칠해지고, 노트는 그대로이고, 되돌려지는가
+ *   · 코드 이름이 재생 위치의 음을 읽는가 (Am7 · vi7)
+ *   · 세기 줄을 쓸면 지나간 음이 다 바뀌고, 고른 음이 있으면 고른 음만 바뀌는가
+ *   · 메트로놈이 박마다 제때 치고(루프가 박 중간에서 시작해도), 예비박 뒤에 곡이 시작하는가
+ *   · 재생 중에 고쳐도 노래가 뒤로 밀리지 않는가
  *   · 콘솔 오류가 하나도 없는가
  *
  * 쓰는 법: 다른 창에서 `npm run dev` 를 띄워 두고 `npm run smoke`.
@@ -2974,6 +2983,494 @@ const swell = await page.evaluate(async () => {
 check("예제 안의 그린 곡선이 실제로 부풀었다 돌아온다",
   swell.부푼곳 !== null && swell.시작 !== null &&
   swell.부푼곳 > swell.시작 + 60 && swell.부푼곳 > (swell.끝 ?? 0) + 40, swell);
+
+// ===================================================== 패드 가로 화면 (새 기능)
+//
+// 연주 건반·세기 줄·조·메트로놈은 **패드 가로 화면**을 위해 만든 것이라 거기서
+// 본다. 뮤패드 K10 PLUS(2000×1200, 10.4인치)를 배율 1.5 로 흉내 낸다 —
+// 브라우저 단위로 1333×800 이다. 손가락은 전부 **진짜 터치 이벤트**다.
+{
+  const tab = await browser.newContext({
+    viewport: { width: 1333, height: 800 },
+    screen: { width: 1333, height: 800 },
+    deviceScaleFactor: 1.5,
+    isMobile: true,
+    hasTouch: true,
+  });
+  const tp = await tab.newPage();
+  tp.on("console", (m) => m.type() === "error" && errors.push("tab: " + m.text()));
+  tp.on("pageerror", (e) => errors.push("tab pageerror: " + e.message));
+  const tcdp = await tab.newCDPSession(tp);
+  await tp.goto(URL, { waitUntil: "networkidle" });
+  await tp.mouse.click(660, 400); // 소리 잠금 풀기
+  await tp.waitForTimeout(300);
+
+  // ---- 화면 정리 ----
+  const layout = await tp.evaluate(() => ({
+    rows: document.querySelectorAll("#bar > .row").length,
+    header: Math.round(document.getElementById("bar").getBoundingClientRect().height),
+    hint: document.getElementById("hint").textContent,
+  }));
+  check("위 줄이 두 줄이다 (예전엔 세 줄)", layout.rows === 2 && layout.header < 110, layout);
+  // 길게 눌러 지우기는 없앴는데(DECISIONS.md) 안내 줄에만 남아 있었다.
+  check("안내 줄이 없앤 동작(길게=삭제)을 말하지 않는다", !layout.hint.includes("길게"), layout.hint);
+  const statusTakesHint = await tp.evaluate(() => {
+    const st = document.getElementById("status");
+    st.textContent = "알림";
+    st.classList.remove("hidden");
+    const hidden = getComputedStyle(document.getElementById("hint")).display === "none";
+    st.classList.add("hidden");
+    const back = getComputedStyle(document.getElementById("hint")).display !== "none";
+    return { hidden, back };
+  });
+  check("알림이 뜨면 안내 줄 자리를 쓴다 (아래가 두 줄이 안 된다)", statusTakesHint.hidden && statusTakesHint.back, statusTakesHint);
+
+  // ---- 연주 건반: 실제 크기 ----
+  await tp.click("#kb-toggle");
+  await tp.waitForTimeout(250);
+  const kb = await tp.evaluate(() => {
+    const k = window.__app.keyboard;
+    return { pxPerCm: k.pxPerCm, whiteW: k.whiteW, count: k.whiteCount, range: k.range };
+  });
+  // 1333px ÷ 22.65cm = 58.85px/cm → 흰 건반 2.3cm = 135.4px, 1333 ÷ 135.4 = 9.8 → 9개
+  check("연주 건반의 흰 건반이 2.3cm (뮤패드 기준 135px)",
+    Math.abs(kb.pxPerCm - 1333 / 22.65) < 0.01 && Math.abs(kb.whiteW - 2.3 * 1333 / 22.65) < 0.01, kb);
+  check("잘린 건반 없이 9개가 들어간다 (C4 부터)", kb.count === 9 && kb.range.low === 60, kb);
+
+  const kbBox = await tp.locator("#kb").boundingBox();
+  const keyX = (pitchIndexWhite) => {
+    // 흰 건반 i 번째의 가운데. 가운데 정렬이라 왼쪽 여백부터 센다.
+    const left = (kbBox.width - kb.count * kb.whiteW) / 2;
+    return kbBox.x + left + (pitchIndexWhite + 0.5) * kb.whiteW;
+  };
+  const lowY = kbBox.y + kbBox.height * 0.85; // 흰 건반 아래쪽 — 검은 건반을 피한다
+  // 손가락마다 번호(id)를 그대로 들고 다녀야 한다. 번호를 순서대로 다시 매기면
+  // 「하나를 뗐다」 가 아니라 「남은 손가락들이 옆으로 미끄러졌다」 가 된다.
+  const touch = (type, pts) => tcdp.send("Input.dispatchTouchEvent", {
+    type,
+    touchPoints: pts.map(([x, y, id], i) => ({ x, y, id: id ?? i, radiusX: 8, radiusY: 8 })),
+  });
+
+  // 조를 정해 두면 로마숫자까지 읽는다.
+  await tp.selectOption("#key", "0:major");
+
+  // ---- 세 손가락 화음 ----
+  // 도(0) 미(2) 솔(4) 을 동시에.
+  const C4 = [keyX(0), lowY], E4 = [keyX(2), lowY], G4 = [keyX(4), lowY];
+  const audio = await tp.evaluate(() => {
+    const app = window.__app;
+    const an = app.engine.ctx.createAnalyser();
+    an.fftSize = 2048;
+    app.engine.master.connect(an);
+    const buf = new Float32Array(an.fftSize);
+    window.__kbRms = () => {
+      an.getFloatTimeDomainData(buf);
+      let s = 0;
+      for (const v of buf) s += v * v;
+      return Math.sqrt(s / buf.length);
+    };
+    return true;
+  });
+  await touch("touchStart", [C4, E4, G4]);
+  await tp.waitForTimeout(350);
+  const held = await tp.evaluate(() => ({
+    holds: [...window.__app.scheduler.keyHolds.keys()].sort(),
+    chord: document.getElementById("chord").textContent,
+    rms: window.__kbRms(),
+  }));
+  check("세 손가락을 같이 누르면 세 음이 다 울린다", audio && held.holds.join() === "60,64,67" && held.rms > 0.01, held);
+  check("누르는 동안 코드 이름이 뜬다 (C · I)", held.chord.includes("C · I"), held.chord);
+
+  // 사람은 화음을 동시에 못 뗀다. 하나씩 떼도 셋 다 찍혀야 한다.
+  await touch("touchMove", [[...E4, 1], [...G4, 2]]); // 도(0번 손가락)를 먼저 뗐다
+  await tp.waitForTimeout(40);
+  await touch("touchMove", [[...G4, 2]]);
+  await tp.waitForTimeout(40);
+  await touch("touchEnd", []);
+  await tp.waitForTimeout(700);
+  const after = await tp.evaluate(() => {
+    const app = window.__app;
+    return {
+      notes: app.project.tracks[0].notes.map((n) => [n.pitch, n.start, n.length]),
+      head: app.scheduler.positionBeats(),
+      rms: window.__kbRms(),
+      holds: app.scheduler.keyHolds.size,
+    };
+  });
+  check("하나씩 떼도 화음 셋이 다 찍힌다 (재생 위치에, 스냅 길이로)",
+    JSON.stringify(after.notes) === JSON.stringify([[60, 0, 0.5], [64, 0, 0.5], [67, 0, 0.5]]), after.notes);
+  check("찍으면 재생 위치가 한 칸 앞으로 간다", Math.abs(after.head - 0.5) < 1e-9, after.head);
+  check("손을 떼면 소리가 멎는다", after.rms < 0.002 && after.holds === 0, after);
+
+  await tp.click("#undo");
+  await tp.waitForTimeout(100);
+  const undone = await tp.evaluate(() => window.__app.project.tracks[0].notes.length);
+  check("되돌리기 한 번에 화음이 통째로 사라진다", undone === 0, undone);
+
+  // ---- 같은 자리에 같은 음은 덮지 않는다 ----
+  await tp.evaluate(() => window.__app.scheduler.seek(0));
+  for (let i = 0; i < 2; i += 1) {
+    await tp.evaluate(() => window.__app.scheduler.seek(0));
+    await touch("touchStart", [C4]);
+    await tp.waitForTimeout(60);
+    await touch("touchEnd", []);
+    await tp.waitForTimeout(80);
+  }
+  const dup = await tp.evaluate(() => ({
+    notes: window.__app.project.tracks[0].notes.filter((n) => n.pitch === 60).length,
+    status: document.getElementById("status").textContent,
+  }));
+  check("같은 자리에 같은 음을 또 찍으면 겹쳐 쌓지 않고 알려 준다",
+    dup.notes === 1 && dup.status.includes("이미 있어"), dup);
+
+  // ---- 한 칸 = 한 마디 ----
+  await tp.selectOption("#kb-len", "bar");
+  await tp.evaluate(() => window.__app.scheduler.seek(4));
+  await touch("touchStart", [[keyX(3), lowY], [keyX(5), lowY], [keyX(7), lowY]]); // F A C
+  await tp.waitForTimeout(60);
+  await touch("touchEnd", []);
+  await tp.waitForTimeout(80);
+  const bar = await tp.evaluate(() => ({
+    notes: window.__app.project.tracks[0].notes.filter((n) => n.start === 4).map((n) => [n.pitch, n.length]),
+    head: window.__app.scheduler.positionBeats(),
+  }));
+  check("한 칸을 한 마디로 하면 코드가 한 마디 길이로 찍힌다",
+    JSON.stringify(bar.notes) === JSON.stringify([[65, 4], [69, 4], [72, 4]]) && bar.head === 8, bar);
+
+  // ---- 쉼표 ----
+  await tp.click("#kb-rest");
+  check("쉼표는 음 없이 한 칸 넘긴다",
+    (await tp.evaluate(() => window.__app.scheduler.positionBeats())) === 12);
+
+  // ---- 곡 끝을 넘기면 마디가 늘어난다 ----
+  await touch("touchStart", [G4]);
+  await tp.waitForTimeout(60);
+  await touch("touchEnd", []);
+  await tp.waitForTimeout(80);
+  const grown = await tp.evaluate(() => ({ bars: window.__app.project.bars, input: document.getElementById("bars").value }));
+  check("곡 끝을 넘겨 찍으면 마디를 늘린다", grown.bars === 4 && grown.input === "4", grown);
+  await touch("touchStart", [G4]);
+  await tp.waitForTimeout(60);
+  await touch("touchEnd", []);
+  await tp.waitForTimeout(80);
+  const grown2 = await tp.evaluate(() => ({ bars: window.__app.project.bars, input: document.getElementById("bars").value }));
+  check("…넘기면 그만큼 늘어나고 칸에도 보인다", grown2.bars === 5 && grown2.input === "5", grown2);
+
+  // ---- 찍기를 끄면 소리만 ----
+  await tp.click("#kb-step");
+  const n0 = await tp.evaluate(() => window.__app.project.tracks[0].notes.length);
+  await touch("touchStart", [C4]);
+  await tp.waitForTimeout(60);
+  await touch("touchEnd", []);
+  await tp.waitForTimeout(80);
+  const n1 = await tp.evaluate(() => window.__app.project.tracks[0].notes.length);
+  check("찍기를 끄면 소리만 내고 찍지 않는다", n0 === n1, { n0, n1 });
+  await tp.click("#kb-step");
+
+  // ---- 미끄러지면 음이 따라온다 ----
+  await tp.selectOption("#kb-len", "snap");
+  await tp.evaluate(() => window.__app.scheduler.seek(40));
+  await touch("touchStart", [C4]);
+  await tp.waitForTimeout(40);
+  await touch("touchMove", [[keyX(1), lowY]]);
+  await tp.waitForTimeout(60);
+  const slid = await tp.evaluate(() => [...window.__app.scheduler.keyHolds.keys()]);
+  await touch("touchEnd", []);
+  await tp.waitForTimeout(80);
+  const slidNotes = await tp.evaluate(() => window.__app.project.tracks[0].notes.filter((n) => n.start === 40).map((n) => n.pitch));
+  check("누른 채 옆 건반으로 밀면 그 음으로 갈아탄다 (지나간 음은 안 찍는다)",
+    slid.join() === "62" && slidNotes.join() === "62", { slid, slidNotes });
+
+  // ---- 재생 중에는 찍지 않는다 ----
+  const before = await tp.evaluate(() => window.__app.project.tracks[0].notes.length);
+  await tp.click("#play");
+  await tp.waitForTimeout(150);
+  await touch("touchStart", [E4]);
+  await tp.waitForTimeout(60);
+  await touch("touchEnd", []);
+  await tp.waitForTimeout(80);
+  await tp.click("#play");
+  const playing = await tp.evaluate(() => ({
+    n: window.__app.project.tracks[0].notes.length,
+    status: document.getElementById("status").textContent,
+  }));
+  check("재생 중에는 찍지 않고 그렇다고 말해 준다", playing.n === before && playing.status.includes("재생 중"), playing);
+
+  // ---- 옥타브 ----
+  await tp.click("#kb-down");
+  const down = await tp.evaluate(() => ({ r: window.__app.keyboard.range, label: document.getElementById("kb-range").textContent }));
+  check("옥타브를 내리면 C3 부터", down.r.low === 48 && down.label.startsWith("C3"), down);
+  await tp.click("#kb-up");
+
+  // ---- 크기 맞추기 ----
+  await tp.click("#kb-cal");
+  const cal0 = await tp.evaluate(() => document.getElementById("cal-bar").getBoundingClientRect().width);
+  check("5cm 막대가 계산한 크기로 그려진다", Math.abs(cal0 - 5 * 1333 / 22.65) < 0.6, cal0);
+  await tp.fill("#cal-cm", "20");
+  await tp.locator("#cal-cm").dispatchEvent("change");
+  await tp.waitForTimeout(250);
+  const cal1 = await tp.evaluate(() => ({
+    px: window.__app.keyboard.pxPerCm,
+    count: window.__app.keyboard.whiteCount,
+    stored: localStorage.getItem("pianoroll.pxPerCm"),
+  }));
+  // 화면이 20cm 라고 하면 1cm 가 66.65px, 흰 건반 153.3px → 8개
+  check("화면 길이를 넣으면 건반이 다시 맞춰지고 기억된다",
+    Math.abs(cal1.px - 1333 / 20) < 0.01 && cal1.count === 8 && Math.abs(Number(cal1.stored) - 1333 / 20) < 0.01, cal1);
+  await tp.click("#cal-reset");
+  await tp.waitForTimeout(250);
+  const cal2 = await tp.evaluate(() => ({ px: window.__app.keyboard.pxPerCm, stored: localStorage.getItem("pianoroll.pxPerCm") }));
+  check("처음 값으로 돌리면 기억한 값도 지운다", Math.abs(cal2.px - 1333 / 22.65) < 0.01 && cal2.stored === null, cal2);
+  await tp.click("#cal-close");
+
+  // ---- 조 ----
+  const keyed = await tp.evaluate(() => ({ key: window.__app.project.key, canUndo: window.__app.history.canUndo }));
+  check("조를 고르면 곡에 남는다", keyed.key?.tonic === 0 && keyed.key?.mode === "major", keyed);
+  // 조를 바꿔도 노트는 그대로다 — 조는 설명이지 규칙이 아니다.
+  const notesBefore = await tp.evaluate(() => JSON.stringify(window.__app.project.tracks[0].notes));
+  await tp.selectOption("#key", "9:minor");
+  const notesAfter = await tp.evaluate(() => JSON.stringify(window.__app.project.tracks[0].notes));
+  check("조를 바꿔도 노트는 그대로다", notesBefore === notesAfter);
+  await tp.click("#undo");
+  const undoneKey = await tp.evaluate(() => ({ key: window.__app.project.key, sel: document.getElementById("key").value }));
+  check("조 바꾸기도 되돌린다", undoneKey.key?.tonic === 0 && undoneKey.sel === "0:major", undoneKey);
+  // 조 없음으로 되돌렸을 때 조가 남아 있으면 안 된다 (Object.assign 은 없는 칸을 안 지운다).
+  await tp.evaluate(() => window.__app.history.clear());
+  await tp.selectOption("#key", "none");
+  await tp.selectOption("#key", "7:major");
+  await tp.click("#undo");
+  const noKey = await tp.evaluate(() => ({ key: window.__app.project.key ?? null, sel: document.getElementById("key").value }));
+  check("조 없음으로 되돌리면 조가 정말 없어진다", noKey.key === null && noKey.sel === "none", noKey);
+  await tp.selectOption("#key", "0:major");
+
+  // 조 안의 음 줄이 실제로 밝게 칠해지는가 — 캔버스 픽셀로 본다.
+  const rows = await tp.evaluate(() => {
+    const app = window.__app;
+    app.roll.scrollToPitch(63);
+    app.roll.render();
+    const cv = document.getElementById("roll");
+    const g = cv.getContext("2d");
+    const dpr = cv.width / cv.getBoundingClientRect().width;
+    const yOf = (p) => (36 + (127 - p) * app.roll.keyHeight - app.roll.scrollY + app.roll.keyHeight / 2) * dpr;
+    const px = (p) => [...g.getImageData(Math.round(300 * dpr), Math.round(yOf(p)), 1, 1).data].slice(0, 3).join(",");
+    return { D: px(62), Cs: px(61), C: px(60), F: px(65), Fs: px(66) };
+  });
+  check("조 안의 음 줄(D·F)과 조 밖의 음 줄(C#·F#)이 다르게 칠해진다",
+    rows.D === rows.F && rows.Cs === rows.Fs && rows.D !== rows.Cs, rows);
+  check("으뜸음 줄(C)은 따로 물들인다", rows.C !== rows.D && rows.C !== rows.Cs, rows);
+
+  // ---- 코드 이름: 고른 음 / 재생 위치 ----
+  const chordSrc = await tp.evaluate(async () => {
+    const app = window.__app;
+    const t = app.project.tracks[0];
+    t.notes = [];
+    for (const p of [57, 60, 64, 67]) t.notes.push({ id: "c" + p, pitch: p, start: 0, length: 2, velocity: 100 });
+    app.scheduler.seek(1);
+    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+    const atHead = document.getElementById("chord").textContent;
+    app.scheduler.seek(3);
+    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+    const empty = document.getElementById("chord").textContent;
+    return { atHead, empty };
+  });
+  check("재생 위치에서 울리는 음의 코드를 읽는다 (라 도 미 솔 = Am7 · vi7)",
+    chordSrc.atHead.includes("Am7 · vi7") && chordSrc.atHead.startsWith("▶"), chordSrc);
+  check("아무 음도 없으면 — ", chordSrc.empty === "—", chordSrc);
+
+  // ---- 세기 줄 ----
+  await tp.click("#vel-toggle");
+  await tp.waitForTimeout(250);
+  const vel = await tp.evaluate(() => {
+    const app = window.__app;
+    const t = app.project.tracks[0];
+    t.notes = [0, 1, 2, 3].map((b) => ({ id: "v" + b, pitch: 60 + b, start: b, length: 1, velocity: 100 }));
+    app.roll.scrollX = 0;
+    app.history.clear();
+    const cv = document.getElementById("vel").getBoundingClientRect();
+    return { x0: cv.x, y0: cv.y, h: cv.height, xs: [0, 1, 2, 3].map((b) => app.roll.xOfBeat(b) + 1.5) };
+  });
+  // 0~2박 막대를 아래쪽(약한 쪽)으로 한 번에 쓸어내린다.
+  const lowV = vel.y0 + vel.h - 14;
+  await touch("touchStart", [[vel.x0 + vel.xs[0], lowV]]);
+  await tp.waitForTimeout(30);
+  await touch("touchMove", [[vel.x0 + vel.xs[2], lowV]]);
+  await tp.waitForTimeout(30);
+  await touch("touchEnd", []);
+  await tp.waitForTimeout(80);
+  const painted = await tp.evaluate(() => ({
+    v: window.__app.project.tracks[0].notes.map((n) => n.velocity),
+    undo: window.__app.history.canUndo,
+  }));
+  check("세기 줄을 옆으로 쓸면 지나간 음이 전부 바뀐다 (손가락이 건너뛴 자리까지)",
+    painted.v[0] < 40 && painted.v[1] === painted.v[0] && painted.v[2] === painted.v[0] && painted.v[3] === 100, painted);
+  await tp.click("#undo");
+  const velUndo = await tp.evaluate(() => window.__app.project.tracks[0].notes.map((n) => n.velocity));
+  check("세기 붓질 한 번이 되돌리기 한 번이다", velUndo.every((v) => v === 100), velUndo);
+  // 고른 음이 있으면 고른 음만.
+  await tp.evaluate(() => {
+    const roll = window.__app.roll;
+    roll.selected.add("v3");
+    roll.cb.onSelectionChange(1);
+  });
+  await touch("touchStart", [[vel.x0 + vel.xs[2], lowV]]);
+  await tp.waitForTimeout(30);
+  await touch("touchMove", [[vel.x0 + vel.xs[3], lowV]]);
+  await tp.waitForTimeout(30);
+  await touch("touchEnd", []);
+  await tp.waitForTimeout(80);
+  const onlySel = await tp.evaluate(() => window.__app.project.tracks[0].notes.map((n) => n.velocity));
+  check("고른 음이 있으면 고른 음만 바뀐다", onlySel[2] === 100 && onlySel[3] < 40, onlySel);
+  await tp.evaluate(() => window.__app.roll.clearSelection());
+
+  // ---- 메트로놈 ----
+  // 소리가 나는지가 아니라 **박마다 제때** 예약하는지를 본다. 120BPM 이면 0.5초마다,
+  // 4박마다 높은 소리. 실제 Metronome.click 이 받은 시각을 기록한다.
+  const metro = await tp.evaluate(async () => {
+    const app = window.__app;
+    const s = app.scheduler;
+    app.project.bpm = 120;
+    app.project.bars = 4;
+    s.loopEnabled = false;
+    const log = [];
+    const real = app.metronome.click.bind(app.metronome);
+    app.metronome.click = (when, accent) => { log.push({ when, accent }); real(when, accent); };
+    document.getElementById("metro").click();
+    s.seek(0);
+    const t0 = app.engine.currentTime;
+    s.play();
+    await new Promise((r) => setTimeout(r, 2300));
+    s.stop();
+    document.getElementById("metro").click();
+    app.metronome.click = real;
+    return { t0, log: log.map((l) => ({ dt: +(l.when - log[0].when).toFixed(4), accent: l.accent })), pending: app.metronome.pending };
+  });
+  const gaps = metro.log.slice(1).map((l, i) => +(l.dt - metro.log[i].dt).toFixed(4));
+  check("메트로놈이 박마다(120BPM 에 0.5초) 친다",
+    metro.log.length >= 4 && gaps.every((g) => Math.abs(g - 0.5) < 0.002), { gaps });
+  check("마디 첫 박만 높게 친다", metro.log.length >= 5 && metro.log[0].accent && !metro.log[1].accent && !metro.log[3].accent, metro.log);
+  check("정지하면 예약해 둔 틱까지 끊는다", metro.pending === 0, metro.pending);
+
+  // 루프가 박 중간(1.5박)에서 시작해도 틱은 곡의 정수 박에만 떨어진다.
+  const loopMetro = await tp.evaluate(async () => {
+    const app = window.__app;
+    const s = app.scheduler;
+    s.loopStart = 1.5;
+    s.loopEnd = 3.5;
+    s.loopEnabled = true;
+    const log = [];
+    const real = app.metronome.click.bind(app.metronome);
+    app.metronome.click = (when, accent) => { log.push(when); real(when, accent); };
+    s.metronomeOn = true;
+    s.seek(1.5);
+    s.play();
+    const start = s["startTime"];
+    await new Promise((r) => setTimeout(r, 2400));
+    s.stop();
+    s.metronomeOn = false;
+    s.loopEnabled = false;
+    app.metronome.click = real;
+    // 이 회차 기준 몇 박 뒤인지 → 곡의 박으로
+    return log.map((w) => +(1.5 + (w - start) / 0.5).toFixed(3));
+  });
+  // 1.5~3.5 를 도는 동안 2, 3 박 → (한 바퀴 2박 뒤) 4, 5 → … 처럼 보인다 (회차를 더해 쓴 값)
+  check("루프가 박 중간에서 시작해도 틱은 정수 박에만 친다",
+    loopMetro.length >= 3 && loopMetro.every((b) => Math.abs((b - 0) - Math.round(b)) < 0.01), loopMetro);
+
+  // ---- 예비박 ----
+  const countIn = await tp.evaluate(async () => {
+    const app = window.__app;
+    const s = app.scheduler;
+    app.project.bpm = 120;
+    const t = app.project.tracks[0];
+    t.notes = [{ id: "ci", pitch: 60, start: 0, length: 1, velocity: 100 }];
+    const clicks = [];
+    const plays = [];
+    const real = app.metronome.click.bind(app.metronome);
+    app.metronome.click = (when, accent) => { clicks.push(when); real(when, accent); };
+    const inst = app.registry.forTrack(t);
+    const realPlay = inst.play.bind(inst);
+    inst.play = (...a) => { plays.push(a[2]); realPlay(...a); };
+    document.getElementById("countin").click();
+    s.seek(0);
+    const t0 = app.engine.currentTime;
+    document.getElementById("play").click();
+    await new Promise((r) => setTimeout(r, 300));
+    const midPos = s.positionBeats();
+    const midLabel = document.getElementById("pos").textContent;
+    const counting = s.countingIn;
+    // 예비박 도중에 노트를 고쳐도(invalidate) 예비박이 사라지면 안 된다.
+    s.invalidate();
+    const stillCounting = s.countingIn;
+    await new Promise((r) => setTimeout(r, 2400));
+    document.getElementById("play").click();
+    document.getElementById("countin").click();
+    app.metronome.click = real;
+    inst.play = realPlay;
+    return {
+      clicks: clicks.map((w) => +(w - t0).toFixed(3)),
+      firstNote: plays.length ? +(plays[0] - t0).toFixed(3) : null,
+      midPos, midLabel, counting, stillCounting,
+    };
+  });
+  // 4/4 120BPM: 0.08 여유 + 4박(2초) 예비박 → 첫 음은 2.08초쯤
+  check("예비박은 한 마디(4번) 치고 그 다음에 곡이 시작한다",
+    countIn.clicks.length === 4 && countIn.firstNote !== null && Math.abs(countIn.firstNote - (countIn.clicks[0] + 2)) < 0.01, countIn);
+  check("예비박 동안 재생 위치는 시작 자리에 서 있고 「예비박」 이라고 보인다",
+    countIn.counting && countIn.midPos === 0 && countIn.midLabel === "예비박", countIn);
+  check("예비박 도중에 노트를 고쳐도 예비박이 안 사라진다", countIn.stillCounting, countIn);
+
+  await tab.close();
+}
+
+// ===================================================== 노래 트랙: 재생 중 고칠 때
+//
+// 재생 중에 노트를 고치면(invalidate) 노래를 다시 예약한다. 그때 기준 시각을
+// "지금" 으로 넘겨서, 노래만 (재생 위치 - 구간 시작) 만큼 뒤로 밀리고 있었다.
+// 함수가 받은 시각을 직접 본다.
+{
+  // 앞 검사들이 화면을 여러 번 새로 열어서 음원이 남아 있지 않다. 사용자 길 그대로
+  // zip 을 넣어 노래 트랙을 만든다.
+  await page.reload({ waitUntil: "networkidle" });
+  await page.locator("#unlock").tap();
+  await page.waitForTimeout(300);
+  await page.evaluate((b64) => {
+    const bin = atob(b64);
+    const u = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i += 1) u[i] = bin.charCodeAt(i);
+    const dt = new DataTransfer();
+    dt.items.add(new File([u], "TETO-tandoku.zip", { type: "application/zip" }));
+    const el = document.getElementById("voice-zip");
+    el.files = dt.files;
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+  }, readFileSync("fixtures/voice-utf8.zip").toString("base64"));
+  await page.waitForFunction(() => window.__app.project.tracks[0].source.kind === "voice", null,
+    { timeout: 20000 }).catch(() => {});
+  const sung = await page.evaluate(async () => {
+    const app = window.__app;
+    const s = app.scheduler;
+    const entry = [...app.registry.voices.entries()][0];
+    if (!entry) return { skipped: "노래 음원 없음" };
+    const [bankId, bank] = entry;
+    const t = app.project.tracks[0];
+    t.source = { kind: "voice", bankId };
+    t.notes = [2, 3, 4].map((b) => ({ id: "s" + b, pitch: 60, start: b, length: 1, velocity: 100, lyric: "か" }));
+    await s.prepareVoices();
+    const bats = [];
+    const real = bank.sing.bind(bank);
+    bank.sing = (ctx, dest, notes, at, expr) => { bats.push({ at, first: notes[0]?.startSec }); return real(ctx, dest, notes, at, expr); };
+    s.loopEnabled = false;
+    s.seek(2);
+    s.play();
+    await new Promise((r) => setTimeout(r, 400));
+    s.invalidate();
+    const startTime = s["startTime"];
+    s.stop();
+    bank.sing = real;
+    return { last: bats[bats.length - 1], startTime };
+  });
+  check("재생 중에 고쳐도 노래가 뒤로 밀리지 않는다 (다시 예약하는 기준이 구간 시작 시각)",
+    sung.skipped === undefined && Math.abs(sung.last.at - sung.startTime) < 1e-6, sung);
+}
 
 check("콘솔 오류 없음", errors.length === 0, errors);
 

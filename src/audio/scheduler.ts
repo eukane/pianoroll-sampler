@@ -23,7 +23,8 @@ import type { AudioEngine } from "./engine";
 import type { InstrumentRegistry } from "./registry";
 import type { Mixer } from "./mixer";
 import type { MixerState } from "./mixerState";
-import { totalBeats } from "../model/project";
+import { beatsPerBar, totalBeats } from "../model/project";
+import type { Metronome } from "./metronome";
 import { assignChannels, channelForTrack } from "../model/channels";
 import { expressionFor, singingExpressions } from "./expression";
 import type { SungNote } from "../model/phrase";
@@ -31,6 +32,12 @@ import type { VoiceBank } from "./voicebank";
 
 const TICK_MS = 25;
 const LOOKAHEAD_SEC = 0.12;
+
+/**
+ * 예비박 첫 틱까지의 여유(초). 재생 버튼을 누른 그 순간에 첫 틱을 예약하면
+ * 오디오 스레드가 받기 전에 지나가 버려 첫 박(제일 중요한 「띡」)이 잘린다.
+ */
+const COUNT_IN_PAD = 0.08;
 
 /**
  * 미리듣기가 최소한 이만큼은 울린다(ms).
@@ -94,6 +101,13 @@ export class Scheduler {
   loopStart = 0;
   loopEnd = 4;
 
+  /** 박자 소리. main 이 만들어 꽂는다 (없으면 메트로놈도 예비박도 없다). */
+  metronome: Metronome | null = null;
+  /** 재생 중에 박마다 틱을 칠 것인가. 재생 중에 켜고 꺼도 다음 박부터 먹는다. */
+  metronomeOn = false;
+  private countInUntil = 0;
+  private countInFrom = 0;
+
   onStop: (() => void) | null = null;
   /**
    * 지금 멈추는 게 **곧바로 다시 트는 중**인가.
@@ -126,7 +140,13 @@ export class Scheduler {
 
   // ------------------------------------------------------------- 재생 제어
 
-  play(fromBeat?: number): void {
+  /**
+   * @param fromBeat 어디서부터 (없으면 멈췄던 자리)
+   * @param countIn  한 마디 예비박을 치고 시작한다. **재생 버튼으로 시작할 때만** 넘긴다 —
+   *                 재생 위치를 옮기거나 루프를 켤 때(안에서 stop → play)마다 예비박이
+   *                 다시 나오면 곡이 툭툭 끊긴다.
+   */
+  play(fromBeat?: number, { countIn = false }: { countIn?: boolean } = {}): void {
     if (this.playing) return;
     const project = this.getProject();
 
@@ -145,14 +165,36 @@ export class Scheduler {
     // 채널마다 악기와 음량을 걸어 둔다. 노트마다 보내면 같은 메시지가 수백 번 나간다.
     project.tracks.forEach((t, i) => this.registry.prepare(t, this.channels[i]));
     this.mixerState.apply(project, this.mixer);
-    this.startTime = this.engine.currentTime - (from - this.regionStart) * this.secPerBeat;
+
+    // 예비박. 곡의 시작을 그만큼 **미래로** 민다. 노트는 원래도 미래 시각으로
+    // 예약하는 구조라 따로 손댈 게 없다 — 기다렸다가 제때 운다.
+    let lead = 0;
+    this.countInUntil = 0;
+    if (countIn && this.metronome) {
+      const spb = this.secPerBeat;
+      const bpb = beatsPerBar(project);
+      const t0 = this.engine.currentTime + COUNT_IN_PAD;
+      const beats = Math.max(1, Math.round(bpb));
+      for (let i = 0; i < beats; i += 1) this.metronome.click(t0 + i * spb, i === 0);
+      lead = COUNT_IN_PAD + bpb * spb;
+      this.countInUntil = this.engine.currentTime + lead;
+      this.countInFrom = from;
+    }
+
+    this.startTime = this.engine.currentTime + lead - (from - this.regionStart) * this.secPerBeat;
     this.passBase = this.startTime;
     this.evIdx = this.firstEventAtOrAfter(from);
+    this.resetClicks(from);
 
     this.playing = true;
     this.singVoices(this.startTime, from);
     this.tick();
     this.timer = window.setInterval(() => this.tick(), TICK_MS);
+  }
+
+  /** 지금 예비박을 치는 중인가. 그동안 재생 헤드는 시작 자리에 서 있는다. */
+  get countingIn(): boolean {
+    return this.playing && this.engine.currentTime < this.countInUntil;
   }
 
   stop(): void {
@@ -165,6 +207,8 @@ export class Scheduler {
     }
     this.endPreview();
     this.registry.stopAll();
+    this.metronome?.stopAll();
+    this.countInUntil = 0;
     if (!this.restarting) this.onStop?.();
   }
 
@@ -194,18 +238,29 @@ export class Scheduler {
     if (!this.playing) return;
     const pos = this.positionBeats();
     this.buildEvents();
-    this.startTime = this.engine.currentTime - (pos - this.regionStart) * this.secPerBeat;
-    this.passBase = this.startTime;
+    // 예비박 중이면 시작 시각을 건드리지 않는다. 아래처럼 "지금 = pos" 로 다시
+    // 맞추면 남은 예비박이 통째로 사라지고 곡이 곧바로 시작해 버린다.
+    if (!this.countingIn) {
+      this.startTime = this.engine.currentTime - (pos - this.regionStart) * this.secPerBeat;
+      this.passBase = this.startTime;
+    }
     this.evIdx = this.firstEventAtOrAfter(pos);
+    this.resetClicks(pos);
     // 노래는 줄 통째로 예약돼 있다. 걷어내고 지금 위치부터 다시 건다 — 안 그러면
     // 고치기 전 가사와 고친 가사가 겹쳐 들린다.
+    //
+    // 기준 시각은 **이 회차의 regionStart 가 울리는 시각**(passBase)이다. `sing` 은
+    // 음의 자리를 `(n.start - regionStart)` 초로 받아 거기에 더하기 때문이다.
+    // 예전에는 여기에 "지금" 을 넘겨서, 재생 중에 노트를 고치면 노래만
+    // (pos - regionStart) 만큼 **뒤로 밀렸다** — 4마디째에서 고치면 4마디 늦게.
     for (const bank of this.registry.voices.values()) bank.stopAll();
-    this.singVoices(this.engine.currentTime, pos);
+    this.singVoices(this.passBase, pos);
   }
 
   /** 지금 재생 헤드가 몇 박에 있는가. */
   positionBeats(): number {
     if (!this.playing) return this.stoppedAt;
+    if (this.countingIn) return this.countInFrom;
     const elapsedBeats = (this.engine.currentTime - this.startTime) / this.secPerBeat;
     if (this.loopEnabled) {
       const len = this.regionBeats;
@@ -250,11 +305,54 @@ export class Scheduler {
     return i;
   }
 
+  // ---------------------------------------------------------------- 메트로놈
+
+  /**
+   * 다음에 칠 틱이 **몇 번째 회차의 몇 박**인가.
+   *
+   * 노트는 목록을 순서대로 훑으면 되지만 틱은 목록이 없다 — 정수 박마다 하나다.
+   * 그래서 "이번 회차(passBase 기준)에서 다음 정수 박" 을 들고 다닌다. 루프가
+   * 한 바퀴 돌면 회차를 하나 올리고 루프 시작의 첫 정수 박부터 다시 센다.
+   * 루프 시작이 박 중간(예: 1.5박)이어도 틱은 **곡의 정수 박**에만 떨어진다.
+   */
+  private clickPass = 0;
+  private clickBeat = 0;
+
+  private resetClicks(fromBeat: number): void {
+    this.clickPass = 0;
+    this.clickBeat = Math.ceil(fromBeat - 1e-6);
+  }
+
+  private scheduleClicks(now: number, ahead: number): void {
+    const met = this.metronome;
+    if (!met || !this.metronomeOn) return;
+    const spb = this.secPerBeat;
+    const bpb = beatsPerBar(this.getProject());
+    const len = this.regionBeats;
+    for (let guard = 0; guard < 64; guard += 1) {
+      if (this.clickBeat >= this.regionEnd - 1e-6) {
+        if (!this.loopEnabled) return;
+        this.clickPass += 1;
+        this.clickBeat = Math.ceil(this.regionStart - 1e-6);
+        continue;
+      }
+      const when = this.startTime + (this.clickPass * len + (this.clickBeat - this.regionStart)) * spb;
+      if (when >= ahead) return;
+      // 지나간 틱은 치지 않는다. 늦게 치면 박자가 틀려 들린다 — 안 치는 게 낫다.
+      if (when >= now - 0.005) {
+        const inBar = ((this.clickBeat % bpb) + bpb) % bpb;
+        met.click(Math.max(when, now), inBar < 1e-6 || bpb - inBar < 1e-6);
+      }
+      this.clickBeat += 1;
+    }
+  }
+
   private tick(): void {
     if (!this.playing) return;
     const now = this.engine.currentTime;
     const ahead = now + LOOKAHEAD_SEC;
     const spb = this.secPerBeat;
+    this.scheduleClicks(now, ahead);
 
     // guard: 루프 구간이 아주 짧고 노트가 없으면 무한루프가 될 수 있다.
     for (let guard = 0; guard < 2000; guard += 1) {
@@ -492,6 +590,77 @@ export class Scheduler {
     if (!held) return;
     this.heldPreview = null;
     held.instrument.release(held.pitch, held.channel);
+  }
+
+  // ------------------------------------------------------- 연주 건반 (화음)
+
+  /**
+   * 연주 건반에서 누른 음들. **음마다 따로** 붙잡는다.
+   *
+   * 위의 미리듣기는 일부러 한 번에 하나다 — 왼쪽 건반에서 손가락을 미끄러뜨리면
+   * 음이 따라오게 하려는 것이다. 그런데 화음은 손가락 셋이 **동시에** 눌려 있어야
+   * 한다. 같은 자리를 쓰면 도·미·솔을 눌러도 마지막 하나만 난다. 그래서 따로 둔다.
+   *
+   * 악기 쪽은 이미 음마다 붙잡을 수 있다 (`hold`/`release` 가 음높이로 갈린다).
+   */
+  private keyHolds = new Map<number, { instrument: Instrument; channel: number; startedAt: number; token: number }>();
+  private keyTimers = new Map<number, number>();
+
+  keyHold(pitch: number, trackIndex: number, velocity = 100): void {
+    const project = this.getProject();
+    const track = project.tracks[trackIndex];
+    if (!track) return;
+    this.keyRelease(pitch, true);
+
+    const channel = assignChannels(project)[trackIndex] ?? channelForTrack(trackIndex);
+    this.mixer.set(channel, {
+      volume: track.volume,
+      pan: track.pan,
+      muted: false,
+      send: track.reverbSend ?? 0,
+    });
+    this.registry.prepare(track, channel);
+    const instrument = this.registry.forTrack(track);
+    this.previewToken += 1;
+    this.keyHolds.set(pitch, { instrument, channel, startedAt: this.engine.currentTime, token: this.previewToken });
+    instrument.hold(pitch, velocity, channel);
+  }
+
+  /**
+   * 손을 뗐다. 톡 치고 뗀 음도 들리게 최소 시간은 채운다 (MIN_PREVIEW_MS).
+   * @param now 최소 시간을 채우지 않고 바로 끊는다 (같은 음을 다시 누를 때)
+   */
+  keyRelease(pitch: number, now = false): void {
+    const held = this.keyHolds.get(pitch);
+    const timer = this.keyTimers.get(pitch);
+    if (timer !== undefined) {
+      clearTimeout(timer);
+      this.keyTimers.delete(pitch);
+    }
+    if (!held) return;
+    const soundedMs = (this.engine.currentTime - held.startedAt) * 1000;
+    const end = () => {
+      // 그 사이 같은 건반을 다시 눌렀으면 그건 새로 눌린 것이다. 건드리지 않는다.
+      if (this.keyHolds.get(pitch)?.token !== held.token) return;
+      this.keyHolds.delete(pitch);
+      held.instrument.release(pitch, held.channel);
+    };
+    if (now || soundedMs >= MIN_PREVIEW_MS) {
+      end();
+      return;
+    }
+    this.keyTimers.set(
+      pitch,
+      window.setTimeout(() => {
+        this.keyTimers.delete(pitch);
+        end();
+      }, MIN_PREVIEW_MS - soundedMs),
+    );
+  }
+
+  /** 건반에 남은 소리를 전부 끊는다. 손 떼는 신호를 놓쳤을 때를 대비한다. */
+  keyReleaseAll(): void {
+    for (const pitch of [...this.keyHolds.keys()]) this.keyRelease(pitch, true);
   }
 
   private clearPreviewTimer(): void {

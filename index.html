@@ -18,27 +18,37 @@
   </head>
   <body>
     <div id="app">
+      <!--
+        위 줄 두 개는 DAW 처럼 묶었다.
+
+          1줄  재생 · 박자 · 곡 정보(BPM·조) · 지금 울리는 코드 · 되돌리기
+          2줄  트랙 · 음원 · 편집 도구 · 격자·박자표·길이 · 화면(세기 줄·건반·확대)
+
+        예전에는 세 줄이었다(패드 가로 화면에서 높이의 22%). 트랙 칩을 2줄
+        앞머리로 올려 한 줄을 통째로 아꼈다. 줄이 넘치면 옆으로 민다.
+      -->
       <header id="bar">
         <div class="row">
           <button id="rewind" type="button" title="맨 앞으로 (Home)">⏮</button>
           <button id="play" class="primary" type="button">▶︎ 재생</button>
           <button id="loop" type="button">🔁 루프</button>
+          <button id="metro" type="button" title="재생 중에 박마다 틱 소리 (마디 첫 박은 높게)">♩ 박자</button>
+          <button id="countin" type="button" title="재생을 누르면 한 마디 예비박을 치고 시작">예비박</button>
           <span id="pos" class="pos">1 : 1</span>
+          <span class="sep"></span>
+          <label>BPM <input id="bpm" type="number" min="20" max="300" step="1" value="100" /></label>
+          <label>
+            조
+            <!-- 조는 규칙이 아니라 설명이다. 정해도 노트를 막지 않는다 (model/scale.ts). -->
+            <select id="key"><option value="none" selected>없음</option></select>
+          </label>
+          <span id="chord" class="chord" title="지금 누르거나 고른 음(없으면 재생 위치에서 울리는 음)의 코드">—</span>
+          <span class="spacer"></span>
           <button id="undo" type="button" title="실행 취소" disabled>↶</button>
           <button id="redo" type="button" title="다시 실행" disabled>↷</button>
-          <button id="select-mode" type="button" title="끌어서 여러 노트 고르기">⬚ 고르기</button>
-          <button id="move-down" type="button" title="고른 음을 반음 내림 (누르고 있으면 계속)" disabled>▼</button>
-          <button id="move-up" type="button" title="고른 음을 반음 올림 (누르고 있으면 계속)" disabled>▲</button>
-          <button id="delete-selected" type="button" class="danger" title="고른 노트 지우기" disabled>🗑</button>
-          <button id="copy" type="button" title="고른 노트(없으면 루프 구간·이 마디) 복사">⧉ 복사</button>
-          <button id="paste" type="button" title="재생 위치에 붙여넣기" disabled>⎘ 붙여넣기</button>
-          <span class="spacer"></span>
-          <button id="zoom-out" type="button" title="가로 축소">－</button>
-          <button id="zoom-in" type="button" title="가로 확대">＋</button>
-          <button id="keys-out" type="button" title="세로 축소">▁</button>
-          <button id="keys-in" type="button" title="세로 확대">▇</button>
         </div>
         <div class="row">
+          <div id="tracks" class="group"></div>
           <button id="instrument" type="button">🎹 임시 신스</button>
           <button id="load-sf" type="button">📂 음원</button>
           <button id="mixer" type="button">🎚️ 믹서</button>
@@ -57,9 +67,27 @@
                그러면 파일이 눈앞에 있는데 선택이 안 된다. 어차피 고른 뒤에
                zip 인지는 내용(EOCD 표식)을 보고 판정하므로 걸 이유가 없다. -->
           <input id="voice-zip" type="file" hidden />
-          <span class="spacer"></span>
-          <label>BPM <input id="bpm" type="number" min="20" max="300" step="1" value="100" /></label>
-          <label>마디 <input id="bars" type="number" min="1" max="64" step="1" value="4" /></label>
+          <span class="sep"></span>
+          <button id="select-mode" type="button" title="끌어서 여러 노트 고르기">⬚ 고르기</button>
+          <button id="move-down" type="button" title="고른 음을 반음 내림 (누르고 있으면 계속)" disabled>▼</button>
+          <button id="move-up" type="button" title="고른 음을 반음 올림 (누르고 있으면 계속)" disabled>▲</button>
+          <button id="delete-selected" type="button" class="danger" title="고른 노트 지우기" disabled>🗑</button>
+          <button id="copy" type="button" title="고른 노트(없으면 루프 구간·이 마디) 복사">⧉ 복사</button>
+          <button id="paste" type="button" title="재생 위치에 붙여넣기" disabled>⎘ 붙여넣기</button>
+          <span class="sep"></span>
+          <label>
+            스냅
+            <select id="snap">
+              <option value="1">1/4</option>
+              <option value="0.5" selected>1/8</option>
+              <option value="0.25">1/16</option>
+              <option value="0.125">1/32</option>
+              <option value="0.0625">1/64</option>
+              <option value="0.3333333333333333">1/8 셋잇단</option>
+              <option value="0.16666666666666666">1/16 셋잇단</option>
+              <option value="0.08333333333333333">1/32 셋잇단</option>
+            </select>
+          </label>
           <label>
             박자
             <!-- 마디 길이가 4분음표 정수 개인 것만 넣는다. 7/8·5/8 은 3.5·2.5박
@@ -75,19 +103,7 @@
               <option value="2/2">2/2</option>
             </select>
           </label>
-          <label>
-            스냅
-            <select id="snap">
-              <option value="1">1/4</option>
-              <option value="0.5" selected>1/8</option>
-              <option value="0.25">1/16</option>
-              <option value="0.125">1/32</option>
-              <option value="0.0625">1/64</option>
-              <option value="0.3333333333333333">1/8 셋잇단</option>
-              <option value="0.16666666666666666">1/16 셋잇단</option>
-              <option value="0.08333333333333333">1/32 셋잇단</option>
-            </select>
-          </label>
+          <label>마디 <input id="bars" type="number" min="1" max="64" step="1" value="4" /></label>
           <label>
             소리
             <select id="wave">
@@ -97,17 +113,81 @@
               <option value="triangle">삼각</option>
             </select>
           </label>
+          <span class="sep"></span>
+          <button id="vel-toggle" type="button" title="피아노롤 아래에 음마다 세기 막대">▮ 세기</button>
+          <button id="kb-toggle" type="button" title="실제 피아노 크기의 연주 건반">🎼 건반</button>
+          <button id="zoom-out" type="button" title="가로 축소 (두 손가락으로도 된다)">⇔－</button>
+          <button id="zoom-in" type="button" title="가로 확대">⇔＋</button>
+          <button id="keys-out" type="button" title="세로 축소 (음 칸을 낮게)">⇕－</button>
+          <button id="keys-in" type="button" title="세로 확대 (음 칸을 높게)">⇕＋</button>
         </div>
-        <div class="row" id="tracks"></div>
       </header>
 
       <canvas id="roll"></canvas>
 
+      <!-- 세기 줄. 피아노롤과 가로를 같이 쓴다 (같은 확대·같은 스크롤). -->
+      <canvas id="vel" class="hidden"></canvas>
+
+      <!-- 실제 크기 연주 건반. 흰 건반 하나가 실제 피아노처럼 2.3cm 다 (ui/calibration.ts). -->
+      <section id="kb-panel" class="hidden">
+        <div class="kb-bar">
+          <button id="kb-down" type="button" title="한 옥타브 아래">◀</button>
+          <span id="kb-range" class="pos"></span>
+          <button id="kb-up" type="button" title="한 옥타브 위">▶</button>
+          <span class="sep"></span>
+          <button id="kb-step" type="button" class="on" title="손을 떼면 누른 음을 재생 위치에 찍고 다음 칸으로">✎ 찍기</button>
+          <label>
+            한 칸
+            <select id="kb-len">
+              <option value="snap" selected>스냅만큼</option>
+              <option value="1">4분음표</option>
+              <option value="2">2분음표</option>
+              <option value="bar">한 마디</option>
+            </select>
+          </label>
+          <button id="kb-rest" type="button" title="음 없이 한 칸 넘기기">쉼표 →</button>
+          <span class="spacer"></span>
+          <button id="kb-cal" type="button" title="건반이 실제 크기인지 자로 맞추기">📏 크기</button>
+        </div>
+        <canvas id="kb"></canvas>
+      </section>
+
       <div id="status" class="hidden"></div>
 
+      <!-- 알림이 뜨면 이 줄 자리를 쓴다 (style.css). 화면을 한 줄 덜 먹는다. -->
       <footer id="hint">
-        탭=찍기 · 드래그=옮기기 · 오른쪽끝=길이 · 길게=삭제 · 두손가락=확대 · 위눈금=위치/루프
+        빈 곳 탭=찍기 · 노트 탭=꾸밈·지우기 · 끌기=옮기기 · 오른쪽 끝=길이 · 두 손가락=확대 · 위 눈금=위치/루프
       </footer>
+    </div>
+
+    <div id="cal-modal" class="hidden">
+      <div class="sheet">
+        <div class="sheet-head">
+          <b>건반 크기 맞추기</b>
+          <button id="cal-close" type="button">닫기</button>
+        </div>
+        <div class="sheet-body">
+          <p class="note">
+            아래 막대에 자를 대 보세요. <b>5cm</b> 여야 합니다. 다르면 − / ＋ 로 맞추세요.
+            맞추면 연주 건반의 흰 건반 하나가 실제 피아노처럼 2.3cm 가 됩니다.
+          </p>
+          <div class="calbar-wrap"><div id="cal-bar" class="calbar"><span>5cm</span></div></div>
+          <div class="curvefoot">
+            <button id="cal-less" type="button">− 줄이기</button>
+            <button id="cal-more" type="button">＋ 늘리기</button>
+            <i id="cal-readout"></i>
+          </div>
+          <hr />
+          <p class="note">
+            또는 화면의 <b>긴 변 실제 길이</b>를 넣어도 됩니다 (테두리 빼고 화면만).
+            처음 값은 뮤패드 K10 PLUS (10.4인치, 2000×1200) 를 계산한 22.65cm 입니다.
+          </p>
+          <div class="curvefoot">
+            <label>화면 긴 변 <input id="cal-cm" type="number" min="5" max="80" step="0.01" /> cm</label>
+            <button id="cal-reset" type="button">처음 값으로</button>
+          </div>
+        </div>
+      </div>
     </div>
 
     <div id="mixer-modal" class="hidden">

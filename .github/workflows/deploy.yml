@@ -48,6 +48,7 @@ jobs:
           npm run names
           npm run clipboard
           npm run select
+          npm run theory
           npm run audit
           npm run oto
           npm run gen-voicebank

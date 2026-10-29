@@ -13,7 +13,7 @@ import { InstrumentRegistry } from "./audio/registry";
 import { canUseSoundFont, INSECURE_HINT } from "./audio/soundfont";
 import type { Waveform } from "./audio/oscInstrument";
 import { Scheduler } from "./audio/scheduler";
-import { beatsPerBar, emptyProject, totalBeats } from "./model/project";
+import { beatsPerBar, emptyProject, makeNote, snap, sortNotes, totalBeats } from "./model/project";
 import { assignChannels } from "./model/channels";
 import type { Project } from "./model/types";
 import { PianoRoll } from "./ui/pianoroll";
@@ -24,6 +24,21 @@ import { NotePanel } from "./ui/notePanel";
 import { History } from "./history";
 import { copyNotes, copyRegion, pasteAt, lastBeat, type Clipboard } from "./model/clipboard";
 import { boxFrom, deleteSelected, selectionRange, transpose } from "./model/selection";
+import { keyChoices, keyFromValue, keyLabel, keyToValue, pcName } from "./model/scale";
+import { chordLine, identifyChord } from "./model/chord";
+import { midiToName } from "./util/music";
+import { Metronome } from "./audio/metronome";
+import { VelocityLane } from "./ui/velocityLane";
+import { PlayKeyboard } from "./ui/playKeyboard";
+import {
+  clearCalibration,
+  DEFAULT_SCREEN_CM,
+  defaultPxPerCm,
+  loadCalibration,
+  plausible,
+  saveCalibration,
+  screenLongSidePx,
+} from "./ui/calibration";
 
 const project = emptyProject();
 
@@ -33,6 +48,9 @@ const registry = new InstrumentRegistry(engine.ctx, mixer);
 const mixerState = new MixerState();
 const scheduler = new Scheduler(engine, registry, mixer, mixerState, () => project);
 const history = new History(() => project);
+// 메트로놈은 믹서를 안 거치고 마스터에 바로 간다 — 곡의 일부가 아니다 (audio/metronome.ts).
+const metronome = new Metronome(engine.ctx, engine.master);
+scheduler.metronome = metronome;
 
 const $ = <T extends HTMLElement>(id: string): T => {
   const el = document.getElementById(id);
@@ -50,6 +68,7 @@ const barsInput = $<HTMLInputElement>("bars");
 const snapSelect = $<HTMLSelectElement>("snap");
 const timeSigSelect = $<HTMLSelectElement>("timesig");
 const waveSelect = $<HTMLSelectElement>("wave");
+const keySelect = $<HTMLSelectElement>("key");
 const unlockOverlay = $<HTMLDivElement>("unlock");
 
 scheduler.loopStart = 0;
@@ -150,7 +169,7 @@ function setPlaying(on: boolean): void {
     void scheduler.prepareVoices().then(() => {
       if (scheduler.isPlaying) scheduler.invalidate();
     });
-    scheduler.play();
+    scheduler.play(undefined, { countIn: countInOn });
     playBtn.textContent = "■ 정지";
     playBtn.classList.remove("primary");
   } else {
@@ -190,6 +209,29 @@ function setLoop(on: boolean): void {
   scheduler.restart();
 }
 loopBtn.addEventListener("click", () => setLoop(!scheduler.loopEnabled));
+
+// ---------------------------------------------------------------- 메트로놈
+
+const metroBtn = $<HTMLButtonElement>("metro");
+const countInBtn = $<HTMLButtonElement>("countin");
+/**
+ * 예비박. 재생 버튼으로 시작할 때만 친다 — 재생 위치를 옮기거나 루프를 켤 때마다
+ * 나오면 곡이 툭툭 끊긴다 (audio/scheduler.ts 의 play).
+ */
+let countInOn = false;
+
+metroBtn.addEventListener("click", () => {
+  scheduler.metronomeOn = !scheduler.metronomeOn;
+  metroBtn.classList.toggle("on", scheduler.metronomeOn);
+  // 재생 중에 켜면 다음 박부터 친다. 다시 틀 필요 없다.
+  showStatus(scheduler.metronomeOn ? "박마다 틱 — 마디 첫 박은 높게 칩니다 (내보내기에는 안 들어갑니다)" : "박자 소리를 껐습니다");
+});
+
+countInBtn.addEventListener("click", () => {
+  countInOn = !countInOn;
+  countInBtn.classList.toggle("on", countInOn);
+  showStatus(countInOn ? "재생을 누르면 한 마디 예비박을 치고 시작합니다" : "예비박을 껐습니다");
+});
 
 bpmInput.addEventListener("change", () => {
   const v = Number(bpmInput.value);
@@ -238,6 +280,36 @@ timeSigSelect.addEventListener("change", () => {
       ? `${num}/${den} 박자 — 한 마디가 ${bpb}박입니다`
       : `${num}/${den} 박자 — 한 마디가 4분음표 ${bpb}개 길이입니다.` +
         " BPM 과 격자는 4분음표 기준이라 위치 표시도 4분음표로 셉니다.",
+  );
+});
+
+// ---------------------------------------------------------------------- 조
+
+for (const c of keyChoices()) {
+  const o = document.createElement("option");
+  o.value = c.value;
+  o.textContent = c.label;
+  keySelect.appendChild(o);
+}
+
+/**
+ * 조 바꾸기. **노트는 손대지 않는다** — 조는 설명이지 규칙이 아니다. 조 안의
+ * 음 줄이 밝아지고, 코드 이름에 그 조의 로마숫자가 붙을 뿐이다.
+ * 되돌리기에 넣는다. 박자표처럼 곡의 일부다.
+ */
+keySelect.addEventListener("change", () => {
+  const key = keyFromValue(keySelect.value);
+  history.begin();
+  if (key) project.key = key;
+  else delete project.key;
+  history.commit();
+  refreshHistoryButtons();
+  roll.render();
+  keyboard.render();
+  showStatus(
+    key
+      ? `${keyLabel(key)} — 조 안의 음 줄이 밝아집니다. 조 밖의 음도 그대로 찍힙니다.`
+      : "조를 정하지 않았습니다",
   );
 });
 
@@ -312,6 +384,12 @@ function applyProject(loaded: Project, { keepHistory = true } = {}): void {
   scheduler.stop();
   Object.assign(project, loaded);
   if (!keepHistory) history.clear();
+
+  // 조는 있을 때만 달린다. Object.assign 은 없는 칸을 **지우지 않으므로**, 조가 없는
+  // 상태로 되돌렸는데 조가 남아 화면이 거짓말을 한다. 직접 맞춘다.
+  if (loaded.key) project.key = { ...loaded.key };
+  else delete project.key;
+  keySelect.value = keyToValue(project.key);
 
   bpmInput.value = String(project.bpm);
   barsInput.value = String(project.bars);
@@ -576,6 +654,312 @@ $("zoom-out").addEventListener("click", () => roll.zoomBy(1 / 1.35));
 $("keys-in").addEventListener("click", () => roll.zoomKeys(1.25));
 $("keys-out").addEventListener("click", () => roll.zoomKeys(1 / 1.25));
 
+
+// ------------------------------------------------------------- 세기 줄
+
+const velCanvas = $<HTMLCanvasElement>("vel");
+const velBtn = $<HTMLButtonElement>("vel-toggle");
+const lane = new VelocityLane(velCanvas, () => project, roll, {
+  onBeforeChange: () => history.begin(),
+  onAfterChange: () => {
+    history.commit();
+    refreshHistoryButtons();
+  },
+  onEdit: () => scheduler.invalidate(),
+  onStatus: showStatus,
+});
+
+velBtn.addEventListener("click", () => {
+  const on = velCanvas.classList.toggle("hidden") === false;
+  velBtn.classList.toggle("on", on);
+  relayout();
+  if (on) showStatus("막대를 누르거나 옆으로 끌어서 세기를 바꿉니다. 고른 음이 있으면 고른 음만 바뀝니다.");
+});
+
+// ---------------------------------------------------------- 연주 건반
+
+const kbPanel = $<HTMLElement>("kb-panel");
+const kbCanvas = $<HTMLCanvasElement>("kb");
+const kbBtn = $<HTMLButtonElement>("kb-toggle");
+const kbRange = $<HTMLSpanElement>("kb-range");
+const kbStepBtn = $<HTMLButtonElement>("kb-step");
+const kbLen = $<HTMLSelectElement>("kb-len");
+const calibration = loadCalibration();
+
+/** 지금 연주 건반에 눌려 있는 음. 코드 이름은 이게 있으면 이것부터 읽는다. */
+let heldKeys: number[] = [];
+/** 손을 떼면 찍는가. 끄면 건반은 소리만 낸다 (코드 연습). */
+let stepOn = true;
+
+const keyboard = new PlayKeyboard(kbCanvas, calibration.pxPerCm, {
+  onHold: (pitch) => {
+    if (engine.isUnlocked) scheduler.keyHold(pitch, panel.activeTrack);
+  },
+  onRelease: (pitch, immediate) => scheduler.keyRelease(pitch, immediate),
+  onHeldChange: (pitches) => {
+    heldKeys = pitches;
+  },
+  onChord: (pitches) => stepInsert(pitches),
+  getKey: () => project.key ?? null,
+});
+
+/** 건반 패널 높이. 실제 cm 로 정하되 화면을 너무 먹지 않게 묶는다. */
+function sizeKeyboard(): void {
+  const want = 4.2 * keyboard.pxPerCm;
+  const h = Math.round(Math.min(Math.max(want, 110), window.innerHeight * 0.36));
+  kbCanvas.style.height = `${h}px`;
+}
+
+function refreshKbRange(): void {
+  if (kbPanel.classList.contains("hidden")) return;
+  const { low, high } = keyboard.range;
+  kbRange.textContent = `${midiToName(low)} – ${midiToName(high)}`;
+}
+
+let kbHintShown = false;
+kbBtn.addEventListener("click", () => {
+  const on = kbPanel.classList.toggle("hidden") === false;
+  kbBtn.classList.toggle("on", on);
+  if (!on) {
+    keyboard.releaseAll();
+    scheduler.keyReleaseAll();
+  }
+  sizeKeyboard();
+  relayout();
+  if (!on) return;
+  // 몇 개 들어가는지는 그려 봐야 안다. 그 다음 프레임에 말해 준다.
+  requestAnimationFrame(() => {
+    const n = keyboard.whiteCount;
+    if (n < 7) {
+      showStatus(`흰 건반이 ${n}개만 들어갑니다 — 가로로 돌리면 더 들어갑니다`, "error");
+    } else if (!calibration.custom && !kbHintShown) {
+      showStatus("건반 크기는 뮤패드 K10 PLUS 화면으로 계산했습니다. 자로 재 보고 다르면 📏 크기에서 맞추세요.");
+    } else {
+      showStatus("누르면 소리가 나고, 손을 떼면 재생 위치에 찍힙니다 (✎ 찍기를 끄면 소리만)");
+    }
+    kbHintShown = true;
+  });
+});
+
+$("kb-down").addEventListener("click", () => {
+  if (keyboard.shiftOctave(-1)) refreshKbRange();
+});
+$("kb-up").addEventListener("click", () => {
+  if (keyboard.shiftOctave(1)) refreshKbRange();
+});
+
+kbStepBtn.addEventListener("click", () => {
+  stepOn = !stepOn;
+  kbStepBtn.classList.toggle("on", stepOn);
+  showStatus(stepOn ? "손을 떼면 재생 위치에 찍고 다음 칸으로 갑니다" : "찍지 않고 소리만 냅니다 (코드 연습)");
+});
+
+/** 한 칸이 몇 박인가. */
+function stepBeats(): number {
+  const v = kbLen.value;
+  if (v === "snap") return roll.snapUnit;
+  if (v === "bar") return beatsPerBar(project);
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 ? n : roll.snapUnit;
+}
+
+/** 찍을 자리. 재생 위치를 격자에 붙인다 — 손으로 끌어 둔 헤드가 칸 사이에 있을 수 있다. */
+function stepAt(): number {
+  const pos = scheduler.positionBeats();
+  return Math.max(0, snap(pos + 1e-9, roll.snapUnit));
+}
+
+/** 곡 끝을 넘기면 마디를 늘린다 (붙여넣기와 같다). 64마디가 끝이다. */
+function growTo(endBeat: number): boolean {
+  const bpb = beatsPerBar(project);
+  const needed = Math.ceil(endBeat / bpb - 1e-9);
+  if (needed > 64) return false;
+  if (needed > project.bars) {
+    project.bars = needed;
+    barsInput.value = String(project.bars);
+  }
+  return true;
+}
+
+/**
+ * 한 칸씩 찍기 (스텝 입력).
+ *
+ * 손을 다 떼는 순간, 눌렀던 음을 **재생 위치에 한꺼번에** 찍고 헤드를 한 칸 민다.
+ * 붙여넣기에서 이미 손에 익은 흐름이다 — 다음 코드를 바로 누르면 된다.
+ *
+ * 재생하면서 치는 실시간 녹음은 일부러 안 했다. 이 앱에서 제일 고생한 게 박자
+ * 맞추기였고(사운드폰트 70.9ms, 기기마다 52~71ms), 실시간 녹음은 그 어긋남이
+ * 그대로 노트 자리로 들어간다. 한 칸씩 찍으면 어긋날 일이 없다.
+ *
+ * **같은 음이 이미 걸쳐 있는 자리는 덮지 않는다.** 같은 트랙에서 같은 음이
+ * 겹치면 앞 음의 noteOff 가 뒤 음을 끊는다 (DECISIONS.md). 건너뛰고 몇 개를
+ * 건너뛰었는지 말해 준다 — 조용히 빼먹지 않는다.
+ */
+function stepInsert(pitches: number[]): void {
+  if (!stepOn) return;
+  if (scheduler.isPlaying) {
+    showStatus("재생 중에는 찍지 않습니다 — 소리만 냅니다. 멈추면 찍힙니다.");
+    return;
+  }
+  const track = project.tracks[panel.activeTrack];
+  if (!track) return;
+  const at = stepAt();
+  const len = stepBeats();
+
+  history.begin();
+  if (!growTo(at + len)) {
+    history.commit();
+    showStatus("곡이 64마디를 넘어서 더 찍을 수 없습니다", "error");
+    return;
+  }
+  let skipped = 0;
+  for (const pitch of pitches) {
+    const clash = track.notes.some((n) => n.pitch === pitch && n.start < at + len - 1e-9 && n.start + n.length > at + 1e-9);
+    if (clash) {
+      skipped += 1;
+      continue;
+    }
+    track.notes.push(makeNote(pitch, at, len));
+  }
+  sortNotes(track);
+  scheduler.seek(at + len);
+  history.commit();
+  refreshHistoryButtons();
+  scheduler.invalidate();
+  roll.followPlayhead(scheduler.positionBeats());
+
+  const placed = pitches.length - skipped;
+  const what = chordLine(pitches, project.key) ?? pitches.map((p) => midiToName(p)).join(" ");
+  const where = formatPosition(at);
+  if (placed === 0) {
+    showStatus(`${where} 에 같은 음이 이미 있어 아무것도 안 찍었습니다 (헤드만 넘겼습니다)`, "error");
+  } else if (skipped > 0) {
+    showStatus(`${where} ${what} — 같은 음이 이미 있던 ${skipped}개는 건너뛰었습니다`);
+  } else {
+    showStatus(`${where} ${what} → 다음 칸`);
+  }
+}
+
+$("kb-rest").addEventListener("click", () => {
+  const at = stepAt();
+  const len = stepBeats();
+  if (!growTo(at + len)) {
+    showStatus("곡이 64마디를 넘어서 더 넘길 수 없습니다", "error");
+    return;
+  }
+  scheduler.seek(at + len);
+  roll.followPlayhead(scheduler.positionBeats());
+  showStatus(`쉼표 → ${formatPosition(at + len)}`);
+});
+
+// ------------------------------------------------------- 건반 크기 맞추기
+
+const calModal = $<HTMLDivElement>("cal-modal");
+const calBar = $<HTMLDivElement>("cal-bar");
+const calReadout = $<HTMLElement>("cal-readout");
+const calCm = $<HTMLInputElement>("cal-cm");
+
+function refreshCal(): void {
+  const px = keyboard.pxPerCm;
+  calBar.style.width = `${(5 * px).toFixed(1)}px`;
+  calCm.value = (screenLongSidePx() / px).toFixed(2);
+  calReadout.textContent = `1cm = ${px.toFixed(1)}px`;
+}
+
+function applyCal(px: number, { remember = true } = {}): void {
+  if (!plausible(px)) {
+    showStatus("말이 안 되는 크기입니다", "error");
+    return;
+  }
+  keyboard.pxPerCm = px;
+  calibration.pxPerCm = px;
+  calibration.custom = remember;
+  if (remember && !saveCalibration(px)) {
+    showStatus("이 브라우저는 값을 기억하지 못해 다음에 열면 처음 값으로 돌아갑니다", "error");
+  }
+  sizeKeyboard();
+  relayout();
+  refreshCal();
+}
+
+$("kb-cal").addEventListener("click", () => {
+  refreshCal();
+  calModal.classList.remove("hidden");
+});
+$("cal-close").addEventListener("click", () => calModal.classList.add("hidden"));
+calModal.addEventListener("click", (e) => {
+  if (e.target === calModal) calModal.classList.add("hidden");
+});
+$("cal-less").addEventListener("click", () => applyCal(keyboard.pxPerCm * 0.99));
+$("cal-more").addEventListener("click", () => applyCal(keyboard.pxPerCm * 1.01));
+calCm.addEventListener("change", () => {
+  const cm = Number(calCm.value);
+  if (!Number.isFinite(cm) || cm < 5 || cm > 80) {
+    showStatus("화면 길이는 5~80cm 사이로 넣어 주세요", "error");
+    refreshCal();
+    return;
+  }
+  applyCal(screenLongSidePx() / cm);
+});
+$("cal-reset").addEventListener("click", () => {
+  clearCalibration();
+  applyCal(defaultPxPerCm(DEFAULT_SCREEN_CM), { remember: false });
+  showStatus(`처음 값(뮤패드 K10 PLUS, 화면 긴 변 ${DEFAULT_SCREEN_CM}cm)으로 돌렸습니다`);
+});
+
+// ----------------------------------------------------------- 코드 이름
+
+const chordLabel = $<HTMLSpanElement>("chord");
+let lastChord = "";
+
+/**
+ * 위 줄에 띄울 코드. 무엇을 읽을지는 이 순서로 고른다.
+ *
+ *   🎹 연주 건반에 눌려 있는 음      (치는 대로 바로 보여야 연습이 된다)
+ *   ⬚  고른 음                       (찍어 둔 화음이 무엇인지 확인)
+ *   ▶  재생 위치에서 울리는 음       (작업 트랙만 — 반주와 멜로디가 섞이면 코드가 아니다)
+ *
+ * 이름을 못 붙이면 지어내지 않고 음이름만 보여 준다.
+ */
+function currentChordText(): { text: string; live: boolean } {
+  const key = project.key ?? null;
+  let pitches: number[] = [];
+  let mark = "";
+  if (heldKeys.length > 0) {
+    pitches = heldKeys;
+    mark = "🎹";
+  } else if (roll.selectedCount > 0) {
+    pitches = roll.selectedNotes().map((n) => n.pitch);
+    mark = "⬚";
+  } else {
+    const pos = scheduler.positionBeats();
+    const track = project.tracks[panel.activeTrack];
+    pitches = (track?.notes ?? []).filter((n) => n.start <= pos + 1e-6 && n.start + n.length > pos + 1e-6).map((n) => n.pitch);
+    mark = "▶";
+  }
+  if (pitches.length === 0) return { text: "—", live: false };
+  const live = heldKeys.length > 0;
+  const line = chordLine(pitches, key);
+  if (line) return { text: `${mark} ${line}`, live };
+  const names = [...new Set(pitches)].sort((a, b) => a - b).map((p) => pcName(p, key));
+  const unique = [...new Set(names)];
+  return { text: `${mark} ${unique.join(" ")}${unique.length > 1 && !identifyChord(pitches, key) ? " (이름 없음)" : ""}`, live };
+}
+
+// ------------------------------------------------------------ 화면 배치
+
+/** 패널을 켜고 끄면 피아노롤 높이가 바뀐다. 배치가 끝난 다음 프레임에 다시 잰다. */
+function relayout(): void {
+  requestAnimationFrame(() => {
+    roll.resize();
+    if (!velCanvas.classList.contains("hidden")) lane.resize();
+    if (!kbPanel.classList.contains("hidden")) {
+      keyboard.resize();
+      refreshKbRange();
+    }
+  });
+}
+
 // ---------------------------------------------------------------- 그리기 루프
 
 function formatPosition(beat: number): string {
@@ -590,8 +974,16 @@ function frame(): void {
   const pos = scheduler.positionBeats();
   if (scheduler.isPlaying) roll.followPlayhead(pos);
   roll.render();
+  if (!velCanvas.classList.contains("hidden")) lane.render();
 
-  const text = formatPosition(pos);
+  const chord = currentChordText();
+  if (chord.text !== lastChord) {
+    chordLabel.textContent = chord.text;
+    chordLabel.classList.toggle("live", chord.live);
+    lastChord = chord.text;
+  }
+
+  const text = scheduler.countingIn ? "예비박" : formatPosition(pos);
   if (text !== lastPos) {
     posLabel.textContent = text;
     lastPos = text;
@@ -599,7 +991,10 @@ function frame(): void {
   requestAnimationFrame(frame);
 }
 
-const resize = (): void => roll.resize();
+const resize = (): void => {
+  sizeKeyboard();
+  relayout();
+};
 window.addEventListener("resize", resize);
 window.addEventListener("orientationchange", () => setTimeout(resize, 150));
 // 폰에서 주소창이 접히면 높이가 바뀐다. 레이아웃이 잡힌 다음 한 번 더 맞춘다.
@@ -609,7 +1004,10 @@ requestAnimationFrame(frame);
 
 // 개발 중 콘솔에서 상태를 들여다보기 위한 창구. 빌드하면 사라진다.
 if (import.meta.env.DEV) {
-  (window as unknown as Record<string, unknown>).__app = { project, scheduler, roll, engine, registry, panel, mixer, mixerState, history };
+  (window as unknown as Record<string, unknown>).__app = {
+    project, scheduler, roll, engine, registry, panel, mixer, mixerState, history,
+    keyboard, lane, metronome, calibration,
+  };
 }
 
 
@@ -648,7 +1046,7 @@ window.addEventListener("keydown", (e) => {
     return;
   }
   if (e.key === "Escape") {
-    for (const id of ["preset-modal", "export-modal", "mixer-modal", "map-modal", "note-modal"]) {
+    for (const id of ["preset-modal", "export-modal", "mixer-modal", "map-modal", "note-modal", "cal-modal"]) {
       document.getElementById(id)?.classList.add("hidden");
     }
     roll.clearSelection();

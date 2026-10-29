@@ -50,6 +50,9 @@ export const C = {
   bg: "#12141a",
   rowWhite: "#181b22",
   rowBlack: "#14161c",
+  // 조를 정했을 때: 조 밖의 음 줄은 더 어둡게, 으뜸음 줄은 살짝 물들인다.
+  rowOut: "#111318",
+  rowTonic: "#1a2a2b",
   lineSub: "#20242e",
   lineBeat: "#2b3140",
   lineBar: "#454e63",

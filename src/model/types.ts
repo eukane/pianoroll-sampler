@@ -13,6 +13,7 @@
  */
 
 import type { CurvePoint, Ornament } from "./ornament";
+import type { Key } from "./scale";
 
 export type Note = {
   id: string;
@@ -101,4 +102,12 @@ export type Project = {
   bars: number;
   timeSig: [number, number]; // 기본 [4, 4]
   tracks: Track[];
+  /**
+   * 곡의 조. 없으면 정하지 않은 것이다.
+   *
+   * **설명이지 규칙이 아니다.** 노트를 막지도 옮기지도 않는다 — 화면이 조 안의
+   * 음을 밝게 보여 주고, 코드 이름을 그 조의 로마숫자로 읽어 줄 뿐이다.
+   * 자세한 건 model/scale.ts.
+   */
+  key?: Key;
 };

@@ -209,6 +209,8 @@ export function minorSong(): Project {
     bpm: 132,
     bars: BARS,
     timeSig: [4, 4],
+    // E 자연단음계 (위 설명). Em-C-G-D 가 i-VI-III-VII 로 읽힌다.
+    key: { tonic: 4, mode: "minor" },
     tracks: [
       track("선율", packPresetId(0, STRINGS), melodyNotes(), 0.82, 0, 0.35),
       track("아르페지오", packPresetId(0, PIANO), arpNotes(), 0.6, -0.2, 0.2),

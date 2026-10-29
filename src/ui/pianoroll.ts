@@ -22,6 +22,7 @@ import type { Note, Project } from "../model/types";
 import { boxFrom, notesInBox, pruneSelection, type SelectBox } from "../model/selection";
 import { beatsPerBar, makeNote, snap, snapFloor, sortNotes, totalBeats } from "../model/project";
 import { clampPitch, isBlackKey, isC, midiToName } from "../util/music";
+import { inKey, isTonic } from "../model/scale";
 import {
   amountOf,
   atOf,
@@ -244,13 +245,31 @@ export class PianoRoll {
     this.drawRuler(bpb);
   }
 
+  /**
+   * 음 줄 바탕.
+   *
+   * 조를 정했으면 **조 안의 일곱 음 줄을 밝게**, 나머지를 어둡게, 으뜸음 줄은 살짝
+   * 물들인다 (FL·Ableton 의 스케일 표시). 막지는 않는다 — 어두운 줄에도 그대로
+   * 찍힌다. 조는 규칙이 아니라 설명이다 (model/scale.ts).
+   *
+   * 조가 없으면 예전처럼 흰 건반 줄 / 검은 건반 줄로 칠한다.
+   */
   private drawRows(): void {
     const g = this.ctx2d;
+    const key = this.getProject().key;
     const first = Math.max(0, this.yToPitch(this.height) - 1);
     const last = Math.min(127, this.yToPitch(RULER) + 1);
     for (let p = first; p <= last; p += 1) {
       const y = this.pitchToY(p);
-      g.fillStyle = isBlackKey(p) ? C.rowBlack : C.rowWhite;
+      g.fillStyle = key
+        ? isTonic(p, key)
+          ? C.rowTonic
+          : inKey(p, key)
+            ? C.rowWhite
+            : C.rowOut
+        : isBlackKey(p)
+          ? C.rowBlack
+          : C.rowWhite;
       g.fillRect(GUTTER, y, this.width - GUTTER, this.keyHeight);
       if (isC(p)) {
         g.fillStyle = C.lineBeat;
@@ -525,6 +544,7 @@ export class PianoRoll {
 
   private drawKeyboard(): void {
     const g = this.ctx2d;
+    const key = this.getProject().key;
     g.fillStyle = C.ruler;
     g.fillRect(0, RULER, GUTTER, this.height - RULER);
 
@@ -546,6 +566,14 @@ export class PianoRoll {
         g.textAlign = "right";
         g.fillText(midiToName(p), GUTTER - 4, y + this.keyHeight / 2);
         g.textAlign = "left";
+      }
+      // 조를 정했으면 건반 왼쪽 끝에 표시: 조 안의 음은 초록 점, 으뜸음은 노란 점.
+      // 오른쪽 끝은 「C4」 글자 자리라 피한다.
+      if (key && inKey(p, key)) {
+        g.fillStyle = isTonic(p, key) ? C.noteActive : C.note;
+        g.beginPath();
+        g.arc(7, y + this.keyHeight / 2, Math.min(3, this.keyHeight / 4), 0, Math.PI * 2);
+        g.fill();
       }
     }
     g.fillStyle = C.keyLine;
@@ -608,6 +636,20 @@ export class PianoRoll {
     g.restore();
     g.fillStyle = C.keyLine;
     g.fillRect(0, RULER - 1, this.width, 1);
+  }
+
+  // ------------------------------------------------------- 옆 줄이 쓰는 좌표
+
+  /**
+   * 박 → 화면 x. 세기 줄이 **같은 가로**를 쓰려고 묻는다. 따로 계산하면 확대나
+   * 스크롤이 바뀔 때 막대가 음 아래에서 어긋난다.
+   */
+  xOfBeat(beat: number): number {
+    return this.beatToX(beat);
+  }
+
+  isSelected(id: string): boolean {
+    return this.selected.has(id);
   }
 
   // ------------------------------------------------------------ 고르기

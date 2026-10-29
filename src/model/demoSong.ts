@@ -204,6 +204,8 @@ export function demoSong(): Project {
     bpm: 100,
     bars: BARS,
     timeSig: [4, 4],
+    // D 장조 5음계만 쓴다 (위 설명). 조를 달아 두면 조 안의 음 줄이 밝게 보인다.
+    key: { tonic: 2, mode: "major" },
     tracks: [
       // 이름은 사운드폰트를 넣는 순간 그 악기 이름으로 바뀐다(resnapTracks).
       // 그래서 이름에 안내를 넣지 않는다 — 사라질 자리에 적어 두면 거짓말이 된다.

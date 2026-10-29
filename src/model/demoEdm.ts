@@ -240,6 +240,8 @@ export function edmSong(): Project {
     bpm: 128,
     bars: BARS,
     timeSig: [4, 4],
+    // Am-F-C-G — A 단조 (i-VI-III-VII). 코드 이름 칸에 그 로마숫자가 뜬다.
+    key: { tonic: 9, mode: "minor" },
     tracks: [
       track("리드", packPresetId(0, LEAD_SAW), leadNotes(), 0.8, 0, 0.2, 0.35),
       track("아르페지오", packPresetId(0, PLUCK), arpNotes(), 0.5, -0.3, 0.25),

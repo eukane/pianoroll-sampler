@@ -20,6 +20,7 @@ import {
   type CurvePoint,
   type Ornament,
 } from "../model/ornament.ts";
+import { readKey } from "../model/scale.ts";
 
 export const FILE_VERSION = 1;
 
@@ -43,12 +44,17 @@ export function projectFromJson(text: string): Project {
 
   const tracks = (data.tracks as unknown[]).slice(0, MAX_TRACKS).map((t, i) => readTrack(t, i));
 
-  return {
+  const project: Project = {
     bpm: clamp(num(data.bpm, 100), 20, 300),
     bars: Math.round(clamp(num(data.bars, 4), 1, 64)),
     timeSig: readTimeSig(data.timeSig),
     tracks: tracks.length > 0 ? tracks : [emptyTrack()],
   };
+  // 조는 **있을 때만** 단다. 이상한 값이면 조를 정하지 않은 곡으로 연다 —
+  // 엉뚱한 조를 칠해 보여 주느니 안 보여 주는 게 낫다.
+  const key = readKey(data.key);
+  if (key) project.key = key;
+  return project;
 }
 
 function readTrack(raw: unknown, index: number): Track {
