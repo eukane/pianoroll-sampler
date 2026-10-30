@@ -3155,6 +3155,51 @@ check("예제 안의 그린 곡선이 실제로 부풀었다 돌아온다",
   check("쉼표는 음 없이 한 칸 넘긴다",
     (await tp.evaluate(() => window.__app.scheduler.positionBeats())) === 12);
 
+  // ---- 방금 것 물리기 (↶ 방금 것) ----
+  // 쉼표 → 코드 순으로 거꾸로 물러야 하고, 노트만이 아니라 재생 위치도 같이 돌아와야 한다.
+  const kbUndoOn = await tp.evaluate(() => !document.getElementById("kb-undo").disabled);
+  check("찍은 게 있으면 「방금 것」 버튼이 켜져 있다", kbUndoOn);
+  const notesN0 = await tp.evaluate(() => window.__app.project.tracks[0].notes.length);
+  await tp.click("#kb-undo");
+  const u1 = await tp.evaluate(() => ({
+    head: window.__app.scheduler.positionBeats(),
+    n: window.__app.project.tracks[0].notes.length,
+  }));
+  check("쉼표를 먼저 물린다 — 재생 위치만 한 칸 돌아오고 노트는 그대로", u1.head === 8 && u1.n === notesN0, u1);
+  await tp.click("#kb-undo");
+  const u2 = await tp.evaluate(() => ({
+    head: window.__app.scheduler.positionBeats(),
+    n: window.__app.project.tracks[0].notes.length,
+    left: window.__app.project.tracks[0].notes.filter((n) => n.start === 4).length,
+    status: document.getElementById("status").textContent,
+  }));
+  check("다음엔 그 코드 세 음만 지우고 재생 위치가 그 칸 앞(4박)으로 돌아온다",
+    u2.n === notesN0 - 3 && u2.left === 0 && u2.head === 4 && u2.status.includes("3음"), u2);
+  const canRedoUndo = await tp.evaluate(() => window.__app.history.canUndo);
+  check("방금 것 물리기도 툴바 되돌리기 기록에 남는다", canRedoUndo);
+  // 같은 자리에 다시 쳐서 틀린 코드를 고치는 흐름
+  await touch("touchStart", [[keyX(3), lowY], [keyX(5), lowY], [keyX(7), lowY]]);
+  await tp.waitForTimeout(60);
+  await touch("touchEnd", []);
+  await tp.waitForTimeout(80);
+  const redo = await tp.evaluate(() => ({
+    notes: window.__app.project.tracks[0].notes.filter((n) => n.start === 4).map((n) => n.pitch).sort(),
+    head: window.__app.scheduler.positionBeats(),
+  }));
+  check("물린 자리에 다시 치면 그 자리에 찍힌다", redo.notes.join() === "65,69,72" && redo.head === 8, redo);
+  // 툴바 되돌리기를 쓰면 기록이 비어 id 가 어긋나지 않는다
+  await tp.click("#undo");
+  await tp.waitForTimeout(100);
+  const emptied = await tp.evaluate(() => document.getElementById("kb-undo").disabled);
+  check("툴바 되돌리기를 쓰면 「방금 것」 기록은 비워진다 (낡은 기록으로 엉뚱한 음을 안 지운다)", emptied);
+  // 이후 검사가 원래 상태를 전제하므로 되돌려 놓는다 (한 마디 코드 + 쉼표)
+  await tp.evaluate(() => window.__app.scheduler.seek(4));
+  await touch("touchStart", [[keyX(3), lowY], [keyX(5), lowY], [keyX(7), lowY]]);
+  await tp.waitForTimeout(60);
+  await touch("touchEnd", []);
+  await tp.waitForTimeout(80);
+  await tp.click("#kb-rest");
+
   // ---- 곡 끝을 넘기면 마디가 늘어난다 ----
   await touch("touchStart", [G4]);
   await tp.waitForTimeout(60);

@@ -48,6 +48,7 @@ const registry = new InstrumentRegistry(engine.ctx, mixer);
 const mixerState = new MixerState();
 const scheduler = new Scheduler(engine, registry, mixer, mixerState, () => project);
 const history = new History(() => project);
+
 // 메트로놈은 믹서를 안 거치고 마스터에 바로 간다 — 곡의 일부가 아니다 (audio/metronome.ts).
 const metronome = new Metronome(engine.ctx, engine.master);
 scheduler.metronome = metronome;
@@ -57,6 +58,14 @@ const $ = <T extends HTMLElement>(id: string): T => {
   if (!el) throw new Error(`#${id} 를 찾을 수 없습니다`);
   return el as T;
 };
+
+// 건반 찍기 되감기 기록 (설명은 stepInsert 근처). applyProject 가 먼저 불릴 수 있어 위에 둔다.
+type StepEntry = { track: number; at: number; ids: string[] };
+const stepLog: StepEntry[] = [];
+const kbUndoBtn = $<HTMLButtonElement>("kb-undo");
+function refreshStepUndo(): void {
+  kbUndoBtn.disabled = stepLog.length === 0;
+}
 
 const canvas = $<HTMLCanvasElement>("roll");
 const rewindBtn = $<HTMLButtonElement>("rewind");
@@ -382,6 +391,9 @@ function refreshHistoryButtons(): void {
 /** 되돌린 결과를 화면 전체에 반영한다. */
 function applyProject(loaded: Project, { keepHistory = true } = {}): void {
   scheduler.stop();
+  // 프로젝트가 통째로 바뀌면 건반 기록의 id 가 더는 맞지 않는다.
+  stepLog.length = 0;
+  refreshStepUndo();
   Object.assign(project, loaded);
   if (!keepHistory) history.clear();
 
@@ -769,6 +781,14 @@ function stepAt(): number {
   return Math.max(0, snap(pos + 1e-9, roll.snapUnit));
 }
 
+/**
+ * 건반으로 찍은 칸을 되감는 기록. 코드를 한 번 찍을 때마다(쉼표도) 한 줄 쌓인다.
+ *
+ * 툴바의 ↶ 는 모든 편집을 되돌리지만 재생 위치는 안 돌려준다. 틀린 코드를 지우고
+ * 같은 자리에 다시 치려면 헤드도 한 칸 돌아와야 해서 따로 둔다. 노트는 **id 로**
+ * 찾아 지운다 — 되돌리기·다시 실행·파일 열기가 프로젝트를 통째로 갈아 끼우면
+ * 객체 참조가 끊기기 때문이다. 그런 일이 생기면 기록을 비운다 (applyProject).
+ */
 /** 곡 끝을 넘기면 마디를 늘린다 (붙여넣기와 같다). 64마디가 끝이다. */
 function growTo(endBeat: number): boolean {
   const bpb = beatsPerBar(project);
@@ -813,15 +833,20 @@ function stepInsert(pitches: number[]): void {
     return;
   }
   let skipped = 0;
+  const placedIds: string[] = [];
   for (const pitch of pitches) {
     const clash = track.notes.some((n) => n.pitch === pitch && n.start < at + len - 1e-9 && n.start + n.length > at + 1e-9);
     if (clash) {
       skipped += 1;
       continue;
     }
-    track.notes.push(makeNote(pitch, at, len));
+    const note = makeNote(pitch, at, len);
+    placedIds.push(note.id);
+    track.notes.push(note);
   }
   sortNotes(track);
+  stepLog.push({ track: panel.activeTrack, at, ids: placedIds });
+  refreshStepUndo();
   scheduler.seek(at + len);
   history.commit();
   refreshHistoryButtons();
@@ -847,9 +872,39 @@ $("kb-rest").addEventListener("click", () => {
     showStatus("곡이 64마디를 넘어서 더 넘길 수 없습니다", "error");
     return;
   }
+  stepLog.push({ track: panel.activeTrack, at, ids: [] });
+  refreshStepUndo();
   scheduler.seek(at + len);
   roll.followPlayhead(scheduler.positionBeats());
   showStatus(`쉼표 → ${formatPosition(at + len)}`);
+});
+
+kbUndoBtn.addEventListener("click", () => {
+  const last = stepLog.pop();
+  refreshStepUndo();
+  if (!last) return;
+  if (scheduler.isPlaying) scheduler.stop();
+  let removed = 0;
+  if (last.ids.length > 0) {
+    const track = project.tracks[last.track];
+    if (track) {
+      const gone = new Set(last.ids);
+      history.begin();
+      const before = track.notes.length;
+      track.notes = track.notes.filter((n) => !gone.has(n.id));
+      removed = before - track.notes.length;
+      history.commit();
+      roll.syncSelection();
+      refreshHistoryButtons();
+      scheduler.invalidate();
+    }
+  }
+  scheduler.seek(last.at);
+  roll.followPlayhead(scheduler.positionBeats());
+  const where = formatPosition(last.at);
+  if (last.ids.length === 0) showStatus(`쉼표를 물렸습니다 → ${where}`);
+  else if (removed === 0) showStatus(`${where} 로 돌아왔습니다 (그 음들은 이미 지워져 있었습니다)`);
+  else showStatus(`${where} 코드 ${removed}음을 지웠습니다 → 같은 자리에 다시 치세요`);
 });
 
 // ------------------------------------------------------- 건반 크기 맞추기
