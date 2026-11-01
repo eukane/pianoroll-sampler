@@ -152,7 +152,7 @@ export class EarTraining {
     this.tonicBtn.addEventListener("click", () => this.playTonic());
     this.backBtn.addEventListener("click", () => this.back());
     this.submitBtn.addEventListener("click", () => this.submit());
-    this.revealBtn.addEventListener("click", () => this.replay());
+    this.revealBtn.addEventListener("click", () => this.replay(true));
     this.reviewBtn.addEventListener("click", () => this.review());
     this.resetBtn.addEventListener("click", () => this.resetStats());
     window.addEventListener("keydown", (e) => this.onKey(e));
@@ -258,7 +258,9 @@ export class EarTraining {
         ? "코드 하나가 나옵니다. 어떤 종류인지 고르세요. 아래 버튼은 누르면 그 종류의 소리가 나요 — 먼저 눌러서 소리를 익히고, 문제와 비교해 보세요."
         : this.level.kind === "named"
           ? "진행을 듣고 어떤 정석 진행인지 고르세요. 으뜸 코드(I)를 먼저 들려주고 진행이 나옵니다."
-          : "으뜸 코드(I)를 먼저 들려주고 진행이 나옵니다. 코드가 나온 순서대로 몇 도인지 누르세요. 버튼을 누르면 그 코드 소리가 나니 비교해 보세요.";
+          : this.level.bassOnly
+            ? "으뜸 코드(I)를 먼저 들려주고, 이어서 **베이스 음만** 하나씩 나옵니다 (코드의 맨 아래 음). 그 음이 몇 도 코드의 베이스인지 순서대로 누르세요. 버튼을 누르면 그 코드 소리가 나니 비교해 보세요. 정답을 맞힌 뒤 「정답 들려주기」로 코드로도 들어 보세요."
+            : "으뜸 코드(I)를 먼저 들려주고 진행이 나옵니다. 코드가 나온 순서대로 몇 도인지 누르세요. 버튼을 누르면 그 코드 소리가 나니 비교해 보세요.";
     this.renderLessonHint();
     this.render();
     this.renderScore();
@@ -316,8 +318,8 @@ export class EarTraining {
     this.render(g.marks);
     this.renderScore();
     this.renderStats();
-    // 정답을 바로 한 번 들려준다. 틀렸을 때 「아, 이 소리구나」 가 제일 잘 남는다.
-    this.replay();
+    // 정답을 바로 한 번 들려준다. 틀렸을 때 「아, 이 소리구나」 가 제일 잘 남는다. (베이스 단계는 이제 코드째로)
+    this.replay(true);
   }
 
   /** 틀린 문제 중 가장 오래된 것부터. 맞힐 때까지 목록에 남는다. */
@@ -408,8 +410,8 @@ export class EarTraining {
   }
 
   /** 코드 하나를 ms 동안. 베이스(근음 한 옥타브 아래)를 얹어 코드 사이 이동이 또렷하게 들린다. */
-  private chordAt(startMs: number, pitches: number[], lenMs: number): void {
-    const all = [pitches[0] - 12, ...pitches];
+  private chordAt(startMs: number, pitches: number[], lenMs: number, bassOnly = false): void {
+    const all = bassOnly ? [pitches[0] - 12] : [pitches[0] - 12, ...pitches];
     this.at(startMs, () => {
       for (const p of all) {
         this.deps.hold(p);
@@ -444,7 +446,7 @@ export class EarTraining {
   }
 
   /** 으뜸 코드 → 쉼 → 진행. */
-  private replay(): void {
+  private replay(full = false): void {
     const q = this.question;
     if (!q || !this.ensureUnlocked()) return;
     this.silence();
@@ -456,8 +458,9 @@ export class EarTraining {
       t = TONIC_MS + GAP_AFTER_TONIC;
     }
     const len = q.quality ? QUALITY_MS : CHORD_MS;
+    const bassOnly = !full && levelById(q.level)?.bassOnly === true;
     for (const c of chords) {
-      this.chordAt(t, c, len);
+      this.chordAt(t, c, len, bassOnly);
       t += len;
     }
   }

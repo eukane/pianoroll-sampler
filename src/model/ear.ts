@@ -36,6 +36,11 @@ export type Level = {
   pool: number[];
   /** degrees: 코드 개수 */
   length: number;
+  /**
+   * degrees: 코드 대신 **베이스 음(근음 한 옥타브 아래) 하나씩만** 들려준다. 으뜸 코드(I)는 기준으로 그대로 들려준다.
+   * 코드 위의 화음 없이 맨 아래 음만으로 도수를 알아듣는 훈련 — 곡에서 베이스라인을 따는 데 쓴다.
+   */
+  bassOnly?: boolean;
   /** degrees: 같은 코드가 연달아 나와도 되는가 (I 와 V 둘뿐이라 금지하면 문제가 두 가지밖에 안 나온다) */
   allowRepeat?: boolean;
   /** named: 후보 진행 id */
@@ -85,14 +90,17 @@ export const LEVELS: readonly Level[] = [
   },
   // ---- 2회차: 2-5-1 — 귀 훈련 「I 와 V 구분」
   { id: "E2", label: "I 와 V 구분 (장조, 4코드)", lesson: 2, mode: "major", kind: "degrees", pool: [0, 4], length: 4, allowRepeat: true },
+  { id: "B1", label: "베이스 음만 듣기: I · IV · V · vi (장조, 3음)", lesson: 2, mode: "major", kind: "degrees", pool: [0, 3, 4, 5], length: 3, bassOnly: true },
   // ---- 3회차: 7화음 — 귀 훈련 「장/단 코드 구분」
   { id: "Q3", label: "7화음 종류: maj7 · m7 · 7 구분", lesson: 3, mode: "major", kind: "quality", pool: [], length: 0, choices: ["maj7", "m7", "dom7"] },
+  { id: "B2", label: "베이스 음만 듣기: 일곱 도수 (장조, 4음)", lesson: 3, mode: "major", kind: "degrees", pool: [0, 1, 2, 3, 4, 5, 6], length: 4, bassOnly: true },
   // ---- 4회차: 단조
   { id: "L4", label: "단조 i III iv v VI VII (4코드)", lesson: 4, mode: "minor", kind: "degrees", pool: [0, 2, 3, 4, 5, 6], length: 4 },
   {
     id: "N2", label: "정석 진행 이름 맞히기 (단조)", lesson: 4, mode: "minor", kind: "named", pool: [], length: 0,
     names: ["m-flat", "m-andalus", "m-iv", "m-251"],
   },
+  { id: "B3", label: "베이스 음만 듣기: 단조 (4음)", lesson: 4, mode: "minor", kind: "degrees", pool: [0, 2, 3, 4, 5, 6], length: 4, bassOnly: true },
   // ---- 5회차 이후는 노트에 귀 훈련 내용이 따로 적혀 있지 않다. 그 회차의 만들기·이론에서 바뀐 코드를
   //      「귀로 구별하기」 로 옮긴 것이다 (추천일 뿐이다).
   { id: "N3", label: "왕도의 iii 와 III · III7 구분 (장조)", lesson: 5, mode: "major", kind: "named", pool: [], length: 0, names: ["oudou", "oudou-III", "oudou-III7"] },

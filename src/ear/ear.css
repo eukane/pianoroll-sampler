@@ -389,3 +389,16 @@ body.ear-page {
     overflow: visible;
   }
 }
+
+/* ---- 탭 · 키 옮기기 퀴즈 · 백업 */
+.ear-tabs { display: inline-flex; gap: 4px; margin-left: 8px; }
+.ear-tabs button[aria-pressed="true"] { background: var(--accent); color: #0b1512; border-color: var(--accent); }
+body.tq-mode #ear-play-pane { display: none; }
+body.tq-mode #tq-pane { display: block; }
+#tq-pane { min-height: 0; overflow-y: auto; }
+.tq-prompt { font-size: 18px; line-height: 1.6; margin: 10px 0; }
+.tq-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.tq-opt { padding: 14px 10px; font-size: 17px; text-align: left; }
+.tq-opt.right { background: #17302b; border-color: var(--accent); }
+.tq-opt.wrong { background: #3a2126; border-color: #e0605a; }
+.ear-backup .ear-play { margin-top: 6px; }

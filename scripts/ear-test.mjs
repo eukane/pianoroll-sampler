@@ -51,7 +51,7 @@ const slotTexts = () => page.$$eval("#ear-slots .ear-slot", (s) => s.map((x) => 
 
 check("귀 훈련 페이지가 열린다 (제목 · 피아노롤 버튼)", (await page.title()) === "귀 훈련" && await page.isVisible("#ear-exit"));
 const levels = await page.$$eval("#ear-level option", (o) => o.map((x) => x.value));
-check("처음엔 전부 보인다 (기본 「7회차까지」) — 회차 순으로 열세 단계", levels.join() === "L1,L2,L3,Q1,Q2,N1,E2,Q3,L4,N2,N3,N4,N5", levels);
+check("처음엔 전부 보인다 (기본 「7회차까지」) — 회차 순으로 열여섯 단계", levels.join() === "L1,L2,L3,Q1,Q2,N1,E2,B1,Q3,B2,L4,N2,B3,N3,N4,N5", levels);
 check("단계 목록은 회차별로 묶여 있다 (optgroup 7개)", (await page.$$("#ear-level optgroup")).length === 7);
 check("음원이 없으면 악기 고르기는 숨겨져 있다 (임시 신스뿐)", await page.evaluate(() => document.getElementById("ear-inst").classList.contains("hidden")));
 check("처음엔 문제가 없어 「다시 듣기」 · 「확인」 이 꺼져 있다",
@@ -359,6 +359,46 @@ await direct.tap("#ear-exit");
 await direct.waitForURL((u) => !u.pathname.endsWith("ear.html"), { timeout: 3000 }).catch(() => {});
 check("직접 연 창이면 같은 창에서 피아노롤 페이지로 간다", !direct.url().endsWith("ear.html") && (await direct.$("#roll")) !== null, direct.url());
 await direct.close();
+
+// =============================================================== D. 베이스 단계 · 키 옮기기 · 백업
+await page.selectOption("#ear-level", "B1");
+check("베이스 단계 안내가 뜬다", (await text("#ear-guide")).includes("베이스 음만"), await text("#ear-guide"));
+await page.tap("#ear-new");
+const sizes = new Set();
+for (let i = 0; i < 150; i += 1) { sizes.add(await page.evaluate(() => window.__ear.scheduler.keyHolds.size)); await page.waitForTimeout(40); }
+check("베이스 단계: 으뜸 코드는 화음(4음)으로, 이어지는 문제는 베이스 한 음씩 난다", sizes.has(4) && sizes.has(1) && ![...sizes].some((n) => n === 2 || n === 3), [...sizes]);
+
+await page.evaluate(() => document.getElementById("ear-tab-transpose").click());
+check("키 옮기기 탭: 듣기 화면이 숨고 퀴즈가 보인다", await page.isVisible("#tq-pane") && !(await page.isVisible("#ear-play-pane")) && !(await page.isVisible("#ear-stats")));
+await page.evaluate(() => document.getElementById("tq-new").click());
+check("문제가 나오고 보기가 네 개", (await text("#tq-prompt")).includes("옮기면") && (await page.$$("#tq-options button")).length === 4, await text("#tq-prompt"));
+const tq1 = await page.evaluate(() => JSON.parse(JSON.stringify(window.__ear.quiz.question)));
+await page.evaluate((i) => document.querySelectorAll("#tq-options button")[i].click(), tq1.options.indexOf(tq1.answer));
+check("정답을 고르면 정답 표시 · 풀이 · 정답 소리", (await text("#tq-result")).startsWith("정답!") && (await text("#tq-result")).includes("반음"), await text("#tq-result"));
+await page.waitForTimeout(200);
+check("정답 진행 소리가 난다", (await page.evaluate(() => window.__ear.scheduler.keyHolds.size)) > 0);
+await page.evaluate(() => document.getElementById("tq-new").click());
+const tq2 = await page.evaluate(() => JSON.parse(JSON.stringify(window.__ear.quiz.question)));
+await page.evaluate((i) => document.querySelectorAll("#tq-options button")[i].click(), (tq2.options.indexOf(tq2.answer) + 1) % 4);
+check("오답이면 아쉬워요 · 기록은 2번 중 1번", (await text("#tq-result")).startsWith("아쉬워요") && (await text("#tq-score")).includes("1/2"), [await text("#tq-result"), await text("#tq-score")]);
+check("퀴즈 기록이 저장된다", await page.evaluate(() => JSON.parse(localStorage.getItem("pianoroll.transpose")).total === 2));
+await page.evaluate(() => document.getElementById("ear-tab-listen").click());
+check("듣기 탭으로 돌아오면 원래대로", await page.isVisible("#ear-play-pane") && !(await page.isVisible("#tq-pane")));
+
+const [dl] = await Promise.all([page.waitForEvent("download"), page.evaluate(() => document.getElementById("ear-export").click())]);
+const bakText = await (await import("node:fs/promises")).readFile(await dl.path(), "utf8");
+const bak = JSON.parse(bakText);
+check("내보내기: 백업 파일에 귀 훈련·퀴즈 기록이 들어 있다", bak.app === "pianoroll-sampler" && bak.ear && bak.transpose?.total === 2 && /^pianoroll-backup-\d{4}-\d{2}-\d{2}\.json$/.test(dl.suggestedFilename()), dl.suggestedFilename());
+page.once("dialog", (d) => d.accept());
+await page.setInputFiles("#ear-import-file", { name: "b.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify({ app: "pianoroll-sampler", version: 1, ear: { lesson: 3 } })) });
+await page.waitForLoadState("load");
+await page.waitForFunction(() => document.getElementById("ear-lesson")?.value === "3", null, { timeout: 8000 }).catch(() => {});
+check("불러오기: 확인 후 새로고침되고 3회차로 바뀐다", (await page.inputValue("#ear-lesson")) === "3", await page.inputValue("#ear-lesson"));
+await page.tap("#unlock").catch(() => {});
+page.once("dialog", (d) => d.dismiss());
+await page.setInputFiles("#ear-import-file", { name: "x.json", mimeType: "application/json", buffer: Buffer.from("not json") });
+await page.waitForTimeout(300);
+check("엉뚱한 파일은 거절하고 알려 준다", (await text("#status")).includes("JSON"), await text("#status"));
 
 // =============================================================== C. 저장해 둔 음원을 여기서도 쓴다
 const ctx2 = await newCtx();

@@ -11,6 +11,8 @@ import {
   inKey, isTonic, keyChoices, keyFromValue, keyLabel, keyToValue, pcName, readKey,
   scalePitchClasses,
 } from "../src/model/scale.ts";
+import { chordNames, explainTranspose, gradeTranspose, makeTransposeQuestion, recordTranspose, sanitizeTransposeStore, emptyTransposeStore, TRANSPOSE_PROGS } from "../src/model/transpose.ts";
+import { applyBackup, makeBackup, parseBackup } from "../src/model/backup.ts";
 import { parseChordSymbol, splitCell } from "../src/model/chordSymbol.ts";
 import {
   barIndexAt as copyBarIndexAt, cellAt, defaultState as copyDefault, loopFromBar, positionLabel, sanitizeState as copySanitize, shiftLoop, tapTempo, storageKey,
@@ -471,9 +473,9 @@ for (const d of DEMOS) {
   ok("1회차까지: 단조 · 7화음 · I-V 구분 · 5~7회차 단계는 아직 없다",
     visibleLevels(1).map((l) => l.id).join() === "L1,L2,L3,Q1,Q2,N1", visibleLevels(1).map((l) => l.id));
   ok("2회차에 E2, 3회차에 Q3, 4회차에 단조(L4 · N2), 5·6·7회차에 N3 · N4 · N5 가 열린다",
-    levelsForLesson(2).map((l) => l.id).join() === "L1,L2,L3,Q1,Q2,N1,E2" &&
+    levelsForLesson(2).map((l) => l.id).join() === "L1,L2,L3,Q1,Q2,N1,E2,B1" &&
     levelsForLesson(3).map((l) => l.id).includes("Q3") && !levelsForLesson(2).some((l) => l.id === "Q3") &&
-    levelsForLesson(4).filter((l) => l.mode === "minor").map((l) => l.id).join() === "L4,N2" &&
+    levelsForLesson(4).filter((l) => l.mode === "minor").map((l) => l.id).join() === "L4,N2,B3" &&
     ["N3", "N4", "N5"].every((id, i) => levelById(id).lesson === 5 + i));
   ok("단계는 회차 순으로 나열돼 있다 (선택 목록이 회차별로 묶이게)", LEVELS.every((l, i) => i === 0 || LEVELS[i - 1].lesson <= l.lesson));
   ok("7회차까지면 전부, 이상한 값은 7 로", visibleLevels(7).length === LEVELS.length && clampLesson(0) === 7 && clampLesson("3") === 7 && clampLesson(8) === 7 && clampLesson(3) === 3);
@@ -718,6 +720,50 @@ for (const d of DEMOS) {
     dirty.bpm === 300 && dirty.beatsPerBar === 12 && dirty.offset === 0 && dirty.speed === 0.75 && dirty.loop === null && dirty.loopOn === false &&
     dirty.markers.length === 1 && dirty.markers[0].t === 3 && dirty.cells[0] === "Am" && dirty.cells[1] === "" && dirty.cells[2].length === 40 && dirty.cells.length >= 8 && dirty.key === undefined && dirty.overlay === true, dirty);
   ok("쓰레기 전체가 와도 기본값", JSON.stringify(copySanitize("zzz")) === JSON.stringify(copyDefault()) && copySanitize(null).bpm === 100);
+}
+
+// ------------------------------------------------------------ 베이스 단계 · 키 옮기기 · 백업
+{
+  const B = ["B1", "B2", "B3"].map((id) => LEVELS.find((l) => l.id === id));
+  ok("베이스 단계 셋: 도수 단계이고 bassOnly, 회차 2·3·4", B.every((l) => l && l.kind === "degrees" && l.bassOnly) && B.map((l) => l.lesson).join() === "2,3,4");
+  ok("1회차에는 베이스 단계가 안 나온다 (아직 안 배운 I·IV·V·vi 의 구별)", !levelsForLesson(1).some((l) => l.bassOnly));
+  const rand = (() => { let x = 7; return () => ((x = (x * 1103515245 + 12345) % 2147483648) / 2147483648); })();
+  const q = makeQuestion("B2", rand, true);
+  ok("베이스 문제도 일반 도수 문제와 같은 모양 (길이 4, 도수는 풀 안)", q.degrees.length === 4 && q.degrees.every((d) => d >= 0 && d < 7));
+
+  const lines = new Set();
+  let badQ = 0;
+  for (let i = 0; i < 400; i += 1) {
+    const t = makeTransposeQuestion(rand, 7);
+    if (t.options.length !== 4 || new Set(t.options).size !== 4 || !t.options.includes(t.answer)) badQ += 1;
+    if (t.from.tonic === t.to.tonic) badQ += 1;
+    if (!gradeTranspose(t, t.answer) || t.options.filter((o) => gradeTranspose(t, o)).length !== 1) badQ += 1;
+    lines.add(t.prog);
+  }
+  ok("키 옮기기 400문제: 보기 4개 서로 다름 · 정답 하나 · 조가 실제로 바뀐다", badQ === 0, badQ);
+  ok("7회차면 퀴즈 진행 전부, 1회차면 1회차 진행만", lines.size === TRANSPOSE_PROGS.length && (() => { const set = new Set(); for (let i = 0; i < 100; i += 1) set.add(makeTransposeQuestion(rand, 1).prog); return [...set].every((id) => TRANSPOSE_PROGS.find((t) => t.id === id).lesson === 1); })());
+  ok("정답 줄: C 장조 왕도 = F G Em Am → E♭ 장조면 A♭ B♭ Gm Cm", chordNames("oudou", { tonic: 0, mode: "major" }) === "F G Em Am" && chordNames("oudou", { tonic: 3, mode: "major" }) === "Ab Bb Gm Cm", chordNames("oudou", { tonic: 3, mode: "major" }));
+  const ex = explainTranspose({ prog: "oudou", from: { tonic: 0, mode: "major" }, to: { tonic: 3, mode: "major" }, options: [], answer: "Ab Bb Gm Cm" });
+  ok("풀이: 3반음 위로", ex.includes("3반음 위로"), ex);
+  ok("아래로 옮기는 쪽이 가까우면 「아래로」 (C→A♭ 는 4반음 아래)", explainTranspose({ prog: "basic", from: { tonic: 0, mode: "major" }, to: { tonic: 8, mode: "major" }, options: [], answer: "" }).includes("4반음 아래로"));
+  const tr = emptyTransposeStore(); recordTranspose(tr, "basic", true); recordTranspose(tr, "basic", false);
+  ok("퀴즈 기록: 2번 중 1번", tr.total === 2 && tr.right === 1 && tr.byProg.basic.total === 2);
+  const trBad = sanitizeTransposeStore({ total: 3, right: 99, byProg: { basic: { total: 2, right: 5 }, zzz: { total: 1, right: 1 } } });
+  ok("퀴즈 기록 읽기: 맞힌 수가 푼 수를 못 넘고 모르는 진행은 버린다", trBad.right === 3 && trBad.byProg.basic.right === 2 && !("zzz" in trBad.byProg), trBad);
+
+  // 백업
+  const mem = new Map([["pianoroll.ear", JSON.stringify({ lesson: 3, goal: 20 })], ["pianoroll.transpose", JSON.stringify(tr)], ["pianoroll.copy:a.mp3:5", JSON.stringify({ bpm: 90, cells: ["Am"] })], ["other", "x"]]);
+  const store = { get length() { return mem.size; }, key: (i) => [...mem.keys()][i] ?? null, getItem: (k) => mem.get(k) ?? null };
+  const bk = makeBackup(store, new Date("2026-11-01T00:00:00Z"));
+  ok("백업: 이 앱의 기록만 담는다 (other 는 제외)", bk.ear && bk.transpose && Object.keys(bk.copy).join() === "pianoroll.copy:a.mp3:5" && !JSON.stringify(bk).includes("\"other\""));
+  const parsed = parseBackup(JSON.stringify(bk));
+  ok("백업을 다시 읽으면 세 가지가 모두 걸러져 들어온다", parsed.ok && parsed.ear.lesson === 3 && parsed.transpose.total === 2 && parsed.copy["pianoroll.copy:a.mp3:5"].bpm === 90 && parsed.summary.includes("코드 수첩 1곡"), parsed);
+  const dst = new Map();
+  applyBackup({ setItem: (k, v) => dst.set(k, v) }, parsed);
+  ok("불러오기: 저장소에 세 종류가 쓰인다", dst.size === 3 && JSON.parse(dst.get("pianoroll.ear")).lesson === 3);
+  ok("망가진 백업은 거절: JSON 아님 · 다른 앱 · 버전 · 빈 내용", !parseBackup("{{").ok && !parseBackup("{}").ok && !parseBackup('{"app":"pianoroll-sampler","version":9}').ok && !parseBackup('{"app":"pianoroll-sampler","version":1}').ok);
+  const evil = parseBackup(JSON.stringify({ app: "pianoroll-sampler", version: 1, ear: "zzz", copy: { "evil:key": { bpm: 1 }, "pianoroll.copy:b.mp3:1": { bpm: 99999, cells: [5] } } }));
+  ok("남의 키는 쓰지 않고, 값은 범위로 자른다", evil.ok && Object.keys(evil.copy).join() === "pianoroll.copy:b.mp3:1" && evil.copy["pianoroll.copy:b.mp3:1"].bpm === 300 && evil.ear.lesson === 7, evil);
 }
 
 

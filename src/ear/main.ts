@@ -19,6 +19,8 @@ import { canUseSoundFont, INSECURE_HINT } from "../audio/soundfont";
 import { loadSavedSoundfont } from "../audio/sfStore";
 import { emptyProject } from "../model/project";
 import { EarTraining, type InstrumentChoice } from "../ui/earTraining";
+import { TransposeQuiz } from "../ui/transposeQuiz";
+import { applyBackup, makeBackup, parseBackup } from "../model/backup";
 
 const project = emptyProject();
 const engine = new AudioEngine();
@@ -100,6 +102,56 @@ const ear = new EarTraining({
   setInstrument,
 });
 
+const quiz = new TransposeQuiz({
+  hold: (pitch) => scheduler.keyHold(pitch, 0),
+  release: (pitch) => scheduler.keyRelease(pitch, true),
+  isUnlocked: () => engine.isUnlocked,
+  getLesson: () => ear.store.lesson,
+});
+
+// 탭: 듣기 훈련 ↔ 키 옮기기
+function setTab(transpose: boolean): void {
+  ear.silence();
+  quiz.silence();
+  document.body.classList.toggle("tq-mode", transpose);
+  $("ear-tab-listen").setAttribute("aria-pressed", String(!transpose));
+  $("ear-tab-transpose").setAttribute("aria-pressed", String(transpose));
+  $("tq-pane").classList.toggle("hidden", !transpose);
+  $("ear-stats").classList.toggle("hidden", transpose);
+}
+$("ear-tab-listen").addEventListener("click", () => setTab(false));
+$("ear-tab-transpose").addEventListener("click", () => setTab(true));
+
+// 기록 백업: 내보내기 / 불러오기
+$("ear-export").addEventListener("click", () => {
+  const now = new Date();
+  const blob = new Blob([JSON.stringify(makeBackup(localStorage, now), null, 2)], { type: "application/json" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `pianoroll-backup-${now.toISOString().slice(0, 10)}.json`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  window.setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+  showStatus("백업 파일을 저장했습니다 (다운로드 폴더를 확인하세요)");
+});
+const importFile = $<HTMLInputElement>("ear-import-file");
+$("ear-import").addEventListener("click", () => importFile.click());
+importFile.addEventListener("change", async () => {
+  const f = importFile.files?.[0];
+  importFile.value = "";
+  if (!f) return;
+  const parsed = parseBackup(await f.text());
+  if (!parsed.ok) {
+    showStatus(parsed.error, "error");
+    return;
+  }
+  if (!window.confirm(`${parsed.summary} 을(를) 불러옵니다. 같은 항목은 파일 내용으로 덮어써요. 계속할까요?`)) return;
+  applyBackup(localStorage, parsed);
+  showStatus("불러왔습니다. 화면을 새로 고칩니다…");
+  window.setTimeout(() => window.location.reload(), 600);
+});
+
 // 저장해 둔 음원이 있으면 올리고, 악기 목록을 채운다. 없으면 임시 신스로 그대로 연습한다.
 async function restoreSoundfont(): Promise<void> {
   if (!canUseSoundFont()) {
@@ -129,6 +181,7 @@ void restoreSoundfont();
  */
 $<HTMLButtonElement>("ear-exit").addEventListener("click", () => {
   ear.silence();
+  quiz.silence();
   window.close();
   window.setTimeout(() => {
     if (!window.closed) window.location.href = new URL("./", window.location.href).toString();
@@ -143,5 +196,5 @@ window.addEventListener("pagehide", () => {
 
 // 개발 중 콘솔에서 상태를 들여다보기 위한 창구. 빌드하면 사라진다.
 if (import.meta.env.DEV) {
-  (window as unknown as Record<string, unknown>).__ear = { ear, scheduler, registry, engine, project };
+  (window as unknown as Record<string, unknown>).__ear = { ear, quiz, scheduler, registry, engine, project };
 }

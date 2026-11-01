@@ -22,6 +22,10 @@
       <header id="ear-head">
         <button id="ear-exit" type="button" title="피아노롤로 돌아갑니다 (이 창을 닫거나, 직접 열었다면 피아노롤 페이지로 이동)">← 피아노롤</button>
         <b class="ear-title">🎧 귀 훈련</b>
+        <span class="copy-seg ear-tabs">
+          <button id="ear-tab-listen" type="button" aria-pressed="true">듣기 훈련</button>
+          <button id="ear-tab-transpose" type="button" aria-pressed="false">✍️ 키 옮기기</button>
+        </span>
         <span class="spacer"></span>
         <span id="ear-streak" class="ear-chip" title="연속으로 문제를 푼 날 수"></span>
         <span id="ear-today" class="ear-chip" title="오늘 푼 문제 / 하루 목표"></span>
@@ -63,6 +67,19 @@
           <p class="note ear-keys">키보드: 스페이스 = 듣기/다시 듣기 · 1~7 = 코드 고르기 · 엔터 = 확인/다음 · 백스페이스 = 지우기</p>
         </section>
 
+        <section id="tq-pane" class="hidden">
+          <p class="note">코드 진행을 다른 조로 옮겨 적는 연습. 도수(로마숫자)는 그대로 두고 <b>으뜸음만</b> 옮기면 모든 코드가 같이 움직여요. 고르면 옮긴 조의 소리를 바로 들려줍니다.</p>
+          <p id="tq-prompt" class="tq-prompt"></p>
+          <div id="tq-options" class="tq-options"></div>
+          <div id="tq-result" class="ear-result"></div>
+          <div class="ear-play">
+            <button id="tq-new" type="button" class="primary">▶ 문제 내기</button>
+            <button id="tq-listen" type="button" disabled>🔁 정답 들어 보기</button>
+            <span id="tq-score" class="pos"></span>
+          </div>
+          <p class="note ear-keys">키보드: 1~4 = 보기 고르기 · 엔터 = 다음 문제. 배운 회차까지의 진행만 나옵니다 (듣기 훈련 탭의 「배운 곳까지」를 따라요).</p>
+        </section>
+
         <aside id="ear-stats" aria-label="내 기록">
           <div class="ear-card">
             <h3>오늘</h3>
@@ -85,6 +102,15 @@
           <div class="ear-card">
             <h3>단계별</h3>
             <div id="ear-levels"></div>
+          </div>
+          <div class="ear-card ear-backup">
+            <h3>기록 백업</h3>
+            <p class="note">귀 훈련·키 옮기기 기록과 코드 따기 수첩을 파일 하나로 저장하거나 불러옵니다. 기기를 바꾸거나 브라우저 데이터를 지우기 전에 한 번 받아 두세요.</p>
+            <div class="ear-play">
+              <button id="ear-export" type="button">💾 내보내기</button>
+              <button id="ear-import" type="button">📥 불러오기</button>
+              <input id="ear-import-file" type="file" accept=".json,application/json" hidden />
+            </div>
           </div>
           <div class="ear-card ear-reset">
             <button id="ear-reset" type="button">기록 지우기</button>
