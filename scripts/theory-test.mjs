@@ -27,7 +27,7 @@ import {
 } from "../src/model/ear.ts";
 import { LESSONS, clampLesson, focusLevels, visibleLevels } from "../src/model/lessons.ts";
 import {
-  MAX_WRONG, dayKey, degreeRows, emptyStore, questionId, recordAnswer, sanitizeQuestion, sanitizeStore, streak,
+  MAX_WRONG, dayKey, dueWrong, nextDue, degreeRows, emptyStore, questionId, recordAnswer, sanitizeQuestion, sanitizeStore, streak,
   namedConfusions, topConfusions, weakWeights, weakest,
 } from "../src/model/earStats.ts";
 import {
@@ -588,8 +588,26 @@ for (const d of DEMOS) {
   ok("문제 단위: 단계 기록은 0/1, 오늘은 0/1", s.tally.L2.total === 1 && s.tally.L2.right === 0 && s.days["2026-11-01"].total === 1);
   ok("틀린 문제 목록에 들어간다", s.wrong.length === 1 && questionId(s.wrong[0]) === questionId(q));
   recordAnswer(s, q, [0, 3, 4, 5], true, today);
-  ok("같은 문제를 맞히면 목록에서 빠진다 (복습 졸업) · 조 다르면 다른 문제", s.wrong.length === 0 &&
-    questionId(q) !== questionId({ ...q, key: Ebmaj }));
+  ok("조 다르면 다른 문제", questionId(q) !== questionId({ ...q, key: Ebmaj }));
+  const sr = emptyStore();
+  // 간격 반복: 틀린 날 → (1일 뒤 맞힘) → (3일 뒤 맞힘) → (맞힘) 졸업
+  const dayN = (n) => new Date(2026, 10, 1 + n, 12);
+  recordAnswer(sr, q, [0, 3, 0, 5], false, today);
+  ok("틀린 날 바로 복습 차례 (due = 오늘, box 0)", sr.srs[questionId(q)].box === 0 && dueWrong(sr, today).length === 1);
+  recordAnswer(sr, q, [0, 3, 4, 5], true, today);
+  ok("틀린 날 곧바로 맞혀도 목록에 남는다 → 내일 복습 (졸업 아님)", sr.wrong.length === 1 && sr.srs[questionId(q)].box === 1 && sr.srs[questionId(q)].due === "2026-11-02" && dueWrong(sr, today).length === 0 && nextDue(sr, today) === "2026-11-02");
+  recordAnswer(sr, q, [0, 3, 4, 5], true, today);
+  ok("차례가 아닐 때 미리 맞혀도 일정은 그대로", sr.srs[questionId(q)].box === 1 && sr.srs[questionId(q)].due === "2026-11-02");
+  recordAnswer(sr, q, [0, 3, 4, 5], true, dayN(1));
+  ok("내일 맞히면 3일 뒤로 (box 2)", sr.srs[questionId(q)].box === 2 && sr.srs[questionId(q)].due === "2026-11-05");
+  recordAnswer(sr, q, [0, 3, 4, 5], true, dayN(4));
+  ok("3일 뒤에도 맞히면 졸업: 목록과 일정에서 빠진다", sr.wrong.length === 0 && Object.keys(sr.srs).length === 0);
+  recordAnswer(sr, q, [0, 3, 0, 5], false, today);
+  recordAnswer(sr, q, [0, 3, 4, 5], true, today); recordAnswer(sr, q, [0, 3, 0, 5], false, dayN(1));
+  recordAnswer(sr, q, [0, 3, 0, 5], false, today); recordAnswer(sr, q, [0, 3, 4, 5], true, today); recordAnswer(sr, q, [0, 3, 4, 5], true, dayN(1));
+  ok("저장했다 읽어도 box 2 가 그대로 (졸업 직전 단계가 0 으로 돌아가지 않는다)", sanitizeStore(JSON.parse(JSON.stringify(sr))).srs[questionId(q)]?.box === 2, sanitizeStore(JSON.parse(JSON.stringify(sr))).srs);
+  recordAnswer(sr, q, [0, 3, 0, 5], false, dayN(1));
+  ok("복습 중에 다시 틀리면 처음부터 (box 0, 오늘)", sr.srs[questionId(q)].box === 0 && sr.srs[questionId(q)].due === "2026-11-02");
   const q2 = { level: "L2", key: Gmaj, degrees: [3, 4, 0, 5] };
   recordAnswer(s, q, [0, 3, 0, 5], false, today);
   recordAnswer(s, q2, [3, 4, 0, 4], false, today);
@@ -597,6 +615,9 @@ for (const d of DEMOS) {
   ok("같은 문제를 또 틀리면 목록에서 맨 뒤로 간다 (중복 없음)", s.wrong.length === 2 && questionId(s.wrong[0]) === questionId(q2) && questionId(s.wrong[1]) === questionId(q));
   const many = emptyStore();
   for (let i = 0; i < 45; i += 1) recordAnswer(many, { level: "L1", key: { tonic: i % 12, mode: "major" }, degrees: [0, 3, 4].map((d, k) => [0, 3, 4][(k + i) % 3]) }, [9, 9, 9], false, today);
+  const persisted = sanitizeStore(JSON.parse(JSON.stringify({ ...many, srs: { ...many.srs, "L9|1|x": { box: 1, due: "2026-11-02" } } })));
+  ok("복습 일정은 저장 후에도 남고, 목록에 없는 문제의 일정 · 이상한 값은 버린다", Object.keys(persisted.srs).length === many.wrong.length && !("L9|1|x" in persisted.srs) &&
+    sanitizeStore({ wrong: many.wrong.slice(0, 1), srs: { [questionId(many.wrong[0])]: { box: 99, due: "내일" } } }).srs[questionId(many.wrong[0])] === undefined);
   ok(`틀린 문제는 ${MAX_WRONG}개까지만 남긴다`, many.wrong.length <= MAX_WRONG, many.wrong.length);
   const named = emptyStore();
   recordAnswer(named, { level: "N1", key: Cmaj, degrees: [], progression: "komuro", options: ["komuro", "oudou"] }, "oudou", false, today);

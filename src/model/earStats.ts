@@ -43,6 +43,12 @@ export type EarStore = {
   days: Record<string, Tally>;
   /** 틀린 문제 (오래된 것이 앞) */
   wrong: Question[];
+  /**
+   * 틀린 문제의 복습 일정 (간격 반복). 키는 questionId.
+   * box = 복습에서 날을 달리해 맞힌 횟수(0~2), due = 이 날부터 복습할 차례 (「2026-11-02」).
+   * 세 번째로 맞히면 목록에서 졸업한다.
+   */
+  srs: Record<string, { box: number; due: string }>;
   /** 하루 목표 문제 수 */
   goal: number;
   /** 수업에서 여기(회차)까지 배웠다 — 이 회차까지의 단계와 진행만 나온다 (1~7, 7 = 전부) */
@@ -56,6 +62,8 @@ export type EarStore = {
 };
 
 export const MAX_WRONG = 30;
+/** 복습에서 맞힐 때마다 다음 복습까지 며칠. 마지막 칸을 맞히면 졸업. */
+export const REVIEW_DAYS = [1, 3] as const;
 export const MAX_DAYS = 400;
 export const GOALS = [10, 20, 30, 50] as const;
 
@@ -72,6 +80,7 @@ export function emptyStore(): EarStore {
     quals: {},
     days: {},
     wrong: [],
+    srs: {},
     goal: 20,
     lesson: LAST_LESSON,
     focusWeak: false,
@@ -179,6 +188,14 @@ export function sanitizeStore(raw: unknown): EarStore {
     }
     s.wrong = s.wrong.slice(-MAX_WRONG);
   }
+  const ids = new Set(s.wrong.map(questionId));
+  if (isObj(raw.srs)) {
+    for (const [k, v] of Object.entries(raw.srs)) {
+      if (!ids.has(k) || !isObj(v)) continue;
+      const box = typeof v.box === "number" && Number.isInteger(v.box) && v.box >= 0 && v.box <= REVIEW_DAYS.length ? v.box : 0;
+      if (typeof v.due === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v.due)) s.srs[k] = { box, due: v.due };
+    }
+  }
   s.lesson = clampLesson(raw.lesson);
   if (typeof raw.goal === "number" && (GOALS as readonly number[]).includes(raw.goal)) s.goal = raw.goal;
   if (typeof raw.focusWeak === "boolean") s.focusWeak = raw.focusWeak;
@@ -274,10 +291,43 @@ export function recordAnswer(
   }
 
   const id = questionId(q);
-  store.wrong = store.wrong.filter((w) => questionId(w) !== id);
-  if (!correct) store.wrong.push(q);
+  const listed = store.wrong.some((w) => questionId(w) === id);
+  const todayKey = dayKey(today);
+  if (!correct) {
+    // 틀리면 처음부터: 오늘 바로 복습 대상
+    store.wrong = store.wrong.filter((w) => questionId(w) !== id);
+    store.wrong.push(q);
+    store.srs[id] = { box: 0, due: todayKey };
+  } else if (listed) {
+    const cur = store.srs[id] ?? { box: 0, due: todayKey };
+    if (cur.due <= todayKey) {
+      // 차례가 된 복습을 맞혔다: 다음 간격으로. 마지막 간격까지 맞히면 졸업.
+      if (cur.box >= REVIEW_DAYS.length) {
+        store.wrong = store.wrong.filter((w) => questionId(w) !== id);
+        delete store.srs[id];
+      } else {
+        store.srs[id] = { box: cur.box + 1, due: dayKey(addDays(today, REVIEW_DAYS[cur.box])) };
+      }
+    }
+    // 아직 차례가 아닌데 맞힌 건(미리 해 본 연습) 일정을 앞당기지 않는다.
+  }
   store.wrong = store.wrong.slice(-MAX_WRONG);
+  const keep = new Set(store.wrong.map(questionId));
+  for (const k of Object.keys(store.srs)) if (!keep.has(k)) delete store.srs[k];
   return store;
+}
+
+/** 오늘 복습할 차례인 틀린 문제들 (오래된 것이 앞). 일정이 없는 문제는 차례로 본다. */
+export function dueWrong(store: EarStore, today: Date): Question[] {
+  const t = dayKey(today);
+  return store.wrong.filter((w) => (store.srs[questionId(w)]?.due ?? t) <= t);
+}
+
+/** 아직 차례가 안 된 문제 중 가장 빠른 복습 날 (없으면 null) */
+export function nextDue(store: EarStore, today: Date): string | null {
+  const t = dayKey(today);
+  const days = store.wrong.map((w) => store.srs[questionId(w)]?.due).filter((d): d is string => !!d && d > t).sort();
+  return days[0] ?? null;
 }
 
 // ------------------------------------------------------------------ 읽어서 보여 주기

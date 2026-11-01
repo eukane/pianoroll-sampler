@@ -23,6 +23,7 @@ import {
   GOALS, MIN_SAMPLE, degreeRows, dayKey, namedConfusions, recordAnswer, sanitizeStore, streak, topConfusions,
   weakWeights, weakest, emptyStore, type EarStore, type Tally,
 } from "../model/earStats";
+import { dueWrong, nextDue } from "../model/earStats";
 import { LESSONS, focusLevels, lessonByNumber, visibleLevels } from "../model/lessons";
 import { PROGRESSIONS, chordPitches } from "../model/progression";
 import { keyLabel } from "../model/scale";
@@ -324,8 +325,14 @@ export class EarTraining {
 
   /** 틀린 문제 중 가장 오래된 것부터. 맞힐 때까지 목록에 남는다. */
   private review(): void {
-    const q = this.store.wrong[0];
+    // 오늘 복습할 차례인 문제부터. 다 했으면(일정이 아직 먼 문제뿐이면) 가장 오래된 것으로 연습만 한다 (일정은 안 당겨진다).
+    const due = dueWrong(this.store, this.now());
+    const q = due[0] ?? this.store.wrong[0];
     if (!q) return;
+    if (due.length === 0) {
+      const nd = nextDue(this.store, this.now());
+      this.deps.onStatus(`오늘 복습할 차례는 다 했어요${nd ? ` (다음 복습: ${nd})` : ""}. 미리 연습만 해 볼게요.`);
+    }
     if (this.level.id !== q.level) {
       this.levelSel.value = q.level;
       this.store.level = q.level;
@@ -511,7 +518,9 @@ export class EarTraining {
     this.backBtn.disabled = !has || this.answered || (named ? this.pickedName === null : this.picked.length === 0);
     this.submitBtn.disabled = !has || this.answered || !full;
     this.reviewBtn.disabled = wrong === 0;
-    this.reviewBtn.textContent = `틀린 문제 다시${wrong ? ` (${wrong})` : ""}`;
+    const dueN = dueWrong(this.store, this.now()).length;
+    this.reviewBtn.textContent = `틀린 문제 다시${wrong ? ` (오늘 ${dueN} · 전체 ${wrong})` : ""}`;
+    this.reviewBtn.title = "틀린 문제는 1일 뒤, 3일 뒤에 다시 맞혀야 졸업합니다 (간격 반복)";
     this.newBtn.textContent = has && !this.answered ? "⏭ 새 문제" : "▶ 문제 듣기";
   }
 

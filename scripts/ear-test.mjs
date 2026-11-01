@@ -122,7 +122,7 @@ check("틀리면 「아쉬워요」 와 정답이 뜬다", (await text("#ear-res
 check("틀린 칸만 빨갛게 표시된다 (첫 칸)",
   (await page.$$eval("#ear-slots .ear-slot", (s) => s.map((x) => x.classList.contains("wrong")))).join() === "true,false,false");
 check("점수가 1/2", (await text("#ear-score")).includes("이번 1/2"), await text("#ear-score"));
-check("틀린 문제 다시 (1)", (await text("#ear-review")).includes("(1)"), await text("#ear-review"));
+check("틀린 문제 다시 (오늘 1 · 전체 1)", (await text("#ear-review")).includes("오늘 1 · 전체 1"), await text("#ear-review"));
 {
   const conf = await page.$$eval("#ear-conf .ear-conf-row", (r) => r.map((x) => x.textContent));
   const want = `${numeral[q2.degrees[0]]} 를 ${numeral[wrongFirst]} 로1번`;
@@ -135,16 +135,36 @@ await page.reload({ waitUntil: "networkidle" });
 await page.tap("#unlock").catch(() => {});
 check("새로고침하면 문제는 접히지만 기록(오늘 2/20 · 1일 연속)은 남는다", (await q()) === null &&
   (await text("#ear-today")).trim() === "오늘 2/20" && (await text("#ear-streak")).includes("1일"));
-check("틀린 문제 목록도 남는다 — 「틀린 문제 다시 (1)」", (await text("#ear-review")).includes("(1)") && !(await page.evaluate(() => document.getElementById("ear-review").disabled)), await text("#ear-review"));
+check("틀린 문제 목록도 남는다 — 「틀린 문제 다시 (오늘 1 · 전체 1)」", (await text("#ear-review")).includes("전체 1") && !(await page.evaluate(() => document.getElementById("ear-review").disabled)), await text("#ear-review"));
 check("고른 단계(1단계)와 조 바꾸기 끔도 기억한다", (await page.$eval("#ear-level", (s) => s.value)) === "L1" && !(await page.$eval("#ear-randkey", (c) => c.checked)));
 await page.tap("#ear-review");
 const q3 = await q();
 check("복습하면 같은 문제가 다시 나온다 (칸이 비어 있다)",
   JSON.stringify(q3.degrees) === JSON.stringify(q2.degrees) && q3.key.tonic === q2.key.tonic && (await page.$$eval("#ear-slots .ear-slot.filled", (s) => s.length)) === 0, q3);
-check("복습 문제는 맞힐 때까지 목록에 남아 있다", (await text("#ear-review")).includes("(1)"));
+check("복습 문제는 졸업할 때까지 목록에 남아 있다", (await text("#ear-review")).includes("전체 1"));
 for (const d of q3.degrees) await page.tap(`#ear-choices button:nth-child(${names[d] + 1})`);
 await page.tap("#ear-submit");
-check("복습 문제를 맞히면 목록에서 빠진다", await page.evaluate(() => document.getElementById("ear-review").disabled) && (await store()).wrong.length === 0, await store());
+{
+  const st1 = await store();
+  const sr = Object.values(st1.srs ?? {})[0];
+  check("복습 문제를 맞히면 바로 빠지지 않고 내일 다시 나온다 (간격 반복)", st1.wrong.length === 1 && sr?.box === 1 && (await text("#ear-review")).includes("오늘 0 · 전체 1"), [st1.srs, await text("#ear-review")]);
+}
+await page.tap("#ear-review");
+check("오늘 차례가 없어도 누르면 미리 연습만 해 볼 수 있다고 알려 준다", (await text("#status")).includes("미리 연습"), await text("#status"));
+// 날짜를 3일 뒤로 당겨(저장된 일정을 과거로 돌려) 졸업까지 확인
+await page.evaluate(() => { const e = window.__ear.ear; for (const k of Object.keys(e.store.srs)) e.store.srs[k].due = "2000-01-01"; e.save(); });
+await page.reload({ waitUntil: "networkidle" });
+await page.tap("#unlock").catch(() => {});
+for (let round = 0; round < 2; round += 1) {
+  await page.tap("#ear-review");
+  const qr = await q();
+  for (const d of qr.degrees) await page.tap(`#ear-choices button:nth-child(${names[d] + 1})`);
+  await page.tap("#ear-submit");
+  await page.evaluate(() => { const e = window.__ear.ear; for (const k of Object.keys(e.store.srs)) e.store.srs[k].due = "2000-01-01"; e.save(); });
+  await page.reload({ waitUntil: "networkidle" });
+  await page.tap("#unlock").catch(() => {});
+}
+check("일정이 돌아올 때마다 맞히면 세 번째에 졸업한다", await page.evaluate(() => document.getElementById("ear-review").disabled) && (await store()).wrong.length === 0, await store());
 
 // ④ 정석 이름 맞히기
 await page.selectOption("#ear-level", "N1");
