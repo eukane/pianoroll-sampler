@@ -74,7 +74,7 @@ await page.goto(URL, { waitUntil: "networkidle" });
 const jsFiles = readdirSync("dist/assets").filter((f) => f.endsWith(".js"));
 // 페이지가 둘(피아노롤 · 귀 훈련)이라 파일이 여럿이다. 그래도 전부 두 페이지의 html 에 **처음부터 적혀 있어야**
 // 한다 — html 에 없는 파일이 있다면 실행 중에 늦게 받아 오는 청크다.
-const htmls = ["dist/index.html", "dist/ear.html"].map((f) => readFileSync(f, "utf8")).join("\n");
+const htmls = ["dist/index.html", "dist/ear.html", "dist/copy.html"].map((f) => readFileSync(f, "utf8")).join("\n");
 const lazy = jsFiles.filter((f) => !htmls.includes(f));
 check("늦게 받아 오는 청크가 없다 (배포 중에도 안 깨지게)", jsFiles.length >= 1 && lazy.length === 0, { jsFiles, lazy });
 
@@ -173,6 +173,19 @@ check("귀 훈련 페이지에서도 404 나는 파일이 없다", failed.length
 const [popup] = await Promise.all([context.waitForEvent("page"), page.locator("#ear").tap()]);
 await popup.waitForLoadState("networkidle");
 check("피아노롤의 🎧 버튼이 하위 경로의 귀 훈련 페이지를 새 창으로 연다", popup.url() === earUrl, popup.url());
+
+const copyUrl = new globalThis.URL("copy.html", URL).toString();
+const cp = await context.newPage();
+cp.on("console", (m) => m.type() === "error" && errors.push("copy: " + m.text()));
+cp.on("pageerror", (e) => errors.push("copy pageerror: " + e.message));
+cp.on("response", (r) => { if (r.status() >= 400) failed.push(`${r.url()} — ${r.status()}`); });
+await cp.goto(copyUrl, { waitUntil: "networkidle" });
+check("코드 따기 페이지가 하위 경로에서 뜬다", await cp.locator("#copy-wave").isVisible() && (await cp.title()) === "코드 따기");
+check("코드 따기 페이지에도 개발용 창구는 없다", await cp.evaluate(() => typeof window.__copy === "undefined"));
+check("코드 따기 페이지에서도 404 나는 파일이 없다", failed.length === 0, failed);
+const [popup2] = await Promise.all([context.waitForEvent("page"), page.locator("#copy-page").tap()]);
+await popup2.waitForLoadState("networkidle");
+check("피아노롤의 🎼 버튼이 코드 따기 페이지를 새 창으로 연다", popup2.url() === copyUrl, popup2.url());
 
 check("콘솔 오류 없음", errors.length === 0, errors);
 

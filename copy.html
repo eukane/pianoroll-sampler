@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover"
+    />
+    <meta name="theme-color" content="#12141a" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%2312141a'/%3E%3Cpath d='M6 20 L10 12 L14 24 L18 8 L22 22 L26 16' fill='none' stroke='%234ec9b0' stroke-width='3'/%3E%3C/svg%3E"
+    />
+    <title>코드 따기</title>
+  </head>
+  <body class="copy-page">
+    <!-- 코드 따기 연습 페이지. 내 컴퓨터/패드에 있는 음악 파일을 열어 천천히 듣고, 마디별로 반복하고, 딴 코드를 적어 곡과 같이 들어 본다.
+         음악 파일은 어디에도 올라가지 않는다 (이 브라우저 안에서만 재생). 화면은 ui/copyPlayer.ts, 계산은 model/copyNotebook.ts · chordSymbol.ts. -->
+    <div id="copy-app">
+      <header id="copy-head">
+        <button id="copy-exit" type="button" title="피아노롤로 돌아갑니다 (이 창을 닫거나, 직접 열었다면 피아노롤 페이지로 이동)">← 피아노롤</button>
+        <b class="copy-title">🎼 코드 따기</b>
+        <label class="copy-file">
+          <input id="copy-file" type="file" accept="audio/*,video/mp4,.mp3,.m4a,.wav,.ogg,.flac,.aac" />
+          <span class="btn">📂 음악 파일 열기</span>
+        </label>
+        <span id="copy-filename" class="copy-filename">파일을 열어 주세요 — 파일은 올라가지 않고 이 기기 안에서만 재생됩니다</span>
+        <span class="spacer"></span>
+        <span id="copy-pos" class="copy-chip">–</span>
+        <span id="copy-time" class="copy-chip">0:00.0</span>
+      </header>
+
+      <main id="copy-main">
+        <section id="copy-wave-pane">
+          <div class="copy-wave-wrap">
+            <canvas id="copy-wave" aria-label="파형 — 탭하면 그 위치로, 끌면 옮겨 봅니다"></canvas>
+          </div>
+          <div class="copy-row">
+            <button id="copy-play" type="button" class="primary" disabled>▶ 재생</button>
+            <button id="copy-back2" type="button" disabled>⟲ 2초</button>
+            <button id="copy-fwd2" type="button" disabled>2초 ⟳</button>
+            <span class="copy-sep"></span>
+            <span class="copy-lab">속도</span>
+            <span id="copy-speed" class="copy-seg"></span>
+            <span class="copy-sep"></span>
+            <span class="copy-lab">보기</span>
+            <button id="copy-zoom-all" type="button">전체</button>
+            <button id="copy-zoom-loop" type="button">반복 구간</button>
+            <button id="copy-zoom-in" type="button">＋</button>
+            <button id="copy-zoom-out" type="button">－</button>
+          </div>
+          <div class="copy-row">
+            <span class="copy-lab">구간 반복</span>
+            <button id="copy-a" type="button">A=지금</button>
+            <button id="copy-b" type="button">B=지금</button>
+            <button id="copy-loop" type="button" aria-pressed="false">🔁 반복 꺼짐</button>
+            <span id="copy-loopinfo" class="copy-dim"></span>
+            <span class="copy-sep"></span>
+            <button id="copy-loopbar" type="button">이 마디부터</button>
+            <select id="copy-loopn" aria-label="마디 수">
+              <option value="1">1마디</option><option value="2">2마디</option><option value="4" selected>4마디</option><option value="8">8마디</option>
+            </select>
+            <button id="copy-prev" type="button">◀ 앞 구간</button>
+            <button id="copy-next" type="button">다음 구간 ▶</button>
+          </div>
+          <div class="copy-row">
+            <span class="copy-lab">박자 눈금</span>
+            <label>BPM <input id="copy-bpm" type="number" min="30" max="300" step="0.1" /></label>
+            <button id="copy-tap" type="button">👆 탭 템포</button>
+            <label>한 마디 <select id="copy-beats"></select>박</label>
+            <button id="copy-here" type="button" title="지금 들리는 곳이 첫 마디의 1박이라고 알려 줍니다">지금을 1박으로</button>
+            <button id="copy-off-m" type="button" title="눈금을 0.05초 앞으로">◀ 눈금</button>
+            <button id="copy-off-p" type="button" title="눈금을 0.05초 뒤로">눈금 ▶</button>
+            <span id="copy-offinfo" class="copy-dim"></span>
+          </div>
+          <div class="copy-row">
+            <span class="copy-lab">표시</span>
+            <button id="copy-mark" type="button">🚩 지금 위치 표시</button>
+            <span id="copy-markers" class="copy-markers"></span>
+          </div>
+        </section>
+
+        <aside id="copy-note-pane">
+          <div class="copy-card">
+            <h3>코드 수첩</h3>
+            <div class="copy-row">
+              <label>조 <select id="copy-key"><option value="">모름</option></select></label>
+              <label class="ear-check"><input id="copy-overlay" type="checkbox" /> 내가 적은 코드를 곡과 같이 듣기</label>
+            </div>
+            <div class="copy-row">
+              <label>곡 소리 <input id="copy-songvol" type="range" min="0" max="1" step="0.05" /></label>
+              <label>코드 소리 <input id="copy-chordvol" type="range" min="0" max="1" step="0.05" /></label>
+            </div>
+            <div class="copy-row">
+              <label>시작 마디 <input id="copy-firstbar" type="number" min="1" max="999" step="1" /></label>
+              <button id="copy-addcells" type="button">＋ 4칸 더</button>
+              <button id="copy-clearcells" type="button">칸 비우기</button>
+            </div>
+            <p class="note">한 칸 = 한 마디. 한 마디에 코드가 둘이면 「Am F」처럼 띄어 쓰세요 (똑같이 나눠 들려요). 예: C Am7 F/A G7 Bbmaj7 Dsus4</p>
+            <div id="copy-cells" class="copy-cells"></div>
+          </div>
+          <div class="copy-card">
+            <h3>건반으로 맞춰 보기</h3>
+            <div id="copy-readout" class="copy-readout">건반을 눌러 보세요</div>
+            <div class="copy-row">
+              <button id="copy-insert" type="button" disabled>📝 이 코드를 선택한 칸에</button>
+              <span id="copy-sel" class="copy-dim"></span>
+            </div>
+          </div>
+        </aside>
+      </main>
+
+      <div id="copy-kbd" class="copy-kbd" aria-label="맞춰 쳐 보는 건반"></div>
+      <div id="status" class="hidden"></div>
+    </div>
+
+    <div id="unlock">
+      <div class="card">
+        <div class="big">🔊</div>
+        <p>화면을 한 번 탭하면 소리가 켜집니다</p>
+        <small>폰 브라우저는 사용자가 만지기 전에 소리를 내주지 않습니다</small>
+      </div>
+    </div>
+
+    <script type="module" src="/src/copy/main.ts"></script>
+  </body>
+</html>

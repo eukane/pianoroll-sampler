@@ -71,7 +71,7 @@ jobs:
           lazy=0
           for f in dist/assets/*.js; do
             name=$(basename "$f")
-            if ! grep -q "$name" dist/index.html dist/ear.html; then
+            if ! grep -q "$name" dist/index.html dist/ear.html dist/copy.html; then
               echo "html 에 없는 JS 청크: $name"
               lazy=1
             fi

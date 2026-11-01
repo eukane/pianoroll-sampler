@@ -1059,6 +1059,12 @@ $<HTMLButtonElement>("ear").addEventListener("click", () => {
   if (!opened) showStatus("새 창이 막혔습니다. 브라우저의 팝업 허용을 켜 주세요 (곡은 그대로 있습니다)", "error");
 });
 
+/** 코드 따기 연습(copy.html)도 같은 이유로 새 창이다. */
+$<HTMLButtonElement>("copy-page").addEventListener("click", () => {
+  const opened = window.open(new URL("copy.html", window.location.href).toString(), "_blank");
+  if (!opened) showStatus("새 창이 막혔습니다. 브라우저의 팝업 허용을 켜 주세요 (곡은 그대로 있습니다)", "error");
+});
+
 // ------------------------------------------------------- 건반 크기 맞추기
 
 const calModal = $<HTMLDivElement>("cal-modal");

@@ -11,6 +11,10 @@ import {
   inKey, isTonic, keyChoices, keyFromValue, keyLabel, keyToValue, pcName, readKey,
   scalePitchClasses,
 } from "../src/model/scale.ts";
+import { parseChordSymbol, splitCell } from "../src/model/chordSymbol.ts";
+import {
+  barIndexAt as copyBarIndexAt, cellAt, defaultState as copyDefault, loopFromBar, positionLabel, sanitizeState as copySanitize, shiftLoop, tapTempo, storageKey,
+} from "../src/model/copyNotebook.ts";
 import { chordLine, identifyChord, inversionLabel, romanNumeral } from "../src/model/chord.ts";
 import {
   PROGRESSIONS, chordPitches, diatonicChords, progressionPitches, progressionsFor,
@@ -666,6 +670,54 @@ for (const d of DEMOS) {
   ok("저장된 틀린 문제가 코드 종류 문제여도 읽힌다 · 보기가 단계와 다르면 버린다",
     sanitizeStore({ wrong: [{ level: "Q1", key: { tonic: 2, mode: "major" }, degrees: [], quality: "min", options: ["maj", "min"] },
       { level: "Q1", key: { tonic: 2, mode: "major" }, degrees: [], quality: "dim" }] }).wrong.length === 1);
+}
+
+// ------------------------------------------------------------ 코드 따기 (model/chordSymbol.ts · copyNotebook.ts)
+{
+  const suffixes = ["", "m", "dim", "aug", "7", "maj7", "m7", "m7b5", "dim7", "mMaj7", "sus4", "sus2", "7sus4", "add9", "madd9", "6", "m6", "9", "maj9", "m9"];
+  const bad = [];
+  for (let root = 0; root < 12; root += 1) {
+    for (const suf of suffixes) {
+      const letters = ["C", "C#", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B"][root];
+      const sym = letters + suf;
+      const p = parseChordSymbol(sym);
+      if (!p) { bad.push(["null", sym]); continue; }
+      // 베이스(맨 앞)를 빼고 코드 음만 이름으로 되돌린다: 같은 소리가 같은 뜻이어야 한다
+      const back = identifyChord(p.pitches.slice(1), null);
+      if (!back || back.root !== root) bad.push([sym, back?.name]);
+      const low = Math.min(...p.pitches);
+      if (low < 36 || Math.max(...p.pitches) > 84) bad.push(["범위", sym, p.pitches]);
+    }
+  }
+  ok("모든 근음 × 모든 꼬리: 읽힌 소리를 다시 이름 붙이면 같은 근음이다 · 음이 낮은 자리에 모인다", bad.length === 0, bad.slice(0, 5));
+  ok("흔한 별칭: Am7 · C#m · Bb · Fmaj7 · Dsus · CM7 · C△7 · Cmin7 · Bø", ["Am7", "C#m", "Bb", "Fmaj7", "Dsus", "CM7", "C△7", "Cmin7", "Bø"].every((x) => parseChordSymbol(x) !== null));
+  ok("♭ ♯ 와 공백도 받는다: 「B♭ maj7」 = Bbmaj7", parseChordSymbol("B♭ maj7")?.name === "Bbmaj7");
+  const sl = parseChordSymbol("F/A");
+  ok("슬래시 코드: F/A 는 맨 아래가 A, 그 위에 F 코드", sl?.bassPc === 9 && sl.name === "F/A" && sl.pitches[0] % 12 === 9 && sl.pitches[0] < sl.pitches[1], sl);
+  ok("기본 베이스는 근음의 한 옥타브 아래", (() => { const p = parseChordSymbol("Am"); return p.pitches[0] === p.pitches[1] - 12; })());
+  ok("읽을 수 없는 건 null: 빈칸 · H · Cxyz · C/ · C/H · 숫자", ["", "  ", "H", "Cxyz", "C/", "C/H", "7", "Am7/"].every((x) => parseChordSymbol(x) === null));
+  ok("한 칸 나누기: 「Am F」 「Am,F」 「Am | F」 → 둘, 「-」는 버림", splitCell("Am F").length === 2 && splitCell("Am,F").length === 2 && splitCell("Am | F").join() === "Am,F" && splitCell(" - ").length === 0);
+
+  const st = { ...copyDefault(), bpm: 120, beatsPerBar: 4, offset: 1, firstBar: 1, cells: ["C", "Am F", "", "G7"] };
+  ok("마디 길이: 120BPM 4박 = 2초 · 1박 시작 1초 → 3초는 2번째 마디(색인 1)", copyBarIndexAt(3, 1, 2) === 1 && copyBarIndexAt(2.999, 1, 2) === 0);
+  ok("offset 앞은 음수 마디", copyBarIndexAt(0.5, 1, 2) === -1);
+  ok("위치 표시: 3.5초 = 2마디 2.0박", positionLabel(3.5, st) === "2마디 2.0박", positionLabel(3.5, st));
+  ok("cellAt: 1.5초 = C(1마디)", cellAt(1.5, st)?.symbol === "C");
+  ok("cellAt: 한 칸에 둘이면 반씩 — 3.5초 Am, 4.5초 F", cellAt(3.5, st)?.symbol === "Am" && cellAt(4.5, st)?.symbol === "F" && cellAt(3.5, st).count === 2);
+  ok("cellAt: 빈 칸 · 표 밖 · offset 앞은 null", cellAt(5.5, st) === null && cellAt(99, st) === null && cellAt(0.5, st) === null);
+  ok("cellAt: firstBar=3 이면 3마디부터 표가 시작", cellAt(1.5, { ...st, firstBar: 3 }) === null && cellAt(5.5, { ...st, firstBar: 3 })?.symbol === "C");
+  const lb = loopFromBar(4.2, 2, st, 100);
+  ok("이 마디부터 2마디: 4.2초는 2번째 마디 → 3~7초", lb.a === 3 && lb.b === 7, lb);
+  ok("구간이 곡 끝을 넘으면 곡 길이에서 자른다", loopFromBar(9, 4, st, 10).b === 10);
+  ok("다음 구간: 같은 길이만큼 · 끝을 넘어서면 그대로", shiftLoop({ a: 3, b: 7 }, 1, 100).a === 7 && (() => { const l = { a: 3, b: 7 }; return shiftLoop(l, 1, 6) === l && shiftLoop({ a: 0, b: 4 }, -1, 100).a === 0; })());
+  ok("탭 템포: 0.5초 간격 = 120 · 한 번 늦어도 중앙값이라 흔들리지 않는다", tapTempo([0, 0.5, 1, 1.5, 2.1, 2.6]) === 120 && tapTempo([0, 0.5]) === null && tapTempo([0, 5, 10]) === null);
+  ok("탭 템포는 30~300 안", tapTempo([0, 0.16, 0.32, 0.48]) === 300 || tapTempo([0, 0.16, 0.32, 0.48]) <= 300);
+  ok("저장 키는 파일 이름·크기", storageKey("a.mp3", 5) === "pianoroll.copy:a.mp3:5");
+  const dirty = copySanitize({ bpm: 9999, beatsPerBar: 99, offset: -3, speed: "x", loop: { a: 5, b: 2 }, loopOn: true, markers: [{ t: 3, label: "가" }, { t: -1 }, { t: 500 }, "x"], cells: ["Am", 4, "x".repeat(99)], key: { tonic: 12, mode: "major" }, overlay: 0 }, 100);
+  ok("더러운 저장값: 범위로 자르고 · 뒤집힌 반복은 버리고 · 이상한 표시와 조는 버린다",
+    dirty.bpm === 300 && dirty.beatsPerBar === 12 && dirty.offset === 0 && dirty.speed === 0.75 && dirty.loop === null && dirty.loopOn === false &&
+    dirty.markers.length === 1 && dirty.markers[0].t === 3 && dirty.cells[0] === "Am" && dirty.cells[1] === "" && dirty.cells[2].length === 40 && dirty.cells.length >= 8 && dirty.key === undefined && dirty.overlay === true, dirty);
+  ok("쓰레기 전체가 와도 기본값", JSON.stringify(copySanitize("zzz")) === JSON.stringify(copyDefault()) && copySanitize(null).bpm === 100);
 }
 
 

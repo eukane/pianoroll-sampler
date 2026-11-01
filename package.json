@@ -33,7 +33,8 @@
     "persist": "node scripts/persist-test.mjs",
     "chords": "node scripts/chords-test.mjs",
     "ear": "node scripts/ear-test.mjs",
-    "meter": "node scripts/meter-test.mjs"
+    "meter": "node scripts/meter-test.mjs",
+    "copy": "node scripts/copy-test.mjs"
   },
   "devDependencies": {
     "@vitejs/plugin-basic-ssl": "^1.2.0",
