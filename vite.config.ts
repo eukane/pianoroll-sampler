@@ -1,5 +1,6 @@
 import { defineConfig } from "vite";
 import basicSsl from "@vitejs/plugin-basic-ssl";
+import { resolve } from "node:path";
 
 /**
  * `npm run dev`       → http, 이 컴퓨터에서 볼 때
@@ -29,5 +30,11 @@ export default defineConfig(({ command, mode, isPreview }) => ({
   // 폰에서 열어 봐야 하는 앱이라 기본으로 0.0.0.0 에 바인드한다.
   server: { host: true, port: 5173 },
   preview: { host: true, port: 4173 },
-  build: { target: "es2020" },
+  // 페이지가 둘이다: 피아노롤(index.html)과 귀 훈련(ear.html). 같은 주소 아래라 저장해 둔 음원·기록을 같이 쓴다.
+  build: {
+    target: "es2020",
+    rollupOptions: {
+      input: { main: resolve(__dirname, "index.html"), ear: resolve(__dirname, "ear.html") },
+    },
+  },
 }));

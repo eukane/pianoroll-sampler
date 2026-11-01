@@ -72,7 +72,11 @@ await page.goto(URL, { waitUntil: "networkidle" });
 // 배포에서 사라져서다. 아끼던 건 8.4KB(전체의 2.8%)였다. 그 정도 이득에
 // 기능이 안 열리는 위험을 다시 지지 않도록 여기서 막는다.
 const jsFiles = readdirSync("dist/assets").filter((f) => f.endsWith(".js"));
-check("늦게 받아 오는 청크가 없다 (배포 중에도 안 깨지게)", jsFiles.length === 1, jsFiles);
+// 페이지가 둘(피아노롤 · 귀 훈련)이라 파일이 여럿이다. 그래도 전부 두 페이지의 html 에 **처음부터 적혀 있어야**
+// 한다 — html 에 없는 파일이 있다면 실행 중에 늦게 받아 오는 청크다.
+const htmls = ["dist/index.html", "dist/ear.html"].map((f) => readFileSync(f, "utf8")).join("\n");
+const lazy = jsFiles.filter((f) => !htmls.includes(f));
+check("늦게 받아 오는 청크가 없다 (배포 중에도 안 깨지게)", jsFiles.length >= 1 && lazy.length === 0, { jsFiles, lazy });
 
 check("하위 경로에서 화면이 뜬다", await page.locator("#roll").isVisible());
 check("404 나는 파일이 없다", failed.length === 0, failed);
@@ -149,6 +153,26 @@ if (existsSync("fixtures/voice-cp932.zip")) {
 } else {
   console.log("(fixtures/voice-cp932.zip 이 없어 zip 검사는 건너뜀 — npm run gen-voicebank && npm run gen-voicezip)\n");
 }
+
+// 귀 훈련 페이지 — 같은 하위 경로 아래에서 뜨고, 피아노롤에서 넣어 둔 음원을 같이 쓴다.
+const earUrl = new globalThis.URL("ear.html", URL).toString();
+const ear = await context.newPage();
+ear.on("console", (m) => m.type() === "error" && errors.push("ear: " + m.text()));
+ear.on("pageerror", (e) => errors.push("ear pageerror: " + e.message));
+ear.on("response", (r) => { if (r.status() >= 400) failed.push(`${r.url()} — ${r.status()}`); });
+await ear.goto(earUrl, { waitUntil: "networkidle" });
+check("귀 훈련 페이지가 하위 경로에서 뜬다", await ear.locator("#ear-level").isVisible() && (await ear.title()) === "귀 훈련");
+check("귀 훈련 페이지에도 개발용 창구는 없다", await ear.evaluate(() => typeof window.__ear === "undefined"));
+await ear.locator("#unlock").tap();
+await ear.waitForFunction(() => !document.getElementById("ear-inst").classList.contains("hidden"), null, { timeout: 20000 }).catch(() => {});
+check("피아노롤에서 넣어 둔 음원이 귀 훈련에서도 쓰인다 (악기 고르기가 나타난다)",
+  !(await ear.locator("#ear-inst").evaluate((el) => el.classList.contains("hidden"))), await ear.locator("#status").textContent());
+await ear.locator("#ear-new").tap();
+check("문제를 시작하면 칸이 나온다", (await ear.locator("#ear-slots .ear-slot").count()) >= 3);
+check("귀 훈련 페이지에서도 404 나는 파일이 없다", failed.length === 0, failed);
+const [popup] = await Promise.all([context.waitForEvent("page"), page.locator("#ear").tap()]);
+await popup.waitForLoadState("networkidle");
+check("피아노롤의 🎧 버튼이 하위 경로의 귀 훈련 페이지를 새 창으로 연다", popup.url() === earUrl, popup.url());
 
 check("콘솔 오류 없음", errors.length === 0, errors);
 

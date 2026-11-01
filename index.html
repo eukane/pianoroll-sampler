@@ -52,7 +52,7 @@
           <button id="instrument" type="button">🎹 임시 신스</button>
           <button id="load-sf" type="button">📂 음원</button>
           <button id="mixer" type="button">🎚️ 믹서</button>
-          <button id="ear" type="button" title="코드 진행을 듣고 맞히는 연습">🎧 귀 훈련</button>
+          <button id="ear" type="button" title="코드 진행을 듣고 맞히는 연습 — 새 창으로 열립니다 (작업 중인 곡은 그대로)">🎧 귀 훈련 ↗</button>
           <button id="export" type="button">💾 내보내기</button>
           <input id="sf-file" type="file" accept=".sf2,.sf3,.dls" hidden />
           <input id="sample-files" type="file" accept="audio/*,.wav" multiple hidden />
@@ -220,41 +220,6 @@
             <button id="tm-t-add" type="button">＋ 템포 바꾸기</button>
           </div>
           <p id="tm-msg" class="note"></p>
-        </div>
-      </div>
-    </div>
-
-    <!-- 귀 훈련: 진행을 듣고 몇 도 코드인지 맞힌다 (ui/earTraining.ts, 문제는 model/ear.ts). -->
-    <div id="ear-modal" class="hidden">
-      <div class="sheet ear-sheet">
-        <div class="sheet-head">
-          <b>🎧 귀 훈련</b>
-          <span class="spacer"></span>
-          <span id="ear-score" class="pos"></span>
-          <button id="ear-close" type="button">닫기</button>
-        </div>
-        <div class="sheet-body">
-          <div class="ear-top">
-            <select id="ear-level"></select>
-            <label class="ear-check"><input id="ear-randkey" type="checkbox" checked /> 조를 매번 바꿈</label>
-          </div>
-          <p id="ear-guide" class="note"></p>
-          <div class="ear-play">
-            <button id="ear-new" type="button" class="primary">▶ 문제 듣기</button>
-            <button id="ear-again" type="button" disabled>🔁 다시 듣기</button>
-            <button id="ear-tonic" type="button" disabled>🏠 으뜸 코드(I)만</button>
-          </div>
-          <div id="ear-slots" class="ear-slots"></div>
-          <div id="ear-choices" class="ear-choices"></div>
-          <div class="ear-play">
-            <button id="ear-back" type="button" disabled>⌫ 지우기</button>
-            <button id="ear-submit" type="button" class="primary" disabled>확인</button>
-          </div>
-          <div id="ear-result" class="ear-result"></div>
-          <div class="ear-play">
-            <button id="ear-reveal" type="button" disabled>정답 들려주기</button>
-            <button id="ear-review" type="button" disabled>틀린 문제 다시</button>
-          </div>
         </div>
       </div>
     </div>

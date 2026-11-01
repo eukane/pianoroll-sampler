@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover"
+    />
+    <meta name="theme-color" content="#12141a" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%2312141a'/%3E%3Ccircle cx='16' cy='16' r='9' fill='none' stroke='%234ec9b0' stroke-width='3'/%3E%3Ccircle cx='16' cy='16' r='3' fill='%234ec9b0'/%3E%3C/svg%3E"
+    />
+    <title>귀 훈련</title>
+  </head>
+  <body class="ear-page">
+    <!-- 귀 훈련 페이지. 피아노롤과 같은 주소 아래에 있고, 소리·음원·기록을 같이 쓴다.
+         화면은 ui/earTraining.ts, 문제는 model/ear.ts, 기록은 model/earStats.ts. -->
+    <div id="ear-app">
+      <header id="ear-head">
+        <button id="ear-exit" type="button" title="피아노롤로 돌아갑니다 (이 창을 닫거나, 직접 열었다면 피아노롤 페이지로 이동)">← 피아노롤</button>
+        <b class="ear-title">🎧 귀 훈련</b>
+        <span class="spacer"></span>
+        <span id="ear-streak" class="ear-chip" title="연속으로 문제를 푼 날 수"></span>
+        <span id="ear-today" class="ear-chip" title="오늘 푼 문제 / 하루 목표"></span>
+      </header>
+
+      <main id="ear-main">
+        <section id="ear-play-pane">
+          <div class="ear-top">
+            <select id="ear-level" aria-label="단계"></select>
+            <select id="ear-inst" aria-label="악기" class="hidden"></select>
+          </div>
+          <div class="ear-opts">
+            <label class="ear-check"><input id="ear-randkey" type="checkbox" checked /> 조를 매번 바꿈</label>
+            <label class="ear-check"><input id="ear-weak" type="checkbox" /> 약한 도수를 더 자주</label>
+            <span id="ear-score" class="pos"></span>
+          </div>
+          <p id="ear-guide" class="note"></p>
+          <div class="ear-play">
+            <button id="ear-new" type="button" class="primary">▶ 문제 듣기</button>
+            <button id="ear-again" type="button" disabled>🔁 다시 듣기</button>
+            <button id="ear-tonic" type="button" disabled>🏠 으뜸 코드(I)만</button>
+          </div>
+          <div id="ear-slots" class="ear-slots"></div>
+          <div id="ear-choices" class="ear-choices"></div>
+          <div class="ear-play">
+            <button id="ear-back" type="button" disabled>⌫ 지우기</button>
+            <button id="ear-submit" type="button" class="primary" disabled>확인</button>
+          </div>
+          <div id="ear-result" class="ear-result"></div>
+          <div class="ear-play">
+            <button id="ear-reveal" type="button" disabled>정답 들려주기</button>
+            <button id="ear-review" type="button" disabled>틀린 문제 다시</button>
+          </div>
+          <p class="note ear-keys">키보드: 스페이스 = 듣기/다시 듣기 · 1~7 = 코드 고르기 · 엔터 = 확인/다음 · 백스페이스 = 지우기</p>
+        </section>
+
+        <aside id="ear-stats" aria-label="내 기록">
+          <div class="ear-card">
+            <h3>오늘</h3>
+            <div class="ear-meter"><i id="ear-today-bar"></i></div>
+            <div class="ear-goalrow">
+              <span id="ear-today-text"></span>
+              <span class="spacer"></span>
+              <label>하루 목표 <select id="ear-goal"></select></label>
+            </div>
+          </div>
+          <div class="ear-card">
+            <h3 id="ear-deg-title">도수별 정답률</h3>
+            <div id="ear-deg"></div>
+            <p id="ear-weakline" class="note"></p>
+          </div>
+          <div class="ear-card">
+            <h3>자주 헷갈린 쌍</h3>
+            <div id="ear-conf"></div>
+          </div>
+          <div class="ear-card">
+            <h3>단계별</h3>
+            <div id="ear-levels"></div>
+          </div>
+          <div class="ear-card ear-reset">
+            <button id="ear-reset" type="button">기록 지우기</button>
+            <small>이 브라우저에만 저장됩니다</small>
+          </div>
+        </aside>
+      </main>
+
+      <div id="status" class="hidden"></div>
+    </div>
+
+    <div id="unlock">
+      <div class="card">
+        <div class="big">🔊</div>
+        <p>화면을 한 번 탭하면 소리가 켜집니다</p>
+        <small>폰 브라우저는 사용자가 만지기 전에 소리를 내주지 않습니다</small>
+      </div>
+    </div>
+
+    <script type="module" src="/src/ear/main.ts"></script>
+  </body>
+</html>

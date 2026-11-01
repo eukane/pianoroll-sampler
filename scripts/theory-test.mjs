@@ -19,6 +19,10 @@ import {
   LEVELS, degreeNumeral, describeAnswer, grade, levelById, makeQuestion, questionChords,
 } from "../src/model/ear.ts";
 import {
+  MAX_WRONG, dayKey, degreeRows, emptyStore, questionId, recordAnswer, sanitizeQuestion, sanitizeStore, streak,
+  topConfusions, weakWeights, weakest,
+} from "../src/model/earStats.ts";
+import {
   dropRedundantMeters, barAt, barBeatLabel, barIndexAt, barLength, barStartBeat, beatToSec, bpmAt, clickAtOrAfter, hasMeterChanges,
   isBarStart, nextClick, secToBeat, secondsBetween, sigAtBar, sigBeats, totalBeats as tlTotal, totalSeconds,
 } from "../src/model/timeline.ts";
@@ -438,6 +442,100 @@ for (const d of DEMOS) {
   ok("조가 없는 파일은 조 없이 열린다 (빈 칸을 만들지 않는다)", !("key" in none), none.key);
   const bogus = projectFromJson(JSON.stringify({ tracks: [], key: { tonic: 99, mode: "major" } }));
   ok("이상한 조는 버리고 연다", !("key" in bogus), bogus.key);
+}
+
+
+// ------------------------------------------------------------ 귀 훈련 기록 (model/earStats.ts)
+{
+  const day = (y, m, d) => new Date(y, m - 1, d, 12);
+  const today = day(2026, 11, 1);
+
+  // 읽기: 믿지 않는다
+  const e0 = sanitizeStore(null);
+  ok("저장된 게 없거나 깨졌으면 빈 기록", e0.goal === 20 && e0.wrong.length === 0 && Object.keys(e0.tally).length === 0 &&
+    sanitizeStore("zzz").goal === 20 && sanitizeStore([1, 2]).wrong.length === 0);
+  const old = sanitizeStore({ level: "L2", tally: { L2: { right: 3, total: 5 }, ZZ: { right: 1, total: 1 } } });
+  ok("옛 형식(단계 · 단계별 맞힘)은 그대로 읽는다 / 없는 단계는 버린다", old.level === "L2" && old.tally.L2.right === 3 && old.tally.L2.total === 5 && !("ZZ" in old.tally), old);
+  const odd = sanitizeStore({ tally: { L1: { right: 9, total: 4 } }, goal: 7, degrees: { major: { asked: [1, -3, "x"], right: [5, 1, 1] } }, days: { "abc": { right: 1, total: 1 }, "2026-11-01": { right: 2, total: 3 } } });
+  ok("맞힌 수가 푼 수보다 크거나 음수·글자면 바로잡는다", odd.tally.L1.right === 4 && odd.goal === 20 && odd.degrees.major.asked.slice(0, 3).join() === "1,0,0" && odd.degrees.major.right[0] === 1 && !("abc" in odd.days) && odd.days["2026-11-01"].total === 3, odd);
+  ok("고른 질문 모양 검사: 맞는 것만 통과", sanitizeQuestion({ level: "L2", key: { tonic: 7, mode: "major" }, degrees: [0, 3, 4, 5] })?.degrees.length === 4 &&
+    sanitizeQuestion({ level: "L2", key: { tonic: 7, mode: "minor" }, degrees: [0, 3, 4, 5] }) === null &&
+    sanitizeQuestion({ level: "L2", key: { tonic: 7, mode: "major" }, degrees: [0, 3, 4, 2] }) === null &&
+    sanitizeQuestion({ level: "L2", key: { tonic: 7, mode: "major" }, degrees: [0, 3, 4] }) === null &&
+    sanitizeQuestion({ level: "L2", key: { tonic: 12, mode: "major" }, degrees: [0, 3, 4, 5] }) === null &&
+    sanitizeQuestion({ level: "N1", key: { tonic: 0, mode: "major" }, degrees: [], progression: "komuro", options: ["komuro", "oudou"] })?.progression === "komuro" &&
+    sanitizeQuestion({ level: "N1", key: { tonic: 0, mode: "major" }, degrees: [], progression: "komuro", options: ["oudou"] }) === null &&
+    sanitizeQuestion({ level: "N1", key: { tonic: 0, mode: "major" }, degrees: [], progression: "m-flat", options: ["m-flat"] }) === null);
+
+  // 쓰기: 칸마다 센다
+  const s = emptyStore();
+  const q = { level: "L2", key: Gmaj, degrees: [0, 3, 4, 5] };
+  recordAnswer(s, q, [0, 3, 0, 5], false, today);
+  ok("칸 하나하나가 기록된다 (4칸 중 3칸 맞음)", s.degrees.major.asked[0] === 1 && s.degrees.major.right[0] === 1 && s.degrees.major.asked[4] === 1 && s.degrees.major.right[4] === 0 && s.degrees.major.right[5] === 1);
+  ok("틀린 칸의 헷갈린 쌍이 남는다 (V 를 I 로)", s.confusions["major:4>0"] === 1, s.confusions);
+  ok("문제 단위: 단계 기록은 0/1, 오늘은 0/1", s.tally.L2.total === 1 && s.tally.L2.right === 0 && s.days["2026-11-01"].total === 1);
+  ok("틀린 문제 목록에 들어간다", s.wrong.length === 1 && questionId(s.wrong[0]) === questionId(q));
+  recordAnswer(s, q, [0, 3, 4, 5], true, today);
+  ok("같은 문제를 맞히면 목록에서 빠진다 (복습 졸업) · 조 다르면 다른 문제", s.wrong.length === 0 &&
+    questionId(q) !== questionId({ ...q, key: Ebmaj }));
+  const q2 = { level: "L2", key: Gmaj, degrees: [3, 4, 0, 5] };
+  recordAnswer(s, q, [0, 3, 0, 5], false, today);
+  recordAnswer(s, q2, [3, 4, 0, 4], false, today);
+  recordAnswer(s, q, [0, 3, 0, 5], false, today);
+  ok("같은 문제를 또 틀리면 목록에서 맨 뒤로 간다 (중복 없음)", s.wrong.length === 2 && questionId(s.wrong[0]) === questionId(q2) && questionId(s.wrong[1]) === questionId(q));
+  const many = emptyStore();
+  for (let i = 0; i < 45; i += 1) recordAnswer(many, { level: "L1", key: { tonic: i % 12, mode: "major" }, degrees: [0, 3, 4].map((d, k) => [0, 3, 4][(k + i) % 3]) }, [9, 9, 9], false, today);
+  ok(`틀린 문제는 ${MAX_WRONG}개까지만 남긴다`, many.wrong.length <= MAX_WRONG, many.wrong.length);
+  const named = emptyStore();
+  recordAnswer(named, { level: "N1", key: Cmaj, degrees: [], progression: "komuro", options: ["komuro", "oudou"] }, "oudou", false, today);
+  ok("정석 이름 단계는 진행별로 기록하고 도수 기록은 건드리지 않는다", named.progs.komuro.total === 1 && named.progs.komuro.right === 0 &&
+    named.degrees.major.asked.every((x) => x === 0) && Object.keys(named.confusions).length === 0 && named.wrong.length === 1);
+  ok("저장했다 읽어도 같다", JSON.stringify(sanitizeStore(JSON.parse(JSON.stringify(s)))) === JSON.stringify(s));
+
+  // 보여 주기
+  const rows = degreeRows(s, "major", [0, 3, 4, 5]);
+  ok("도수별 정답률: 한 번도 안 나온 도수는 0% 가 아니라 null", degreeRows(emptyStore(), "major", [0]).every((r) => r.rate === null) && rows.find((r) => r.degree === 0).rate === 1 && rows.find((r) => r.degree === 4).rate === 0.4, rows);
+  const cs = emptyStore();
+  cs.confusions = { "major:5>2": 4, "major:4>0": 4, "major:1>3": 1, "minor:5>2": 9 };
+  const top = topConfusions(cs, "major", 2);
+  ok("헷갈린 쌍: 많은 순, 같으면 도수 순 · 다른 조 종류는 섞지 않는다", top.length === 2 && top[0].asked === 4 && top[1].asked === 5 && topConfusions(cs, "minor").length === 1);
+
+  // 약한 도수
+  const w = emptyStore();
+  w.degrees.major = { asked: [10, 0, 0, 3, 8, 8, 0], right: [10, 0, 0, 0, 2, 8, 0] };
+  const wts = weakWeights(w, "major", [0, 3, 4, 5]);
+  ok("가중치: 100% → 1, 표본 모자라면(3번) 1, 25% → 3.25, 100% → 1", wts[0] === 1 && wts[1] === 1 && Math.abs(wts[2] - 3.25) < 1e-9 && wts[3] === 1, wts);
+  ok("가장 약한 도수: V (표본이 모자란 IV 는 제외)", weakest(w, "major", [0, 3, 4, 5])?.degree === 4 && weakest(emptyStore(), "major", [0, 3, 4]) === null);
+  {
+    const pool = [0, 3, 4];
+    const count4 = (weights, seed) => {
+      const r = lcg(seed);
+      let n = 0; let prev;
+      for (let i = 0; i < 600; i += 1) {
+        const qq = makeQuestion("L1", r, true, prev, weights);
+        for (let k = 1; k < qq.degrees.length; k += 1) if (qq.degrees[k] === qq.degrees[k - 1]) throw new Error("연속");
+        n += qq.degrees.filter((d) => d === 4).length;
+        prev = qq;
+      }
+      return n;
+    };
+    const plain = count4(undefined, 99);
+    const heavy = count4([1, 1, 4], 99);
+    ok("약한 도수 가중치를 주면 그 도수가 더 자주 나온다 (규칙은 그대로)", heavy > plain * 1.15, { plain, heavy });
+    const a = []; const b = [];
+    { const r1 = lcg(5); const r2 = lcg(5); for (let i = 0; i < 30; i += 1) { a.push(makeQuestion("L3", r1, true).degrees.join()); b.push(makeQuestion("L3", r2, true, undefined, [1, 2]).degrees.join()); } }
+    ok("가중치가 없거나 길이가 안 맞으면 예전과 똑같이 뽑는다", a.join("|") === b.join("|"));
+    void pool;
+  }
+
+  // 날짜 · 연속 일수
+  ok("날짜 키는 이 기기의 날짜 (한 자리 월·일에 0 을 붙인다)", dayKey(new Date(2026, 0, 5, 23, 59)) === "2026-01-05" && dayKey(new Date(2026, 10, 1, 0, 0)) === "2026-11-01");
+  const T = (n) => ({ right: n, total: n });
+  ok("연속 일수: 오늘·어제·그제 → 3", streak({ "2026-11-01": T(1), "2026-10-31": T(2), "2026-10-30": T(1) }, today) === 3);
+  ok("오늘 아직 안 풀었어도 어제까지 이어졌으면 끊기지 않았다", streak({ "2026-10-31": T(2), "2026-10-30": T(1) }, today) === 2);
+  ok("하루 건너뛰면 끊긴다", streak({ "2026-11-01": T(1), "2026-10-30": T(1) }, today) === 1 && streak({ "2026-10-30": T(5) }, today) === 0);
+  ok("달이 바뀌어도 이어진다 (10월 31일 → 11월 1일)", streak({ "2026-11-01": T(1), "2026-10-31": T(1) }, today) === 2 && streak({ "2026-03-01": T(1), "2026-02-28": T(1) }, day(2026, 3, 1)) === 2);
+  ok("풀이 수가 0 인 날은 푼 날이 아니다", streak({ "2026-11-01": { right: 0, total: 0 } }, today) === 0);
 }
 
 for (const r of out) console.log(`${r.pass ? "  ok" : "FAIL"}  ${r.name}${r.pass ? "" : ` — ${JSON.stringify(r.d)}`}`);

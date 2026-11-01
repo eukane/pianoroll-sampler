@@ -32,7 +32,6 @@ import { diatonicChords, progressionPitches, progressionsFor } from "./model/pro
 import { Metronome } from "./audio/metronome";
 import { VelocityLane } from "./ui/velocityLane";
 import { PlayKeyboard } from "./ui/playKeyboard";
-import { EarTraining } from "./ui/earTraining";
 import { TimelinePanel } from "./ui/timelinePanel";
 import {
   clearCalibration,
@@ -1048,22 +1047,16 @@ const timelinePanel = new TimelinePanel({
 // ------------------------------------------------------- 귀 훈련
 
 /** 소리를 낼 트랙. 드럼 트랙(프리셋 16384~)은 음높이가 악기 번호라 코드가 안 들린다 — 피한다. */
-function earTrack(): number {
-  const isDrum = (i: number) => {
-    const src = project.tracks[i]?.source;
-    return !!src && src.kind === "sf2" && src.presetId >= 16384;
-  };
-  if (!isDrum(panel.activeTrack)) return panel.activeTrack;
-  const other = project.tracks.findIndex((_, i) => !isDrum(i));
-  return other >= 0 ? other : panel.activeTrack;
-}
+// ------------------------------------------------------- 귀 훈련 (따로 있는 페이지)
 
-const ear = new EarTraining({
-  trackIndex: earTrack,
-  hold: (pitch, track) => scheduler.keyHold(pitch, track),
-  release: (pitch) => scheduler.keyRelease(pitch, true),
-  isUnlocked: () => engine.isUnlocked,
-  onStatus: showStatus,
+/**
+ * 귀 훈련은 ear.html 이라는 별도 페이지다 (src/ear/main.ts). **새 창으로 연다.**
+ * 이 앱은 곡을 자동 저장하지 않아서, 같은 창에서 옮겨 가면 작업하던 곡이 사라진다.
+ * 새 창이면 곡은 이 창에 그대로 있고, 음원과 기록은 같은 주소라 저절로 같이 쓴다.
+ */
+$<HTMLButtonElement>("ear").addEventListener("click", () => {
+  const opened = window.open(new URL("ear.html", window.location.href).toString(), "_blank");
+  if (!opened) showStatus("새 창이 막혔습니다. 브라우저의 팝업 허용을 켜 주세요 (곡은 그대로 있습니다)", "error");
 });
 
 // ------------------------------------------------------- 건반 크기 맞추기
@@ -1217,7 +1210,7 @@ requestAnimationFrame(frame);
 if (import.meta.env.DEV) {
   (window as unknown as Record<string, unknown>).__app = {
     project, scheduler, roll, engine, registry, panel, mixer, mixerState, history,
-    keyboard, lane, metronome, calibration, ear, timelinePanel,
+    keyboard, lane, metronome, calibration, timelinePanel,
   };
 }
 
@@ -1260,7 +1253,6 @@ window.addEventListener("keydown", (e) => {
     for (const id of ["preset-modal", "export-modal", "mixer-modal", "map-modal", "note-modal", "cal-modal"]) {
       document.getElementById(id)?.classList.add("hidden");
     }
-    if (ear.isOpen) ear.close();
     if (timelinePanel.isOpen) timelinePanel.close();
     roll.clearSelection();
   }

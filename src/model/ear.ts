@@ -69,6 +69,19 @@ function pick<T>(rand: Rand, list: readonly T[]): T {
   return list[Math.min(list.length - 1, Math.floor(rand() * list.length))];
 }
 
+/** 가중치대로 뽑는다. 가중치가 없거나 길이가 안 맞으면 그냥 고르게 뽑는다 (난수를 한 번 쓰는 것도 같다). */
+function pickWeighted(rand: Rand, list: readonly number[], weights?: readonly number[]): number {
+  if (!weights || weights.length !== list.length) return pick(rand, list);
+  const total = weights.reduce((a, w) => a + Math.max(0, w), 0);
+  if (!(total > 0)) return pick(rand, list);
+  let x = rand() * total;
+  for (let i = 0; i < list.length; i += 1) {
+    x -= Math.max(0, weights[i]);
+    if (x < 0) return list[i];
+  }
+  return list[list.length - 1];
+}
+
 function shuffle<T>(rand: Rand, list: readonly T[]): T[] {
   const out = [...list];
   for (let i = out.length - 1; i > 0; i -= 1) {
@@ -94,8 +107,17 @@ function pickKey(rand: Rand, mode: Mode, randomKey: boolean, previous?: Key): Ke
  *   · 첫 코드는 으뜸(I)일 때가 많게 한다. 정석 진행이 대개 그렇고, 집에서 출발해 어디로
  *     가는지를 듣는 게 이 훈련의 핵심이다. 그래도 매번은 아니다 (그러면 첫 코드는 외워진다).
  *   · 직전 문제와 똑같은 문제는 내지 않는다
+ *
+ * @param weights 도수 단계에서 `pool` 과 같은 순서의 가중치. 약한 도수를 더 자주 내고 싶을 때
+ *                (model/earStats.ts 의 weakWeights). 없으면 고르게 뽑는다.
  */
-export function makeQuestion(levelId: string, rand: Rand, randomKey: boolean, previous?: Question): Question {
+export function makeQuestion(
+  levelId: string,
+  rand: Rand,
+  randomKey: boolean,
+  previous?: Question,
+  weights?: readonly number[],
+): Question {
   const level = levelById(levelId);
   if (!level) throw new Error(`없는 단계: ${levelId}`);
   const key = pickKey(rand, level.mode, randomKey, previous?.key);
@@ -113,10 +135,10 @@ export function makeQuestion(levelId: string, rand: Rand, randomKey: boolean, pr
     for (let i = 0; i < level.length; i += 1) {
       let d: number;
       if (i === 0 && level.pool.includes(0) && rand() < 0.6) d = 0;
-      else d = pick(rand, level.pool);
+      else d = pickWeighted(rand, level.pool, weights);
       let guard = 0;
       while (i > 0 && d === degrees[i - 1] && guard < 20) {
-        d = pick(rand, level.pool);
+        d = pickWeighted(rand, level.pool, weights);
         guard += 1;
       }
       degrees.push(d);

@@ -66,9 +66,17 @@ jobs:
       # MODULE"). 실제로 사용자가 겪었다. 올리기 전에 막는다.
       - name: 늦게 받아 오는 청크가 없는지
         run: |
-          n=$(ls dist/assets/*.js | wc -l)
-          if [ "$n" -ne 1 ]; then
-            echo "JS 청크가 ${n}개입니다. 1개여야 합니다:"
+          # 페이지가 둘(피아노롤 · 귀 훈련)이라 JS 파일이 여럿이다. 전부 두 페이지의 html 에
+          # 처음부터 적혀 있어야 한다. html 에 없는 파일은 실행 중에 늦게 받아 오는 청크다.
+          lazy=0
+          for f in dist/assets/*.js; do
+            name=$(basename "$f")
+            if ! grep -q "$name" dist/index.html dist/ear.html; then
+              echo "html 에 없는 JS 청크: $name"
+              lazy=1
+            fi
+          done
+          if [ "$lazy" -ne 0 ]; then
             ls -la dist/assets/*.js
             exit 1
           fi

@@ -69,7 +69,7 @@ npm run select     # 상자로 고르기 점검 25가지 (브라우저 없이)
 npm run theory     # 조·음계·코드·변박·템포 계산 점검 148가지 (브라우저 없이)
 npm run meter      # 변박·템포가 실제 소리·메트로놈·WAV·화면에서 맞는지 (dev 서버 필요)
 npm run chords     # 코드 버튼·정석 진행 화면 점검 (dev 서버 필요)
-npm run ear        # 귀 훈련 화면 점검 (dev 서버 필요)
+npm run ear        # 귀 훈련 페이지 점검 — 소리 순서 · 기록 · 키보드 · 새 창 · 음원 (dev 서버 필요)
 npm run persist    # 사운드폰트 기억 점검 (dev 서버 필요)
 npm run oto        # UTAU 음원 읽기·이어붙이기 점검 62가지 (브라우저 없이)
 npm run zip        # 일본어 이름 zip 읽기 점검 (브라우저 없이)
@@ -85,7 +85,7 @@ npm run latency    # 이 기기에서 사운드폰트가 몇 ms 늦는지 실측
 ### 변박 · 템포 변화 · 귀 훈련 · 코드 버튼 · 음원 기억 ✅
 - **변박·템포** 버튼: 곡 중간에 3/4 · 7/8 · 5/4 … 로 바꾸고 빠르기도 바꾼다. 노트는 안 움직이고 마디선만 다시 그어진다.
   템포는 계단식(램프 없음). MIDI 로 내보내고 가져올 때도 따라간다. 7/8 에서는 1/8 스냅 권장.
-- **귀 훈련**: 진행을 듣고 몇 도 코드인지 맞힌다. 조는 매번 바뀐다.
+- **귀 훈련**: 별도 페이지(`ear.html`, 피아노롤의 🎧 버튼이 새 창으로 연다). 진행을 듣고 몇 도 코드인지 맞힌다. 조는 매번 바뀌고, 도수별 정답률 · 헷갈린 쌍 · 오늘 푼 수 · 연속 일수를 옆에 보여 준다. 틀린 문제는 저장된다.
 - **코드 버튼**: 조의 일곱 코드와 정석 진행을 한 번에 넣는다. 「↶ 방금 것」 으로 한 번 취소.
 - **음원 기억**: 한 번 고른 SF2 를 이 브라우저가 기억해서 다음부터 자동으로 불러온다.
 - 자세한 이유와 한계는 DECISIONS.md.
@@ -285,6 +285,8 @@ src/
              · demoMinor(단조 아르페지오)
              · oto(UTAU 원음설정) · frq(녹음된 음정) · phrase(이어붙이기 계획)
              · zip(받은 음원 zip 을 안 풀고 필요한 것만 꺼내 읽기)
+             · progression(조의 코드·정석 진행) · ear(귀 훈련 문제·채점) · earStats(귀 훈련 기록)
+             · timeline(박자 바꾸기·템포 변화의 시간 계산)
   audio/     engine(잠금해제) · scheduler(lookahead) · mixer(트랙별 배선)
              · instrument(인터페이스) · oscInstrument(음원 없을 때)
              · soundfont(SF2 샘플러) · folderSampler(낱개 WAV)
@@ -296,9 +298,10 @@ src/
              · metronome(박자 소리 — 곡의 일부가 아니라 마스터에 바로)
   ui/        pianoroll(캔버스 + 터치) · notePanel(음 하나 조교)
              · playKeyboard(실제 크기 연주 건반) · calibration(화면의 1cm)
-             · velocityLane(세기 줄)
+             · velocityLane(세기 줄) · earTraining(귀 훈련 페이지 화면)
              · instrumentPanel(음원·프리셋·트랙)
              · exportPanel(내보내기·가져오기) · mixerPanel(음량·팬·울림) · theme
+  ear/       귀 훈련 페이지의 진입점 (ear.html — 피아노롤과 같은 주소 아래, 음원·기록을 같이 쓴다)
   history.ts 실행 취소 (스냅숏 방식)
   export/    midi(SMF 읽기·쓰기) · wav(16bit PCM) · render(오프라인 렌더)
              · projectFile(저장·불러오기)
