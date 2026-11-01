@@ -51,7 +51,8 @@ const slotTexts = () => page.$$eval("#ear-slots .ear-slot", (s) => s.map((x) => 
 
 check("귀 훈련 페이지가 열린다 (제목 · 피아노롤 버튼)", (await page.title()) === "귀 훈련" && await page.isVisible("#ear-exit"));
 const levels = await page.$$eval("#ear-level option", (o) => o.map((x) => x.value));
-check("단계가 여섯 개 (1~4단계 + 정석 이름 장·단조)", levels.join() === "L1,L2,L3,L4,N1,N2", levels);
+check("처음엔 전부 보인다 (기본 「7회차까지」) — 회차 순으로 열세 단계", levels.join() === "L1,L2,L3,Q1,Q2,N1,E2,Q3,L4,N2,N3,N4,N5", levels);
+check("단계 목록은 회차별로 묶여 있다 (optgroup 7개)", (await page.$$("#ear-level optgroup")).length === 7);
 check("음원이 없으면 악기 고르기는 숨겨져 있다 (임시 신스뿐)", await page.evaluate(() => document.getElementById("ear-inst").classList.contains("hidden")));
 check("처음엔 문제가 없어 「다시 듣기」 · 「확인」 이 꺼져 있다",
   await page.evaluate(() => document.getElementById("ear-again").disabled && document.getElementById("ear-submit").disabled));
@@ -155,7 +156,7 @@ const idx = qn.options.indexOf(qn.progression);
 await page.tap(`#ear-choices button:nth-child(${idx + 1})`);
 await page.tap("#ear-submit");
 check("이름을 맞히면 정답", (await text("#ear-result")).startsWith("정답"), await text("#ear-result"));
-check("정석 이름 단계는 진행별 정답률이 뜬다 (여섯 줄)", (await page.$$("#ear-deg .ear-stat")).length === 6 && (await text("#ear-deg-title")).includes("정석 진행별"));
+check("정석 이름 단계는 진행별 정답률이 뜬다 (7회차까지면 일곱 줄)", (await page.$$("#ear-deg .ear-stat")).length === 7 && (await text("#ear-deg-title")).includes("정석 진행별"));
 
 // ⑤ 단조 · 조 바꾸기
 await page.selectOption("#ear-level", "L4");
@@ -169,6 +170,93 @@ for (let i = 0; i < 6; i += 1) {
 check("4단계는 단조이고 조가 바뀐다", [...keys].every((k) => k.endsWith(":minor")) && keys.size >= 3, [...keys]);
 check("단조 버튼은 i III iv v VI VII", (await choiceTexts()).join() === "i,III,iv,v,VI,VII", await choiceTexts());
 check("도수별 정답률 제목이 단조로 바뀐다", (await text("#ear-deg-title")).includes("단조"));
+
+
+// ⑤-2 수업 회차: 배운 곳까지만 나온다
+const levelIds = () => page.$$eval("#ear-level option", (o) => o.map((x) => x.value));
+await page.selectOption("#ear-lesson", "1");
+check("1회차까지만 배웠으면 1회차 단계만 보인다 (단조 · 2-5-1 · 7화음 · 변형은 없다)", (await levelIds()).join() === "L1,L2,L3,Q1,Q2,N1", await levelIds());
+check("고르던 단계(4단계, 단조)가 아직 안 배운 것이면 첫 단계로 내려온다", (await page.$eval("#ear-level", (s) => s.value)) === "L1");
+check("회차 안내가 노트의 귀 훈련을 말한다 (1회차 맛보기)", (await text("#ear-lesson-hint")).includes("1회차 귀 훈련: 귀 훈련 맛보기") && !(await text("#ear-lesson-hint")).includes("추천"), await text("#ear-lesson-hint"));
+check("1회차 추천 단계에 ★ 가 붙는다", (await page.$$eval("#ear-level option", (o) => o.filter((x) => x.textContent.startsWith("★")).map((x) => x.value))).join() === "L1,Q1");
+await page.selectOption("#ear-level", "N1");
+const seenNames = new Set();
+for (let i = 0; i < 30; i += 1) {
+  await page.tap("#ear-new");
+  const qq = await q();
+  qq.options.forEach((o) => seenNames.add(o));
+}
+check("1회차의 이름 맞히기 보기에는 2-5-1 이 없다 (아직 안 배웠다)", !seenNames.has("251") && !seenNames.has("251t") && seenNames.has("oudou") && seenNames.has("komuro"), [...seenNames]);
+await page.selectOption("#ear-lesson", "2");
+check("2회차까지: I 와 V 구분 단계가 열린다", (await levelIds()).includes("E2") && !(await levelIds()).includes("Q3") && !(await levelIds()).includes("L4"), await levelIds());
+check("2회차 안내는 노트의 「I 와 V 구분」", (await text("#ear-lesson-hint")).includes("I 와 V 구분") && !(await text("#ear-lesson-hint")).includes("추천"), await text("#ear-lesson-hint"));
+await page.tap("#ear-focus");
+check("「추천 단계로」 를 누르면 그 단계로 간다", (await page.$eval("#ear-level", (s) => s.value)) === "E2");
+check("추천 단계에 와 있으면 그 버튼은 꺼진다", await page.evaluate(() => document.getElementById("ear-focus").disabled));
+await page.evaluate(() => { const c = document.getElementById("ear-randkey"); c.checked = false; c.dispatchEvent(new Event("change")); });
+const e2 = new Set();
+for (let i = 0; i < 12; i += 1) {
+  await page.tap("#ear-new");
+  const qq = await q();
+  qq.degrees.forEach((d) => e2.add(d));
+  if (qq.degrees.length !== 4) e2.add("길이");
+}
+check("I·V 구분은 I(0) 와 V(4) 만, 네 코드씩 나온다", [...e2].sort().join() === "0,4", [...e2]);
+check("버튼은 I · V 두 개", (await choiceTexts()).join() === "I,V", await choiceTexts());
+await page.selectOption("#ear-lesson", "4");
+check("4회차 안내는 노트에 없는 회차라 「추천」 이라고 밝힌다", (await text("#ear-lesson-hint")).includes("추천"), await text("#ear-lesson-hint"));
+check("고르던 단계 E2 는 그대로 남는다 (아직 배운 것이므로)", (await page.$eval("#ear-level", (s) => s.value)) === "E2");
+
+// ⑤-3 코드 종류 듣기 (장 · 단 · 감)
+await page.selectOption("#ear-level", "Q2");
+check("코드 종류 단계는 문제를 시작하기 전에도 버튼이 보인다 (눌러 소리를 익히려고)", (await choiceTexts()).join() === "장3화음,단3화음,감3화음", await choiceTexts());
+check("이 단계엔 「으뜸 코드만」 버튼이 없다", await page.evaluate(() => document.getElementById("ear-tonic").classList.contains("hidden")));
+await page.tap("#ear-choices button:nth-child(2)");
+await page.waitForTimeout(150);
+{
+  const h = await holds();
+  check("종류 버튼을 누르면 C 의 단3화음(도 미♭ 솔)이 난다 — 베이스 포함", h.join() === "48,60,63,67", h);
+}
+await page.evaluate(() => { const c = document.getElementById("ear-randkey"); c.checked = true; c.dispatchEvent(new Event("change")); });
+await page.tap("#ear-new");
+const qq1 = await q();
+check("문제는 코드 하나 (종류 · 근음)", qq1.quality && ["maj", "min", "dim"].includes(qq1.quality) && qq1.degrees.length === 0, qq1);
+const seenQ = [];
+const tq = Date.now();
+while (Date.now() - tq < 2600) {
+  const h = (await holds()).join();
+  if (seenQ[seenQ.length - 1] !== h) seenQ.push(h);
+  await page.waitForTimeout(40);
+}
+check("소리는 코드 하나뿐이다 (으뜸 코드를 먼저 들려주지 않는다)", seenQ.filter((x) => x !== "").length === 1, seenQ);
+check("칸은 하나 (?)", (await page.$$("#ear-slots .ear-slot")).length === 1 && (await text("#ear-slots")).trim() === "?");
+const order = ["maj", "min", "dim"];
+const wrongQ = order.find((o) => o !== qq1.quality);
+await page.tap(`#ear-choices button:nth-child(${order.indexOf(wrongQ) + 1})`);
+await page.tap("#ear-submit");
+check("틀리면 정답 종류와 반음 세는 법이 같이 뜬다", (await text("#ear-result")).startsWith("아쉬워요") && (await text("#ear-result")).includes("반음"), await text("#ear-result"));
+check("코드 종류에는 「C 장조」 같은 조 이야기가 없다", !(await text("#ear-result")).includes("장조 ("), await text("#ear-result"));
+await page.waitForTimeout(150);
+check("헷갈린 쌍: 「정답 종류 를 내 답 종류 로」", (await page.$$eval("#ear-conf .ear-conf-row", (r) => r.map((x) => x.textContent))).some((t) => t.includes("3화음 를")), await text("#ear-conf"));
+check("코드 종류별 정답률 카드로 바뀐다 (보기 세 줄)", (await text("#ear-deg-title")).includes("코드 종류별") && (await page.$$("#ear-deg .ear-stat")).length === 3);
+st = await store();
+check("기록: 종류별 · 쌍 · 틀린 문제 목록", st.quals[qq1.quality].total === 1 && st.quals[qq1.quality].right === 0 && st.confusions[`q:${qq1.quality}>${wrongQ}`] === 1 && st.wrong.some((w) => w.quality === qq1.quality), st);
+await page.tap("#ear-choices button:nth-child(1)");
+await page.waitForTimeout(100);
+check("답한 뒤에도 종류 버튼을 눌러 소리를 들어 볼 수 있다", (await holds()).length > 0);
+await page.keyboard.press("Digit3");
+await page.waitForTimeout(100);
+check("키보드 숫자로도 종류 소리를 들을 수 있다", (await holds()).length > 0);
+// 7화음
+await page.selectOption("#ear-level", "Q3");
+check("7화음 종류 버튼: maj7 · m7 · 7", (await choiceTexts()).join() === "maj7,m7,7 (도미넌트7)", await choiceTexts());
+await page.selectOption("#ear-lesson", "7");
+check("배운 곳까지를 기억한다 (새로고침 뒤에도)", (await store()).lesson === 7);
+await page.selectOption("#ear-lesson", "3");
+await page.reload({ waitUntil: "networkidle" });
+await page.tap("#unlock").catch(() => {});
+check("새로고침해도 3회차까지로 열린다", (await page.$eval("#ear-lesson", (s) => s.value)) === "3" && !(await levelIds()).includes("L4") && (await levelIds()).includes("Q3"), await levelIds());
+await page.selectOption("#ear-lesson", "7");
 
 // ⑥ 키보드
 await page.selectOption("#ear-level", "L1");

@@ -14,7 +14,8 @@
  * 모양이 이상한 건 버리고 쓸 수 있는 것만 남긴다.
  */
 
-import { LEVELS, levelById, type Question } from "./ear.ts";
+import { LAST_LESSON, LEVELS, QUALITIES, levelById, namedAnswer, type Question } from "./ear.ts";
+import { clampLesson } from "./lessons.ts";
 import { PROGRESSIONS } from "./progression.ts";
 import type { Mode } from "./scale.ts";
 
@@ -28,16 +29,24 @@ export type EarStore = {
   /** 단계별 문제 수 (칸이 아니라 문제 단위) */
   tally: Record<string, Tally>;
   degrees: Record<Mode, DegreeStats>;
-  /** 「major:5>2」 = 장조에서 vi 인데 iii 로 답한 횟수 */
+  /**
+   * 헷갈린 쌍 (정답>내 답) 횟수.
+   *   「major:5>2」 장조에서 vi 인데 iii 로 답함 · 「q:maj>min」 장3화음을 단3화음으로 ·
+   *   「p:oudou>komuro」 왕도를 코무로로
+   */
   confusions: Record<string, number>;
   /** 정석 진행 id → 맞힘/풂 */
   progs: Record<string, Tally>;
+  /** 코드 종류 id(maj · min · dim · maj7 · m7 · dom7) → 맞힘/풂 */
+  quals: Record<string, Tally>;
   /** 「2026-11-01」 → 그날 푼 문제 */
   days: Record<string, Tally>;
   /** 틀린 문제 (오래된 것이 앞) */
   wrong: Question[];
   /** 하루 목표 문제 수 */
   goal: number;
+  /** 수업에서 여기(회차)까지 배웠다 — 이 회차까지의 단계와 진행만 나온다 (1~7, 7 = 전부) */
+  lesson: number;
   /** 약한 도수를 더 자주 낸다 */
   focusWeak: boolean;
   /** 조를 매번 바꾼다 */
@@ -60,12 +69,23 @@ export function emptyStore(): EarStore {
     degrees: { major: emptyDegrees(), minor: emptyDegrees() },
     confusions: {},
     progs: {},
+    quals: {},
     days: {},
     wrong: [],
     goal: 20,
+    lesson: LAST_LESSON,
     focusWeak: false,
     randomKey: true,
   };
+}
+
+/** 헷갈린 쌍의 열쇠가 알려진 모양인가 (모르는 종류·진행 id 는 버린다) */
+function isConfusionKey(k: string): boolean {
+  if (/^(major|minor):[0-6]>[0-6]$/.test(k)) return true;
+  const m = /^(q|p):([\w-]+)>([\w-]+)$/.exec(k);
+  if (!m) return false;
+  const known = m[1] === "q" ? Object.keys(QUALITIES) : PROGRESSIONS.map((p) => p.id);
+  return known.includes(m[2]) && known.includes(m[3]);
 }
 
 // ------------------------------------------------------------------ 읽기 (믿지 않는다)
@@ -100,12 +120,20 @@ export function sanitizeQuestion(v: unknown): Question | null {
   if (typeof tonic !== "number" || !Number.isInteger(tonic) || tonic < 0 || tonic > 11) return null;
   if (v.key.mode !== level.mode) return null;
   const key = { tonic, mode: level.mode };
+  const strings = (x: unknown, allowed: readonly string[]) =>
+    Array.isArray(x) ? x.filter((o): o is string => typeof o === "string" && allowed.includes(o)) : [];
   if (level.kind === "named") {
     const id = v.progression;
     if (typeof id !== "string" || !level.names?.includes(id)) return null;
-    const opts = Array.isArray(v.options) ? v.options.filter((o): o is string => typeof o === "string" && !!level.names?.includes(o)) : [];
+    const opts = strings(v.options, level.names);
     if (!opts.includes(id)) return null;
     return { level: level.id, key, degrees: [], progression: id, options: [...new Set(opts)] };
+  }
+  if (level.kind === "quality") {
+    const id = v.quality;
+    const choices = level.choices ?? [];
+    if (typeof id !== "string" || !choices.includes(id)) return null;
+    return { level: level.id, key, degrees: [], quality: id, options: [...choices] };
   }
   const d = v.degrees;
   if (!Array.isArray(d) || d.length !== level.length) return null;
@@ -127,11 +155,14 @@ export function sanitizeStore(raw: unknown): EarStore {
   }
   if (isObj(raw.confusions)) {
     for (const [k, n] of Object.entries(raw.confusions)) {
-      if (/^(major|minor):[0-6]>[0-6]$/.test(k) && count(n) > 0) s.confusions[k] = count(n);
+      if (isConfusionKey(k) && count(n) > 0) s.confusions[k] = count(n);
     }
   }
   if (isObj(raw.progs)) {
     for (const p of PROGRESSIONS) if (raw.progs[p.id] !== undefined) s.progs[p.id] = sanitizeTally(raw.progs[p.id]);
+  }
+  if (isObj(raw.quals)) {
+    for (const id of Object.keys(QUALITIES)) if (raw.quals[id] !== undefined) s.quals[id] = sanitizeTally(raw.quals[id]);
   }
   if (isObj(raw.days)) {
     const keys = Object.keys(raw.days).filter((k) => /^\d{4}-\d{2}-\d{2}$/.test(k)).sort();
@@ -148,6 +179,7 @@ export function sanitizeStore(raw: unknown): EarStore {
     }
     s.wrong = s.wrong.slice(-MAX_WRONG);
   }
+  s.lesson = clampLesson(raw.lesson);
   if (typeof raw.goal === "number" && (GOALS as readonly number[]).includes(raw.goal)) s.goal = raw.goal;
   if (typeof raw.focusWeak === "boolean") s.focusWeak = raw.focusWeak;
   if (typeof raw.randomKey === "boolean") s.randomKey = raw.randomKey;
@@ -188,8 +220,9 @@ export function streak(days: Record<string, Tally>, today: Date): number {
 
 /** 같은 문제인가 (틀린 문제 목록에서 중복을 막는 용도) */
 export function questionId(q: Question): string {
-  return q.progression
-    ? `${q.level}|${q.key.tonic}|${q.progression}`
+  const named = namedAnswer(q);
+  return named !== undefined
+    ? `${q.level}|${q.key.tonic}|${named}`
     : `${q.level}|${q.key.tonic}|${q.degrees.join(",")}`;
 }
 
@@ -219,8 +252,14 @@ export function recordAnswer(
   const dayKeys = Object.keys(store.days).sort();
   for (const k of dayKeys.slice(0, Math.max(0, dayKeys.length - MAX_DAYS))) delete store.days[k];
 
-  if (q.progression) {
-    store.progs[q.progression] = bump(store.progs[q.progression]);
+  if (q.progression || q.quality) {
+    const want = (q.progression ?? q.quality) as string;
+    const book = q.progression ? store.progs : store.quals;
+    book[want] = bump(book[want]);
+    if (!correct && typeof answer === "string") {
+      const key = `${q.progression ? "p" : "q"}:${want}>${answer}`;
+      if (isConfusionKey(key)) store.confusions[key] = (store.confusions[key] ?? 0) + 1;
+    }
   } else if (Array.isArray(answer)) {
     const stats = store.degrees[level.mode];
     q.degrees.forEach((d, i) => {
@@ -267,6 +306,19 @@ export function topConfusions(store: EarStore, mode: Mode, limit = 5): Confusion
     out.push({ asked: Number(m[2]), answered: Number(m[3]), count: n });
   }
   out.sort((a, b) => b.count - a.count || a.asked - b.asked || a.answered - b.answered);
+  return out.slice(0, limit);
+}
+
+export type NamedConfusion = { asked: string; answered: string; count: number };
+
+/** 진행 이름(`p`) 또는 코드 종류(`q`) 를 헷갈린 쌍. 많은 순. */
+export function namedConfusions(store: EarStore, kind: "p" | "q", limit = 5): NamedConfusion[] {
+  const out: NamedConfusion[] = [];
+  for (const [k, n] of Object.entries(store.confusions)) {
+    const m = /^(q|p):([\w-]+)>([\w-]+)$/.exec(k);
+    if (m && m[1] === kind) out.push({ asked: m[2], answered: m[3], count: n });
+  }
+  out.sort((a, b) => b.count - a.count || a.asked.localeCompare(b.asked) || a.answered.localeCompare(b.answered));
   return out.slice(0, limit);
 }
 

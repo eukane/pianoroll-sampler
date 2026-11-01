@@ -16,13 +16,14 @@
  */
 
 import {
-  LEVELS, degreeNumeral, describeAnswer, grade, levelById, makeQuestion, questionChords,
-  type Question, type Rand,
+  LAST_LESSON, LEVELS, degreeNumeral, describeAnswer, grade, levelById, levelNames, makeQuestion, namedAnswer, qualityLabel,
+  qualityPitches, questionChords, type Question, type Rand,
 } from "../model/ear";
 import {
-  GOALS, MIN_SAMPLE, degreeRows, dayKey, recordAnswer, sanitizeStore, streak, topConfusions, weakWeights, weakest,
-  emptyStore, type EarStore,
+  GOALS, MIN_SAMPLE, degreeRows, dayKey, namedConfusions, recordAnswer, sanitizeStore, streak, topConfusions,
+  weakWeights, weakest, emptyStore, type EarStore, type Tally,
 } from "../model/earStats";
+import { LESSONS, focusLevels, lessonByNumber, visibleLevels } from "../model/lessons";
 import { PROGRESSIONS, chordPitches } from "../model/progression";
 import { keyLabel } from "../model/scale";
 
@@ -48,6 +49,8 @@ const CHORD_MS = 1150;
 const TONIC_MS = 1300;
 const GAP_AFTER_TONIC = 450;
 const HOLD_FRACTION = 0.92;
+/** 코드 종류 문제의 코드 길이 — 하나뿐이라 충분히 길게 */
+const QUALITY_MS = 2000;
 /** 기본으로 걸어 줄 악기 (GM 프로그램 번호): 어쿠스틱 피아노 */
 const DEFAULT_PROGRAM = 0;
 
@@ -70,6 +73,9 @@ export class EarTraining {
   private reviewBtn = el<HTMLButtonElement>("ear-review");
   private resetBtn = el<HTMLButtonElement>("ear-reset");
   private goalSel = el<HTMLSelectElement>("ear-goal");
+  private lessonSel = el<HTMLSelectElement>("ear-lesson");
+  private lessonHint = el<HTMLElement>("ear-lesson-hint");
+  private focusBtn = el<HTMLButtonElement>("ear-focus");
 
   /** 지금 문제. 아직 안 냈으면 null. */
   question: Question | null = null;
@@ -89,23 +95,39 @@ export class EarTraining {
     this.deps = deps;
     this.store = this.load();
 
-    for (const l of LEVELS) {
+    for (const l of LESSONS) {
       const o = document.createElement("option");
-      o.value = l.id;
-      o.textContent = l.label;
-      this.levelSel.appendChild(o);
+      o.value = String(l.n);
+      o.textContent = `${l.n}회차까지${l.n === LAST_LESSON ? " (전부)" : ""} — ${l.title}`;
+      this.lessonSel.appendChild(o);
     }
+    this.lessonSel.value = String(this.store.lesson);
+    this.rebuildLevels(this.store.level);
     for (const g of GOALS) {
       const o = document.createElement("option");
       o.value = String(g);
       o.textContent = `${g}문제`;
       this.goalSel.appendChild(o);
     }
-    if (this.store.level) this.levelSel.value = this.store.level;
     this.goalSel.value = String(this.store.goal);
     this.randKey.checked = this.store.randomKey;
     this.weakBox.checked = this.store.focusWeak;
 
+    this.lessonSel.addEventListener("change", () => {
+      this.store.lesson = Number(this.lessonSel.value);
+      this.rebuildLevels(this.levelSel.value);
+      this.store.level = this.levelSel.value;
+      this.save();
+      this.reset();
+    });
+    this.focusBtn.addEventListener("click", () => {
+      const f = focusLevels(this.store.lesson)[0];
+      if (!f) return;
+      this.levelSel.value = f.id;
+      this.store.level = f.id;
+      this.save();
+      this.reset();
+    });
     this.levelSel.addEventListener("change", () => {
       this.store.level = this.levelSel.value;
       this.save();
@@ -135,6 +157,47 @@ export class EarTraining {
     this.resetBtn.addEventListener("click", () => this.resetStats());
     window.addEventListener("keydown", (e) => this.onKey(e));
     this.reset();
+  }
+
+  // ------------------------------------------------------------ 배운 곳까지 · 단계 목록
+
+  /**
+   * 「배운 곳까지」 에 맞춰 단계 목록을 다시 채운다. 회차별로 묶고, 지금 회차의 추천 단계에 ★.
+   * 고르고 있던 단계가 아직 안 배운 것이 되면 첫 단계로 내린다.
+   */
+  private rebuildLevels(want?: string): void {
+    const lesson = this.store.lesson;
+    const stars = new Set(lessonByNumber(lesson)?.focus ?? []);
+    this.levelSel.textContent = "";
+    let group: HTMLOptGroupElement | null = null;
+    let groupLesson = 0;
+    for (const l of visibleLevels(lesson)) {
+      if (l.lesson !== groupLesson) {
+        groupLesson = l.lesson;
+        group = document.createElement("optgroup");
+        group.label = `${l.lesson}회차 · ${lessonByNumber(l.lesson)?.title ?? ""}`;
+        this.levelSel.appendChild(group);
+      }
+      const o = document.createElement("option");
+      o.value = l.id;
+      o.textContent = `${stars.has(l.id) ? "★ " : ""}${l.label}`;
+      group?.appendChild(o);
+    }
+    const ok = visibleLevels(lesson).some((l) => l.id === want);
+    this.levelSel.value = ok && want ? want : visibleLevels(lesson)[0].id;
+    this.renderLessonHint();
+  }
+
+  private renderLessonHint(): void {
+    const n = this.store.lesson;
+    const l = lessonByNumber(n);
+    const f = focusLevels(n)[0];
+    if (!l) return;
+    this.lessonHint.textContent =
+      `${n}회차 귀 훈련: ${l.ear}${l.fromNotes ? "" : " (노트에 따로 없어 이번 회차 내용으로 붙인 추천)"}`;
+    this.focusBtn.classList.toggle("hidden", !f);
+    this.focusBtn.textContent = f ? `★ 추천 단계로: ${f.label}` : "";
+    this.focusBtn.disabled = !!f && this.levelSel.value === f.id;
   }
 
   // ------------------------------------------------------------ 악기
@@ -191,9 +254,12 @@ export class EarTraining {
     this.resultEl.className = "ear-result";
     this.resultEl.textContent = "「▶ 문제 듣기」 를 누르세요";
     this.guide.textContent =
-      this.level.kind === "named"
-        ? "진행을 듣고 어떤 정석 진행인지 고르세요. 으뜸 코드(I)를 먼저 들려주고 진행이 나옵니다."
-        : "으뜸 코드(I)를 먼저 들려주고 진행이 나옵니다. 코드가 나온 순서대로 몇 도인지 누르세요. 버튼을 누르면 그 코드 소리가 나니 비교해 보세요.";
+      this.level.kind === "quality"
+        ? "코드 하나가 나옵니다. 어떤 종류인지 고르세요. 아래 버튼은 누르면 그 종류의 소리가 나요 — 먼저 눌러서 소리를 익히고, 문제와 비교해 보세요."
+        : this.level.kind === "named"
+          ? "진행을 듣고 어떤 정석 진행인지 고르세요. 으뜸 코드(I)를 먼저 들려주고 진행이 나옵니다."
+          : "으뜸 코드(I)를 먼저 들려주고 진행이 나옵니다. 코드가 나온 순서대로 몇 도인지 누르세요. 버튼을 누르면 그 코드 소리가 나니 비교해 보세요.";
+    this.renderLessonHint();
     this.render();
     this.renderScore();
     this.renderStats();
@@ -204,7 +270,7 @@ export class EarTraining {
     const weights =
       this.store.focusWeak && lvl.kind === "degrees" ? weakWeights(this.store, lvl.mode, lvl.pool) : undefined;
     const rand = this.deps.rand ?? Math.random;
-    this.startQuestion(makeQuestion(lvl.id, rand, this.randKey.checked, this.lastQuestion, weights));
+    this.startQuestion(makeQuestion(lvl.id, rand, this.randKey.checked, this.lastQuestion, weights, this.store.lesson));
   }
 
   private startQuestion(q: Question): void {
@@ -214,7 +280,7 @@ export class EarTraining {
     this.pickedName = null;
     this.answered = false;
     this.resultEl.className = "ear-result";
-    this.resultEl.textContent = q.progression ? "듣고 고르세요" : "듣고 순서대로 눌러 보세요";
+    this.resultEl.textContent = namedAnswer(q) !== undefined ? "듣고 고르세요" : "듣고 순서대로 눌러 보세요";
     this.render();
     this.replay();
   }
@@ -222,7 +288,8 @@ export class EarTraining {
   private submit(): void {
     const q = this.question;
     if (!q || this.answered) return;
-    const answer = q.progression ? this.pickedName : this.picked;
+    const named = namedAnswer(q) !== undefined;
+    const answer = named ? this.pickedName : this.picked;
     if (answer === null || (Array.isArray(answer) && answer.length !== q.degrees.length)) return;
     const g = grade(q, answer);
     this.answered = true;
@@ -232,17 +299,19 @@ export class EarTraining {
     this.save();
 
     const lvl = levelById(q.level) ?? this.level;
-    const where = `${keyLabel(q.key)}`;
+    // 코드 종류 문제는 조가 없다 (근음만 있다) — 「C 장조」 같은 말을 붙이지 않는다.
+    const where = q.quality ? "" : ` (${keyLabel(q.key)})`;
     const truth = describeAnswer(q);
+    const head = named ? `${optLabel(q, namedAnswer(q) as string)}${q.progression ? " — " : ": "}` : "";
     if (g.correct) {
       this.resultEl.className = "ear-result right";
-      this.resultEl.textContent = `정답! ${q.progression ? progLabel(q.progression) + " — " : ""}${truth} (${where})`;
+      this.resultEl.textContent = `정답! ${q.quality ? "" : head}${truth}${where}`;
     } else {
       this.resultEl.className = "ear-result wrong";
-      const mine = q.progression
-        ? `내 답: ${progLabel(this.pickedName ?? "")}`
+      const mine = named
+        ? `내 답: ${optLabel(q, this.pickedName ?? "")}`
         : `내 답: ${this.picked.map((d) => degreeNumeral(lvl.mode, d)).join(" ")}`;
-      this.resultEl.textContent = `아쉬워요. 정답: ${q.progression ? progLabel(q.progression) + " — " : ""}${truth} (${where}) · ${mine}`;
+      this.resultEl.textContent = `아쉬워요. 정답: ${q.quality ? "" : head}${truth}${where} · ${mine}`;
     }
     this.render(g.marks);
     this.renderScore();
@@ -266,7 +335,7 @@ export class EarTraining {
 
   private back(): void {
     if (this.answered || !this.question) return;
-    if (this.question.progression) this.pickedName = null;
+    if (namedAnswer(this.question) !== undefined) this.pickedName = null;
     else this.picked.pop();
     this.render();
   }
@@ -277,7 +346,7 @@ export class EarTraining {
     const mode = this.level.mode;
     const key = q?.key ?? { tonic: mode === "major" ? 0 : 9, mode };
     this.playChordNow(chordPitches(key, { degree }));
-    if (!q || this.answered || q.progression) return;
+    if (!q || this.answered || namedAnswer(q) !== undefined) return;
     if (this.picked.length >= q.degrees.length) return;
     this.picked.push(degree);
     this.render();
@@ -285,6 +354,8 @@ export class EarTraining {
 
   private chooseName(id: string): void {
     const q = this.question;
+    // 코드 종류는 누르면 그 소리가 난다 (문제의 근음 위에서 — 같은 근음이라야 소리만 비교된다).
+    if (this.level.kind === "quality") this.playChordNow(qualityPitches(q?.key.tonic ?? 0, id));
     if (!q || this.answered) return;
     this.pickedName = id;
     this.render();
@@ -316,7 +387,7 @@ export class EarTraining {
       if (lvl.kind === "degrees") {
         if (n < lvl.pool.length) this.choose(lvl.pool[n]);
       } else {
-        const id = this.question?.options?.[n];
+        const id = (lvl.kind === "quality" ? lvl.choices : this.question?.options)?.[n];
         if (id) this.chooseName(id);
       }
     }
@@ -378,11 +449,16 @@ export class EarTraining {
     if (!q || !this.ensureUnlocked()) return;
     this.silence();
     const { tonic, chords } = questionChords(q);
-    this.chordAt(0, tonic, TONIC_MS);
-    let t = TONIC_MS + GAP_AFTER_TONIC;
+    // 으뜸 코드가 없는 문제(코드 종류)는 바로 그 코드부터, 조금 더 길게 들려준다.
+    let t = 0;
+    if (tonic.length > 0) {
+      this.chordAt(0, tonic, TONIC_MS);
+      t = TONIC_MS + GAP_AFTER_TONIC;
+    }
+    const len = q.quality ? QUALITY_MS : CHORD_MS;
     for (const c of chords) {
-      this.chordAt(t, c, CHORD_MS);
-      t += CHORD_MS;
+      this.chordAt(t, c, len);
+      t += len;
     }
   }
 
@@ -403,30 +479,33 @@ export class EarTraining {
         b.addEventListener("click", () => this.choose(d));
         this.choicesEl.appendChild(b);
       }
-    } else if (q?.options) {
-      for (const id of q.options) {
+    } else {
+      // 코드 종류는 문제가 없어도 버튼이 보인다 — 눌러서 소리를 익히는 게 먼저다.
+      const options = lvl.kind === "quality" ? lvl.choices : q?.options;
+      for (const id of options ?? []) {
         const b = document.createElement("button");
         b.type = "button";
-        b.className = "named";
-        b.textContent = progLabel(id);
-        b.disabled = this.answered;
+        b.className = lvl.kind === "quality" ? "qual" : "named";
+        b.textContent = lvl.kind === "quality" ? qualityLabel(id) : progLabel(id);
+        // 종류 버튼은 답한 뒤에도 눌러 들어 볼 수 있다. 진행 이름 버튼은 답을 바꾸지 못하게 잠근다.
+        b.disabled = this.answered && lvl.kind !== "quality";
         if (this.pickedName === id) b.classList.add("on");
         b.addEventListener("click", () => this.chooseName(id));
         this.choicesEl.appendChild(b);
       }
     }
 
-    const full = q
-      ? q.progression
-        ? this.pickedName !== null
-        : this.picked.length === q.degrees.length
-      : false;
+    const named = q ? namedAnswer(q) !== undefined : false;
+    const full = q ? (named ? this.pickedName !== null : this.picked.length === q.degrees.length) : false;
     const has = q !== null;
     const wrong = this.store.wrong.length;
     this.againBtn.disabled = !has;
     this.tonicBtn.disabled = !has;
+    this.tonicBtn.classList.toggle("hidden", lvl.kind === "quality"); // 코드 하나만 나오는 문제엔 으뜸 코드가 없다
+    // 약한 도수 가중치는 도수 단계에만 뜻이 있다 (이름·종류 고르기에는 도수가 없다)
+    this.weakBox.closest("label")?.classList.toggle("hidden", lvl.kind !== "degrees");
     this.revealBtn.disabled = !(has && this.answered);
-    this.backBtn.disabled = !has || this.answered || (q.progression ? this.pickedName === null : this.picked.length === 0);
+    this.backBtn.disabled = !has || this.answered || (named ? this.pickedName === null : this.picked.length === 0);
     this.submitBtn.disabled = !has || this.answered || !full;
     this.reviewBtn.disabled = wrong === 0;
     this.reviewBtn.textContent = `틀린 문제 다시${wrong ? ` (${wrong})` : ""}`;
@@ -438,12 +517,12 @@ export class EarTraining {
     const lvl = this.level;
     this.slotsEl.textContent = "";
     if (!q) return;
-    if (q.progression) {
+    if (namedAnswer(q) !== undefined) {
       const s = document.createElement("div");
       s.className = "ear-slot wide";
       if (this.pickedName) {
         s.classList.add("filled");
-        s.textContent = progLabel(this.pickedName);
+        s.textContent = optLabel(q, this.pickedName);
       } else s.textContent = "?";
       if (marks) s.classList.add(marks[0] ? "right" : "wrong");
       this.slotsEl.appendChild(s);
@@ -491,11 +570,15 @@ export class EarTraining {
     el<HTMLElement>("ear-today-text").textContent =
       done >= s.goal ? `오늘 ${done}문제 — 목표를 채웠어요 🎉` : `오늘 ${done}문제 · 목표까지 ${s.goal - done}문제`;
 
-    // 도수별 (도수 단계) / 진행별 (이름 단계)
+    // 도수별 (도수 단계) / 진행별 (이름 단계) / 종류별 (코드 종류 단계)
     const degEl = el<HTMLElement>("ear-deg");
     degEl.textContent = "";
     const weakLine = el<HTMLElement>("ear-weakline");
     const modeName = lvl.mode === "major" ? "장조" : "단조";
+    const tallyRow = (label: string, t: Tally | undefined) => {
+      const rate = t && t.total > 0 ? t.right / t.total : null;
+      return statRow(label, rate, t && t.total > 0 ? `${pct(rate as number)} (${t.right}/${t.total})` : "아직", true);
+    };
     if (lvl.kind === "degrees") {
       el<HTMLElement>("ear-deg-title").textContent = `도수별 정답률 · ${modeName}`;
       for (const r of degreeRows(s, lvl.mode, lvl.pool)) {
@@ -507,44 +590,51 @@ export class EarTraining {
       weakLine.textContent = w
         ? `가장 약한 건 ${degreeNumeral(lvl.mode, w.degree)} — ${w.asked}번 중 ${w.right}번 맞혔어요. 「약한 도수를 더 자주」 를 켜면 이쪽이 많이 나옵니다.`
         : `도수마다 ${MIN_SAMPLE}번 넘게 풀면 약한 도수를 알려 드려요 (칸 하나가 한 번입니다).`;
+    } else if (lvl.kind === "quality") {
+      el<HTMLElement>("ear-deg-title").textContent = "코드 종류별 정답률";
+      for (const id of lvl.choices ?? []) degEl.appendChild(tallyRow(qualityLabel(id), s.quals[id]));
+      weakLine.textContent = "틀리면 정답 옆의 반음 세기를 따라 직접 세어 보세요. 소리가 머리에 들어올 때까지 아래 버튼을 눌러 비교하는 게 제일 빠릅니다.";
     } else {
       el<HTMLElement>("ear-deg-title").textContent = `정석 진행별 정답률 · ${modeName}`;
-      for (const id of lvl.names ?? []) {
-        const t = s.progs[id];
-        const rate = t && t.total > 0 ? t.right / t.total : null;
-        degEl.appendChild(statRow(progLabel(id), rate, t && t.total > 0 ? `${pct(rate as number)} (${t.right}/${t.total})` : "아직", true));
-      }
+      for (const id of levelNames(lvl, s.lesson)) degEl.appendChild(tallyRow(progLabel(id), s.progs[id]));
       weakLine.textContent = "이름이 헷갈리면 도수 단계에서 그 진행의 코드를 하나씩 먼저 익혀 보세요.";
     }
 
     // 헷갈린 쌍
     const confEl = el<HTMLElement>("ear-conf");
     confEl.textContent = "";
-    const conf = topConfusions(s, lvl.mode, 5);
-    if (conf.length === 0) {
+    const pairs: { text: string; count: number }[] =
+      lvl.kind === "degrees"
+        ? topConfusions(s, lvl.mode, 5).map((c) => ({
+            text: `${degreeNumeral(lvl.mode, c.asked)} 를 ${degreeNumeral(lvl.mode, c.answered)} 로`,
+            count: c.count,
+          }))
+        : namedConfusions(s, lvl.kind === "quality" ? "q" : "p", 5).map((c) => ({
+            text: `${lvl.kind === "quality" ? qualityLabel(c.asked) : progLabel(c.asked)} 를 ${lvl.kind === "quality" ? qualityLabel(c.answered) : progLabel(c.answered)} 로`,
+            count: c.count,
+          }));
+    if (pairs.length === 0) {
       const p = document.createElement("p");
       p.className = "note";
       p.textContent = "아직 없어요. 틀리면 「무엇을 무엇으로 답했는지」 가 여기 쌓입니다.";
       confEl.appendChild(p);
     }
-    for (const c of conf) {
+    for (const c of pairs) {
       const r = document.createElement("div");
       r.className = "ear-conf-row";
       const text = document.createElement("span");
-      text.textContent = `${degreeNumeral(lvl.mode, c.asked)} 를 ${degreeNumeral(lvl.mode, c.answered)} 로`;
+      text.textContent = c.text;
       const n = document.createElement("b");
       n.textContent = `${c.count}번`;
       r.append(text, n);
       confEl.appendChild(r);
     }
 
-    // 단계별
+    // 단계별 (배운 곳까지만)
     const levEl = el<HTMLElement>("ear-levels");
     levEl.textContent = "";
-    for (const l of LEVELS) {
-      const t = s.tally[l.id];
-      const rate = t && t.total > 0 ? t.right / t.total : null;
-      const row = statRow(l.label, rate, t && t.total > 0 ? `${pct(rate as number)} (${t.right}/${t.total})` : "아직", true);
+    for (const l of visibleLevels(s.lesson)) {
+      const row = tallyRow(`${l.lesson}회 · ${l.label}`, s.tally[l.id]);
       if (l.id === lvl.id) row.classList.add("current");
       levEl.appendChild(row);
     }
@@ -564,6 +654,7 @@ export class EarTraining {
     const fresh = emptyStore();
     // 설정(단계 · 목표 · 악기 …)은 남기고 쌓인 기록만 지운다.
     fresh.level = keep.level;
+    fresh.lesson = keep.lesson;
     fresh.goal = keep.goal;
     fresh.focusWeak = keep.focusWeak;
     fresh.randomKey = keep.randomKey;
@@ -634,6 +725,11 @@ function statRow(label: string, rate: number | null, text: string, wide = false)
 }
 
 const pct = (r: number) => `${Math.round(r * 100)}%`;
+
+/** 이름·종류 고르기 문제의 보기 한 칸 글자 */
+function optLabel(q: Question, id: string): string {
+  return q.quality ? qualityLabel(id) : progLabel(id);
+}
 
 function progLabel(id: string): string {
   return PROGRESSIONS.find((p) => p.id === id)?.label ?? id;

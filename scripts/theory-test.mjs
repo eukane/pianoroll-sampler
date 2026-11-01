@@ -16,11 +16,13 @@ import {
   PROGRESSIONS, chordPitches, diatonicChords, progressionPitches, progressionsFor,
 } from "../src/model/progression.ts";
 import {
-  LEVELS, degreeNumeral, describeAnswer, grade, levelById, makeQuestion, questionChords,
+  LEVELS, QUALITIES, degreeNumeral, describeAnswer, grade, levelById, levelNames, levelsForLesson, makeQuestion,
+  namedAnswer, qualityPitches, questionChords,
 } from "../src/model/ear.ts";
+import { LESSONS, clampLesson, focusLevels, visibleLevels } from "../src/model/lessons.ts";
 import {
   MAX_WRONG, dayKey, degreeRows, emptyStore, questionId, recordAnswer, sanitizeQuestion, sanitizeStore, streak,
-  topConfusions, weakWeights, weakest,
+  namedConfusions, topConfusions, weakWeights, weakest,
 } from "../src/model/earStats.ts";
 import {
   dropRedundantMeters, barAt, barBeatLabel, barIndexAt, barLength, barStartBeat, beatToSec, bpmAt, clickAtOrAfter, hasMeterChanges,
@@ -257,10 +259,17 @@ const lcg = (seed) => { let x = seed >>> 0; return () => ((x = (Math.imul(x, 166
         seenFirst.add(q.degrees[0]);
         if (q.degrees.length !== level.length) bad.push(`${level.id}: 길이`);
         if (q.degrees.some((d) => !level.pool.includes(d))) bad.push(`${level.id}: 풀 밖 도수`);
-        if (q.degrees.some((d, k) => k > 0 && d === q.degrees[k - 1])) bad.push(`${level.id}: 같은 코드 연속`);
+        if (!level.allowRepeat && q.degrees.some((d, k) => k > 0 && d === q.degrees[k - 1])) bad.push(`${level.id}: 같은 코드 연속`);
+        if (level.allowRepeat && new Set(q.degrees).size < 2) bad.push(`${level.id}: 전부 같은 코드`);
         if (prev && prev.degrees.join() === q.degrees.join()) bad.push(`${level.id}: 직전과 같은 문제`);
         const { chords, tonic } = questionChords(q);
         if (chords.length !== level.length || tonic.length !== 3) bad.push(`${level.id}: 들려줄 코드`);
+      } else if (level.kind === "quality") {
+        const o = q.options ?? [];
+        if (q.progression || !level.choices.includes(q.quality) || o.join() !== level.choices.join()) bad.push(`${level.id}: 종류 보기 ${o}`);
+        const { chords, tonic } = questionChords(q);
+        if (tonic.length !== 0 || chords.length !== 1) bad.push(`${level.id}: 종류 문제는 코드 하나만`);
+        if (prev && prev.quality === q.quality && prev.key.tonic === q.key.tonic) bad.push(`${level.id}: 직전과 같은 소리`);
       } else {
         const o = q.options ?? [];
         if (!o.includes(q.progression) || new Set(o).size !== o.length || o.length < 2 || o.length > 4) bad.push(`${level.id}: 보기 ${o}`);
@@ -445,6 +454,103 @@ for (const d of DEMOS) {
 }
 
 
+
+// ------------------------------------------------------------ 수업 회차 연결 (model/lessons.ts · ear.ts)
+{
+  ok("회차는 1~7 일곱 개, 번호가 차례로", LESSONS.length === 7 && LESSONS.every((l, i) => l.n === i + 1));
+  ok("추천 단계는 전부 실제로 있는 단계이고, 그 회차까지 배우면 풀 수 있다",
+    LESSONS.every((l) => l.focus.length > 0 && l.focus.every((id) => { const lv = levelById(id); return lv && lv.lesson <= l.n; })),
+    LESSONS.map((l) => [l.n, l.focus.map((id) => levelById(id)?.lesson)]));
+  ok("노트에 적힌 귀 훈련은 1~3회차 (I 와 V 구분 · 장/단 코드 구분), 4회차부터는 내가 붙인 추천",
+    LESSONS.slice(0, 3).every((l) => l.fromNotes) && LESSONS.slice(3).every((l) => !l.fromNotes) &&
+    LESSONS[1].ear === "I 와 V 구분" && LESSONS[2].ear === "장/단 코드 구분");
+  ok("1회차까지: 단조 · 7화음 · I-V 구분 · 5~7회차 단계는 아직 없다",
+    visibleLevels(1).map((l) => l.id).join() === "L1,L2,L3,Q1,Q2,N1", visibleLevels(1).map((l) => l.id));
+  ok("2회차에 E2, 3회차에 Q3, 4회차에 단조(L4 · N2), 5·6·7회차에 N3 · N4 · N5 가 열린다",
+    levelsForLesson(2).map((l) => l.id).join() === "L1,L2,L3,Q1,Q2,N1,E2" &&
+    levelsForLesson(3).map((l) => l.id).includes("Q3") && !levelsForLesson(2).some((l) => l.id === "Q3") &&
+    levelsForLesson(4).filter((l) => l.mode === "minor").map((l) => l.id).join() === "L4,N2" &&
+    ["N3", "N4", "N5"].every((id, i) => levelById(id).lesson === 5 + i));
+  ok("단계는 회차 순으로 나열돼 있다 (선택 목록이 회차별로 묶이게)", LEVELS.every((l, i) => i === 0 || LEVELS[i - 1].lesson <= l.lesson));
+  ok("7회차까지면 전부, 이상한 값은 7 로", visibleLevels(7).length === LEVELS.length && clampLesson(0) === 7 && clampLesson("3") === 7 && clampLesson(8) === 7 && clampLesson(3) === 3);
+  ok("추천 단계는 배운 곳까지에 맞춰 걸러진다 (3회차 추천 Q1·Q3 인데 2회차까지만 배웠으면 Q1 만)",
+    focusLevels(3).map((l) => l.id).join() === "Q1,Q3" && focusLevels(3, 2).map((l) => l.id).join() === "Q1");
+
+  // 이름 맞히기: 아직 안 배운 진행은 후보가 아니다
+  const n1 = levelById("N1");
+  ok("1회차의 정석 이름: 왕도 · 코무로 · 카논 · I–vi–IV–V · I–IV–V–I 만 (2-5-1 은 아직)",
+    levelNames(n1, 1).sort().join() === "basic,canon,doowop,komuro,oudou", levelNames(n1, 1));
+  ok("2회차에 2-5-1(3화음), 3회차에 7화음 2-5-1 이 후보에 들어온다",
+    levelNames(n1, 2).includes("251t") && !levelNames(n1, 2).includes("251") && levelNames(n1, 3).includes("251"));
+  {
+    const bad = [];
+    const rand = lcg(2024);
+    let prev;
+    for (let i = 0; i < 300; i += 1) {
+      const q = makeQuestion("N1", rand, true, prev, undefined, 1);
+      if (!levelNames(n1, 1).includes(q.progression)) bad.push(`정답 ${q.progression}`);
+      if (q.options.some((o) => !levelNames(n1, 1).includes(o))) bad.push(`보기 ${q.options}`);
+      prev = q;
+    }
+    ok("1회차로 뽑으면 정답도 보기도 1회차까지 배운 진행뿐이다 (300문제)", bad.length === 0, bad.slice(0, 3));
+    const seen = new Set();
+    for (let i = 0; i < 300; i += 1) seen.add(makeQuestion("N1", rand, true, undefined, undefined, 3).progression);
+    ok("3회차로 뽑으면 2-5-1 도 나온다", seen.has("251") && seen.has("251t"), [...seen]);
+  }
+
+  // 회차마다 늘어나는 코드가 실제로 그 소리인지 (이름이 곧 이론이라 박아 둔다)
+  const names = (id) => progressionPitches(Cmaj, PROGRESSIONS.find((p) => p.id === id)).map((p) => identifyChord(p, Cmaj).name).join(" ");
+  ok("2회차 2-5-1 3화음 = Dm G C", names("251t") === "Dm G C", names("251t"));
+  ok("5회차: 왕도의 iii(Em) 를 III 로 바꾸면 E, III7 이면 E7 — 다음 코드 Am 을 끌어당긴다",
+    names("oudou-III") === "F G E Am" && names("oudou-III7") === "F G E7 Am", [names("oudou-III"), names("oudou-III7")]);
+  ok("6회차: IV(F) 를 단조로 빌리면 Fm — 3음이 조 밖(Ab)", names("borrow-iv") === "C F Fm C" && names("borrow-iv2") === "C Am Fm G" &&
+    !inKey(chordPitches(Cmaj, { degree: 3, minor: true })[1], Cmaj));
+  ok("7회차: add9 는 9음(레)이 얹히고 sus4 는 3음 자리에 4음(도)이 온다 (Gsus4 = 솔 도 레)", names("add9-pop") === "Cadd9 Am Fadd9 G" && names("sus-v") === "C F Gsus4 G" &&
+    chordPitches(Cmaj, { degree: 4, sus4: true }).map((p) => p % 12).join() === "7,0,2", [names("add9-pop"), names("sus-v")]);
+  ok("단조의 정석 진행에서도 새 변형이 원래 코드를 안 바꾼다 (옛 진행 그대로)",
+    progressionPitches(Amin, PROGRESSIONS.find((p) => p.id === "m-andalus")).map((p) => identifyChord(p, Amin).name).join(" ") === "Am G F E");
+
+  // 코드 종류 듣기: 수업 노트의 반음 세기 그대로
+  const pcs = (root, quality) => qualityPitches(root, quality).map((p) => (p - root + 120) % 12).join();
+  ok("종류별 근음 위 간격: 장 0,4,7 · 단 0,3,7 · 감 0,3,6 · maj7 0,4,7,11 · m7 0,3,7,10 · 7 0,4,7,10",
+    pcs(0, "maj") === "0,4,7" && pcs(5, "min") === "0,3,7" && pcs(2, "dim") === "0,3,6" && pcs(7, "maj7") === "0,4,7,11" &&
+    pcs(9, "m7") === "0,3,7,10" && pcs(11, "dom7") === "0,4,7,10");
+  {
+    const all = Object.keys(QUALITIES);
+    const same = [];
+    for (let root = 0; root < 12; root += 1) for (const qid of all) {
+      const ps = qualityPitches(root, qid);
+      const info = identifyChord(ps);
+      if (!info || info.root !== root || !info.base.endsWith(QUALITIES[qid].suffix) || info.base.length > 8) same.push(`${root}:${qid}→${info?.name}`);
+      if (info && QUALITIES[qid].suffix === "" && !/^[A-G][#b]?$/.test(info.base)) same.push(`${root}:${qid} 장3화음 이름 ${info.base}`);
+      if (ps[0] < 55 || ps[0] > 66) same.push(`${root}:${qid} 음역 ${ps[0]}`);
+    }
+    ok("12개 근음 × 6가지 종류 전부, 코드 이름 읽기가 정답과 같고 건반 가운데 음역이다", same.length === 0, same.slice(0, 4));
+  }
+  {
+    const q = { level: "Q1", key: { tonic: 3, mode: "major" }, degrees: [], quality: "min", options: ["maj", "min"] };
+    ok("종류 문제 채점·설명: Eb 단3화음", grade(q, "min").correct && !grade(q, "maj").correct && namedAnswer(q) === "min" &&
+      /^(Ebm|D#m) — 단3화음 \(.*반음 3개/.test(describeAnswer(q)), describeAnswer(q));
+  }
+  {
+    const rand = lcg(31);
+    const seenQ = new Set(); const seenRoot = new Set(); let prev;
+    for (let i = 0; i < 200; i += 1) {
+      const q = makeQuestion("Q2", rand, true, prev);
+      seenQ.add(q.quality); seenRoot.add(q.key.tonic); prev = q;
+    }
+    ok("종류 문제는 근음이 12가지로 바뀌고, 보기 종류가 전부 나온다", seenQ.size === 3 && seenRoot.size === 12, [seenQ.size, seenRoot.size]);
+    const fixed = makeQuestion("Q1", lcg(2), false);
+    ok("조 바꾸기를 끄면 근음은 C", fixed.key.tonic === 0);
+  }
+  {
+    const rand = lcg(77);
+    const combos = new Set();
+    for (let i = 0; i < 200; i += 1) combos.add(makeQuestion("E2", rand, false).degrees.join(""));
+    ok("I·V 구분 단계는 같은 코드 연속을 허용해서 문제가 여러 가지다 (전부 같은 건 제외 = 14가지)", combos.size >= 10 && ![...combos].some((c) => /^(00000|0000|4444)$/.test(c)), combos.size);
+  }
+}
+
 // ------------------------------------------------------------ 귀 훈련 기록 (model/earStats.ts)
 {
   const day = (y, m, d) => new Date(y, m - 1, d, 12);
@@ -489,7 +595,7 @@ for (const d of DEMOS) {
   const named = emptyStore();
   recordAnswer(named, { level: "N1", key: Cmaj, degrees: [], progression: "komuro", options: ["komuro", "oudou"] }, "oudou", false, today);
   ok("정석 이름 단계는 진행별로 기록하고 도수 기록은 건드리지 않는다", named.progs.komuro.total === 1 && named.progs.komuro.right === 0 &&
-    named.degrees.major.asked.every((x) => x === 0) && Object.keys(named.confusions).length === 0 && named.wrong.length === 1);
+    named.degrees.major.asked.every((x) => x === 0) && Object.keys(named.confusions).join() === "p:komuro>oudou" && named.wrong.length === 1);
   ok("저장했다 읽어도 같다", JSON.stringify(sanitizeStore(JSON.parse(JSON.stringify(s)))) === JSON.stringify(s));
 
   // 보여 주기
@@ -537,6 +643,31 @@ for (const d of DEMOS) {
   ok("달이 바뀌어도 이어진다 (10월 31일 → 11월 1일)", streak({ "2026-11-01": T(1), "2026-10-31": T(1) }, today) === 2 && streak({ "2026-03-01": T(1), "2026-02-28": T(1) }, day(2026, 3, 1)) === 2);
   ok("풀이 수가 0 인 날은 푼 날이 아니다", streak({ "2026-11-01": { right: 0, total: 0 } }, today) === 0);
 }
+
+// ------------------------------------------------------------ 귀 훈련 기록: 회차 · 코드 종류 · 이름 헷갈림
+{
+  const today = new Date(2026, 10, 1, 12);
+  ok("배운 곳까지: 없거나 이상하면 7(전부), 1~7 이면 그대로", sanitizeStore(null).lesson === 7 && sanitizeStore({ lesson: 0 }).lesson === 7 &&
+    sanitizeStore({ lesson: "2" }).lesson === 7 && sanitizeStore({ lesson: 2.5 }).lesson === 7 && sanitizeStore({ lesson: 3 }).lesson === 3);
+  const s = emptyStore();
+  const q = { level: "Q2", key: { tonic: 4, mode: "major" }, degrees: [], quality: "maj", options: ["maj", "min", "dim"] };
+  recordAnswer(s, q, "min", false, today);
+  recordAnswer(s, { ...q, key: { tonic: 7, mode: "major" } }, "maj", true, today);
+  ok("코드 종류: 종류별 기록 · 헷갈린 쌍 (장3화음을 단3화음으로) · 도수 기록은 그대로", s.quals.maj.total === 2 && s.quals.maj.right === 1 &&
+    s.confusions["q:maj>min"] === 1 && s.degrees.major.asked.every((x) => x === 0) && s.wrong.length === 1 && s.wrong[0].quality === "maj", s);
+  ok("틀린 문제 id 는 근음이 다르면 다른 문제 · 맞히면 그 문제만 빠진다", s.wrong.length === 1 && s.wrong[0].key.tonic === 4);
+  const n = emptyStore();
+  recordAnswer(n, { level: "N3", key: Cmaj, degrees: [], progression: "oudou-III", options: ["oudou", "oudou-III", "oudou-III7"] }, "oudou", false, today);
+  recordAnswer(n, { level: "N3", key: Gmaj, degrees: [], progression: "oudou-III", options: ["oudou", "oudou-III", "oudou-III7"] }, "oudou", false, today);
+  const nc = namedConfusions(n, "p");
+  ok("진행 이름 헷갈림: 「왕도+III 를 왕도로」 2번, 종류와는 따로 센다", nc.length === 1 && nc[0].asked === "oudou-III" && nc[0].answered === "oudou" && nc[0].count === 2 && namedConfusions(n, "q").length === 0, nc);
+  const back = sanitizeStore(JSON.parse(JSON.stringify({ ...n, confusions: { ...n.confusions, "q:zzz>maj": 3, "p:nope>oudou": 1, "major:9>1": 2 } })));
+  ok("모르는 종류·진행·도수가 든 헷갈림 기록은 버린다 (읽을 때 걸러진다)", Object.keys(back.confusions).join() === "p:oudou-III>oudou", back.confusions);
+  ok("저장된 틀린 문제가 코드 종류 문제여도 읽힌다 · 보기가 단계와 다르면 버린다",
+    sanitizeStore({ wrong: [{ level: "Q1", key: { tonic: 2, mode: "major" }, degrees: [], quality: "min", options: ["maj", "min"] },
+      { level: "Q1", key: { tonic: 2, mode: "major" }, degrees: [], quality: "dim" }] }).wrong.length === 1);
+}
+
 
 for (const r of out) console.log(`${r.pass ? "  ok" : "FAIL"}  ${r.name}${r.pass ? "" : ` — ${JSON.stringify(r.d)}`}`);
 console.log(bad ? `\n${bad}개 실패` : `\n전부 통과 (${out.length}개)`);
