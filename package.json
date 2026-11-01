@@ -30,7 +30,8 @@
     "zip": "node scripts/zip-test.mjs",
     "select": "node scripts/selection-test.mjs",
     "theory": "node scripts/theory-test.mjs",
-    "persist": "node scripts/persist-test.mjs"
+    "persist": "node scripts/persist-test.mjs",
+    "chords": "node scripts/chords-test.mjs"
   },
   "devDependencies": {
     "@vitejs/plugin-basic-ssl": "^1.2.0",

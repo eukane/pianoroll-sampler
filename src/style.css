@@ -756,6 +756,57 @@ button.danger {
   min-height: 34px;
 }
 
+.kb-chords {
+  padding-top: 0;
+}
+
+.kb-chords .lbl {
+  color: var(--muted, #8a93a6);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.kb-chords .degrees {
+  display: inline-flex;
+  gap: 5px;
+}
+
+/* 코드 버튼: 위는 이름(Am7), 아래는 그 조의 로마숫자(vi7). 손가락 크기라 높이를 넉넉히. */
+.kb-chords .degrees button {
+  min-width: 58px;
+  min-height: 46px;
+  padding: 3px 6px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  line-height: 1.15;
+}
+
+.kb-chords .degrees button b {
+  font-size: 15px;
+}
+
+.kb-chords .degrees button small {
+  font-size: 11px;
+  opacity: 0.75;
+}
+
+.kb-chords .degrees button.out b {
+  color: #e8a35c;
+}
+
+.kb-chords .degrees .hint {
+  color: var(--muted, #8a93a6);
+  font-size: 12px;
+  align-self: center;
+}
+
+.kb-chords #kb-seventh.on {
+  background: var(--accent, #3aa6a0);
+  color: #fff;
+}
+
 #kb {
   display: block;
   width: 100%;

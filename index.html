@@ -150,6 +150,15 @@
           <span class="spacer"></span>
           <button id="kb-cal" type="button" title="건반이 실제 크기인지 자로 맞추기">📏 크기</button>
         </div>
+        <!-- 조의 코드 버튼과 정석 진행. 조를 고르면 채워진다 (main.ts refreshChordButtons). -->
+        <div class="kb-bar kb-chords">
+          <span class="lbl">코드</span>
+          <span id="kb-degrees" class="degrees"></span>
+          <button id="kb-seventh" type="button" title="7th 코드로 바꾸기 (Cmaj7 · Dm7 · G7 …)">7th</button>
+          <span class="sep"></span>
+          <select id="kb-prog" title="정석 진행"></select>
+          <button id="kb-prog-go" type="button" title="고른 진행을 재생 위치부터 한 칸씩 한꺼번에 찍기">진행 넣기</button>
+        </div>
         <canvas id="kb"></canvas>
       </section>
 

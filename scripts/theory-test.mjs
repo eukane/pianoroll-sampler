@@ -12,6 +12,9 @@ import {
   scalePitchClasses,
 } from "../src/model/scale.ts";
 import { chordLine, identifyChord, inversionLabel, romanNumeral } from "../src/model/chord.ts";
+import {
+  PROGRESSIONS, chordPitches, diatonicChords, progressionPitches, progressionsFor,
+} from "../src/model/progression.ts";
 import { DEMOS } from "../src/model/demos.ts";
 import { projectFromJson, projectToJson } from "../src/export/projectFile.ts";
 
@@ -166,6 +169,61 @@ ok("한 줄 표시 (조 없음)", chordLine([A - 12, C, E, G]) === "Am7");
 ok("한 줄 표시 (조 있음)", chordLine([A - 12, C, E, G], Cmaj) === "Am7 · vi7", chordLine([A - 12, C, E, G], Cmaj));
 ok("한 줄 표시 (조 밖 음)", chordLine([E, 68, B], Amin) === "E · V · 조 밖 G#", chordLine([E, 68, B], Amin));
 ok("이름을 못 붙이면 한 줄도 null", chordLine([C, 61, D], Cmaj) === null);
+
+// ------------------------------------------------------- 조의 코드 · 정석 진행
+//
+// 코드 버튼은 배우는 사람이 눌러서 외우는 자리다. 이름은 chord.ts 가 지어 주는 걸 쓰므로
+// 여기서는 「쌓은 음이 수업과 같은가」 와 「이름이 수업과 같은가」 를 같이 본다.
+const names = (key, seventh) =>
+  diatonicChords(key, seventh).map((p) => identifyChord(p, key)?.name ?? "?").join(" ");
+const romans = (key, seventh) =>
+  diatonicChords(key, seventh).map((p) => {
+    const info = identifyChord(p, key);
+    return info ? romanNumeral(info, p, key).numeral : "?";
+  }).join(" ");
+
+ok("C 장조 코드 = C Dm Em F G Am Bdim (장-단-단-장-장-단-감)", names(Cmaj, false) === "C Dm Em F G Am Bdim", names(Cmaj, false));
+ok("C 장조 로마숫자 = I ii iii IV V vi vii°", romans(Cmaj, false) === "I ii iii IV V vi vii°", romans(Cmaj, false));
+ok("C 장조 7th 코드 = Cmaj7 Dm7 Em7 Fmaj7 G7 Am7 Bm7b5", names(Cmaj, true) === "Cmaj7 Dm7 Em7 Fmaj7 G7 Am7 Bm7b5", names(Cmaj, true));
+ok("G 장조 코드 = G Am Bm C D Em F#dim (1회차 확인 문제 2번: vi 는 Em)", names(Gmaj, false) === "G Am Bm C D Em F#dim", names(Gmaj, false));
+ok("A 단조 코드 = Am Bdim C Dm Em F G", names(Amin, false) === "Am Bdim C Dm Em F G", names(Amin, false));
+ok("A 단조 로마숫자 = i ii° III iv v VI VII", romans(Amin, false) === "i ii° III iv v VI VII", romans(Amin, false));
+ok("D 장조 코드 = D Em F#m G A Bm C#dim", names({ tonic: 2, mode: "major" }, false) === "D Em F#m G A Bm C#dim", names({ tonic: 2, mode: "major" }, false));
+ok("E♭ 장조는 플랫으로 쓴다", names(Ebmaj, false) === "Eb Fm Gm Ab Bb Cm Ddim", names(Ebmaj, false));
+{
+  // 열두 조 × 장·단 × 3화음·7th 전부: 이름이 붙고, 조 안의 음만 쓰고, 건반 가운데에 놓인다.
+  let bad24 = [];
+  for (const mode of ["major", "minor"]) for (let tonic = 0; tonic < 12; tonic += 1) for (const sev of [false, true]) {
+    const key = { tonic, mode };
+    diatonicChords(key, sev).forEach((p, deg) => {
+      const info = identifyChord(p, key);
+      const r = info && romanNumeral(info, p, key);
+      const sorted = [...p].sort((a, b) => a - b).join() === p.join();
+      if (!info || !r.diatonic || !sorted || p[0] < 55 || p[0] > 66 || p.length !== (sev ? 4 : 3)) bad24.push(`${tonic}:${mode}:${sev}:${deg}`);
+    });
+  }
+  ok("24개 조 전부에서 코드마다 이름이 붙고 조 안의 음만 쓰며 오름차순이고 G3~F#4 에서 시작한다", bad24.length === 0, bad24.slice(0, 6));
+}
+ok("왕도 IV–V–iii–vi 를 G 장조로 옮기면 C D Bm Em (1회차 확인 문제 3번)",
+  progressionPitches(Gmaj, PROGRESSIONS.find((p) => p.id === "oudou")).map((p) => identifyChord(p, Gmaj).name).join(" ") === "C D Bm Em");
+ok("코무로 vi–IV–V–I 를 C 장조로 하면 Am F G C",
+  progressionPitches(Cmaj, PROGRESSIONS.find((p) => p.id === "komuro")).map((p) => identifyChord(p, Cmaj).name).join(" ") === "Am F G C");
+ok("2-5-1 장조 = Dm7 G7 Cmaj7",
+  progressionPitches(Cmaj, PROGRESSIONS.find((p) => p.id === "251")).map((p) => identifyChord(p, Cmaj).name).join(" ") === "Dm7 G7 Cmaj7");
+ok("카논은 여덟 코드 C G Am Em F C F G",
+  progressionPitches(Cmaj, PROGRESSIONS.find((p) => p.id === "canon")).map((p) => identifyChord(p, Cmaj).name).join(" ") === "C G Am Em F C F G");
+{
+  const names2 = (id) => progressionPitches(Amin, PROGRESSIONS.find((p) => p.id === id)).map((p) => identifyChord(p, Amin)?.name).join(" ");
+  ok("안달루시아 i–VII–VI–V 를 A 단조로 하면 Am G F E (마지막 E 는 장코드)", names2("m-andalus") === "Am G F E", names2("m-andalus"));
+  ok("단조 2-5-1 = Bm7b5 E7 Am7", names2("m-251") === "Bm7b5 E7 Am7", names2("m-251"));
+  const e = chordPitches(Amin, { degree: 4, dominant: true });
+  ok("단조의 V 를 장코드로 하면 조 밖 G# 이 뜬다", chordLine(e, Amin) === "E · V · 조 밖 G#", chordLine(e, Amin));
+}
+ok("장조 진행과 단조 진행이 섞여 나오지 않는다",
+  progressionsFor("major").every((p) => p.mode === "major") && progressionsFor("minor").every((p) => p.mode === "minor") &&
+  progressionsFor("major").length >= 5 && progressionsFor("minor").length >= 3);
+ok("정석 진행의 도수는 전부 0~6", PROGRESSIONS.every((p) => p.chords.every((c) => Number.isInteger(c.degree) && c.degree >= 0 && c.degree <= 6)));
+ok("진행 id 가 겹치지 않는다", new Set(PROGRESSIONS.map((p) => p.id)).size === PROGRESSIONS.length);
 
 // ------------------------------------------------------------- 예제 곡의 조
 //

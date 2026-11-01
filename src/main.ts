@@ -25,8 +25,9 @@ import { History } from "./history";
 import { copyNotes, copyRegion, pasteAt, lastBeat, type Clipboard } from "./model/clipboard";
 import { boxFrom, deleteSelected, selectionRange, transpose } from "./model/selection";
 import { keyChoices, keyFromValue, keyLabel, keyToValue, pcName } from "./model/scale";
-import { chordLine, identifyChord } from "./model/chord";
+import { chordLine, identifyChord, romanNumeral } from "./model/chord";
 import { midiToName } from "./util/music";
+import { diatonicChords, progressionPitches, progressionsFor } from "./model/progression";
 import { Metronome } from "./audio/metronome";
 import { VelocityLane } from "./ui/velocityLane";
 import { PlayKeyboard } from "./ui/playKeyboard";
@@ -63,6 +64,12 @@ const $ = <T extends HTMLElement>(id: string): T => {
 type StepEntry = { track: number; at: number; ids: string[] };
 const stepLog: StepEntry[] = [];
 const kbUndoBtn = $<HTMLButtonElement>("kb-undo");
+// 코드 버튼 칸 (아래 「코드 버튼」 절). applyProject 가 먼저 불릴 수 있어 위에 둔다.
+const degreesEl = $<HTMLSpanElement>("kb-degrees");
+const seventhBtn = $<HTMLButtonElement>("kb-seventh");
+const progSelect = $<HTMLSelectElement>("kb-prog");
+const progGoBtn = $<HTMLButtonElement>("kb-prog-go");
+let seventhOn = false;
 function refreshStepUndo(): void {
   kbUndoBtn.disabled = stepLog.length === 0;
 }
@@ -320,6 +327,7 @@ keySelect.addEventListener("change", () => {
       ? `${keyLabel(key)} — 조 안의 음 줄이 밝아집니다. 조 밖의 음도 그대로 찍힙니다.`
       : "조를 정하지 않았습니다",
   );
+  refreshChordButtons();
 });
 
 snapSelect.addEventListener("change", () => {
@@ -402,6 +410,7 @@ function applyProject(loaded: Project, { keepHistory = true } = {}): void {
   if (loaded.key) project.key = { ...loaded.key };
   else delete project.key;
   keySelect.value = keyToValue(project.key);
+  refreshChordButtons();
 
   bpmInput.value = String(project.bpm);
   barsInput.value = String(project.bars);
@@ -817,45 +826,65 @@ function growTo(endBeat: number): boolean {
  */
 function stepInsert(pitches: number[]): void {
   if (!stepOn) return;
+  placeChords([pitches]);
+}
+
+/**
+ * 코드 여러 개를 재생 위치부터 한 칸씩 잇달아 놓는다. 건반으로 친 코드(하나)도, 코드 버튼도,
+ * 정석 진행(여럿)도 여기로 온다. **되돌리기 한 번 = 한 번의 호출**이다 — 진행을 넣고
+ * 툴바 ↶ 한 번이면 통째로 사라진다. 「방금 것」 도 같은 단위로 푼다.
+ */
+function placeChords(chords: number[][]): void {
   if (scheduler.isPlaying) {
     showStatus("재생 중에는 찍지 않습니다 — 소리만 냅니다. 멈추면 찍힙니다.");
     return;
   }
   const track = project.tracks[panel.activeTrack];
-  if (!track) return;
-  const at = stepAt();
+  if (!track || chords.length === 0) return;
+  const start = stepAt();
   const len = stepBeats();
 
   history.begin();
-  if (!growTo(at + len)) {
+  if (!growTo(start + len * chords.length)) {
     history.commit();
     showStatus("곡이 64마디를 넘어서 더 찍을 수 없습니다", "error");
     return;
   }
   let skipped = 0;
+  let total = 0;
   const placedIds: string[] = [];
-  for (const pitch of pitches) {
-    const clash = track.notes.some((n) => n.pitch === pitch && n.start < at + len - 1e-9 && n.start + n.length > at + 1e-9);
-    if (clash) {
-      skipped += 1;
-      continue;
+  chords.forEach((pitches, i) => {
+    const at = start + len * i;
+    for (const pitch of pitches) {
+      total += 1;
+      const clash = track.notes.some((n) => n.pitch === pitch && n.start < at + len - 1e-9 && n.start + n.length > at + 1e-9);
+      if (clash) {
+        skipped += 1;
+        continue;
+      }
+      const note = makeNote(pitch, at, len);
+      placedIds.push(note.id);
+      track.notes.push(note);
     }
-    const note = makeNote(pitch, at, len);
-    placedIds.push(note.id);
-    track.notes.push(note);
-  }
+  });
   sortNotes(track);
-  stepLog.push({ track: panel.activeTrack, at, ids: placedIds });
+  stepLog.push({ track: panel.activeTrack, at: start, ids: placedIds });
   refreshStepUndo();
-  scheduler.seek(at + len);
+  scheduler.seek(start + len * chords.length);
   history.commit();
   refreshHistoryButtons();
   scheduler.invalidate();
   roll.followPlayhead(scheduler.positionBeats());
 
-  const placed = pitches.length - skipped;
+  const placed = total - skipped;
+  const where = formatPosition(start);
+  if (chords.length > 1) {
+    const tail = skipped > 0 ? ` — 같은 음이 이미 있던 ${skipped}개는 건너뛰었습니다` : "";
+    showStatus(`${where} 부터 코드 ${chords.length}개를 찍었습니다${tail}`);
+    return;
+  }
+  const pitches = chords[0];
   const what = chordLine(pitches, project.key) ?? pitches.map((p) => midiToName(p)).join(" ");
-  const where = formatPosition(at);
   if (placed === 0) {
     showStatus(`${where} 에 같은 음이 이미 있어 아무것도 안 찍었습니다 (헤드만 넘겼습니다)`, "error");
   } else if (skipped > 0) {
@@ -878,6 +907,78 @@ $("kb-rest").addEventListener("click", () => {
   roll.followPlayhead(scheduler.positionBeats());
   showStatus(`쉼표 → ${formatPosition(at + len)}`);
 });
+
+// ------------------------------------------------------- 코드 버튼 · 정석 진행
+
+/**
+ * 조를 고르면 그 조의 코드 일곱 개가 버튼이 된다. 누르면 소리가 나고 재생 위치에 한 칸
+ * 찍힌다 (건반으로 코드를 짚는 것과 같은 자리에 같은 길이로).
+ *
+ * **✎ 찍기 스위치와 상관없이 항상 찍는다.** 버튼을 누른다는 건 넣겠다는 뜻이다 —
+ * 스위치는 건반을 칠 때 「소리만 낼지 찍을지」 를 가르는 것이다.
+ *
+ * 이름은 chord.ts 가 지어 주는 걸 그대로 쓴다 (버튼마다 따로 적어 두면 건반으로 쳤을 때
+ * 나오는 이름과 어긋날 수 있다). 조 밖 음이 들어간 코드는 이름을 주황색으로 보여 준다.
+ */
+function refreshChordButtons(): void {
+  const key = project.key;
+  const prevProg = progSelect.value;
+  degreesEl.textContent = "";
+  progSelect.textContent = "";
+  seventhBtn.classList.toggle("on", seventhOn);
+  seventhBtn.setAttribute("aria-pressed", String(seventhOn));
+  seventhBtn.disabled = !key;
+  progSelect.disabled = !key;
+  progGoBtn.disabled = !key;
+  if (!key) {
+    const hint = document.createElement("span");
+    hint.className = "hint";
+    hint.textContent = "위쪽에서 조를 고르면 그 조의 코드가 여기 나옵니다";
+    degreesEl.appendChild(hint);
+    return;
+  }
+  diatonicChords(key, seventhOn).forEach((pitches) => {
+    const info = identifyChord(pitches, key);
+    const roman = info ? romanNumeral(info, pitches, key) : null;
+    const btn = document.createElement("button");
+    btn.type = "button";
+    if (roman && !roman.diatonic) btn.classList.add("out");
+    const top = document.createElement("b");
+    top.textContent = info?.name ?? "?";
+    const bottom = document.createElement("small");
+    bottom.textContent = roman?.numeral ?? "";
+    btn.append(top, bottom);
+    btn.title = chordLine(pitches, key) ?? "";
+    btn.addEventListener("click", () => {
+      if (engine.isUnlocked) for (const p of pitches) scheduler.preview(p, panel.activeTrack);
+      placeChords([pitches]);
+    });
+    degreesEl.appendChild(btn);
+  });
+  for (const p of progressionsFor(key.mode)) {
+    const o = document.createElement("option");
+    o.value = p.id;
+    o.textContent = p.label;
+    progSelect.appendChild(o);
+  }
+  if ([...progSelect.options].some((o) => o.value === prevProg)) progSelect.value = prevProg;
+}
+
+seventhBtn.addEventListener("click", () => {
+  seventhOn = !seventhOn;
+  refreshChordButtons();
+});
+
+progGoBtn.addEventListener("click", () => {
+  const key = project.key;
+  const prog = key ? progressionsFor(key.mode).find((p) => p.id === progSelect.value) : undefined;
+  if (!key || !prog) return;
+  const chords = progressionPitches(key, prog);
+  if (engine.isUnlocked) for (const p of chords[0]) scheduler.preview(p, panel.activeTrack);
+  placeChords(chords);
+});
+
+refreshChordButtons();
 
 kbUndoBtn.addEventListener("click", () => {
   const last = stepLog.pop();
