@@ -15,7 +15,7 @@ import { chordNames, explainTranspose, gradeTranspose, makeTransposeQuestion, re
 import { applyBackup, makeBackup, parseBackup } from "../src/model/backup.ts";
 import { parseChordSymbol, splitCell } from "../src/model/chordSymbol.ts";
 import {
-  barIndexAt as copyBarIndexAt, cellAt, defaultState as copyDefault, loopFromBar, positionLabel, sanitizeState as copySanitize, shiftLoop, tapTempo, storageKey,
+  barIndexAt as copyBarIndexAt, cellAt, defaultState as copyDefault, loopFromBar, positionLabel, sanitizeState as copySanitize, shiftLoop, tapTempo, storageKey, nextSpeed,
 } from "../src/model/copyNotebook.ts";
 import { chordLine, identifyChord, inversionLabel, romanNumeral } from "../src/model/chord.ts";
 import {
@@ -714,6 +714,7 @@ for (const d of DEMOS) {
   ok("다음 구간: 같은 길이만큼 · 끝을 넘어서면 그대로", shiftLoop({ a: 3, b: 7 }, 1, 100).a === 7 && (() => { const l = { a: 3, b: 7 }; return shiftLoop(l, 1, 6) === l && shiftLoop({ a: 0, b: 4 }, -1, 100).a === 0; })());
   ok("탭 템포: 0.5초 간격 = 120 · 한 번 늦어도 중앙값이라 흔들리지 않는다", tapTempo([0, 0.5, 1, 1.5, 2.1, 2.6]) === 120 && tapTempo([0, 0.5]) === null && tapTempo([0, 5, 10]) === null);
   ok("탭 템포는 30~300 안", tapTempo([0, 0.16, 0.32, 0.48]) === 300 || tapTempo([0, 0.16, 0.32, 0.48]) <= 300);
+  ok("속도 올리기: 0.5→0.6→0.75→0.9→1→1(그대로) · 사이 값도 다음 단계로", nextSpeed(0.5) === 0.6 && nextSpeed(0.6) === 0.75 && nextSpeed(0.9) === 1 && nextSpeed(1) === 1 && nextSpeed(0.7) === 0.75);
   ok("저장 키는 파일 이름·크기", storageKey("a.mp3", 5) === "pianoroll.copy:a.mp3:5");
   const dirty = copySanitize({ bpm: 9999, beatsPerBar: 99, offset: -3, speed: "x", loop: { a: 5, b: 2 }, loopOn: true, markers: [{ t: 3, label: "가" }, { t: -1 }, { t: 500 }, "x"], cells: ["Am", 4, "x".repeat(99)], key: { tonic: 12, mode: "major" }, overlay: 0 }, 100);
   ok("더러운 저장값: 범위로 자르고 · 뒤집힌 반복은 버리고 · 이상한 표시와 조는 버린다",

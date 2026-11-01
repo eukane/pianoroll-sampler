@@ -23,6 +23,8 @@ export type CopyState = {
   speed: number;
   loop: { a: number; b: number } | null;
   loopOn: boolean;
+  /** 구간을 한 바퀴 돌 때마다 속도를 한 단계씩 올린다 (느린 속도에서 시작해 원래 속도까지) */
+  ramp: boolean;
   markers: { t: number; label: string }[];
   /** 코드 표가 시작하는 마디 (1부터) */
   firstBar: number;
@@ -43,7 +45,7 @@ export const MAX_MARKERS = 40;
 
 export function defaultState(): CopyState {
   return {
-    bpm: 100, beatsPerBar: 4, offset: 0, speed: 0.75, loop: null, loopOn: false, markers: [],
+    bpm: 100, beatsPerBar: 4, offset: 0, speed: 0.75, loop: null, loopOn: false, ramp: false, markers: [],
     firstBar: 1, cells: Array(8).fill(""), overlay: true, songVolume: 0.9, chordVolume: 0.7,
   };
 }
@@ -118,6 +120,11 @@ export function tapTempo(times: readonly number[]): number | null {
   return Math.round(Math.min(MAX_BPM, Math.max(MIN_BPM, bpm)) * 10) / 10;
 }
 
+/** 지금보다 한 단계 빠른 속도. 이미 가장 빠르면 그대로. */
+export function nextSpeed(cur: number): number {
+  return SPEEDS.find((s) => s > cur + 1e-9) ?? cur;
+}
+
 export function formatTime(sec: number): string {
   const s = Math.max(0, sec);
   const m = Math.floor(s / 60);
@@ -146,6 +153,7 @@ export function sanitizeState(raw: unknown, duration = Infinity): CopyState {
     speed: num(raw.speed, 0.25, 2, d.speed),
     loop: null,
     loopOn: raw.loopOn === true,
+    ramp: raw.ramp === true,
     markers: [],
     firstBar: Math.round(num(raw.firstBar, 1, 9999, d.firstBar)),
     cells: [],

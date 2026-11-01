@@ -9,7 +9,7 @@
 import { identifyChord, romanNumeral } from "../model/chord";
 import { parseChordSymbol, splitCell } from "../model/chordSymbol";
 import {
-  MAX_BPM, MAX_CELLS, MAX_MARKERS, MIN_BPM, SPEEDS, barIndexAt, barSeconds, cellAt, defaultState, formatTime,
+  MAX_BPM, MAX_CELLS, MAX_MARKERS, MIN_BPM, SPEEDS, nextSpeed, barIndexAt, barSeconds, cellAt, defaultState, formatTime,
   loopFromBar, positionLabel, sanitizeState, shiftLoop, storageKey, tapTempo, type CopyState,
 } from "../model/copyNotebook";
 import { keyChoices, keyFromValue, keyToValue } from "../model/scale";
@@ -43,6 +43,7 @@ export class CopyPlayer {
   private peaks: Float32Array | null = null;
   private view = { start: 0, end: 10 };
   private taps: number[] = [];
+  private passes = 0;
   private selCell = 0;
   private heldSymbol: string | null = null;
   private heldPitches: number[] = [];
@@ -223,6 +224,10 @@ export class CopyPlayer {
     // 반복
     $("copy-a").addEventListener("click", () => this.setLoopEdge("a"));
     $("copy-b").addEventListener("click", () => this.setLoopEdge("b"));
+    $<HTMLInputElement>("copy-ramp").addEventListener("change", (e) => {
+      this.st.ramp = (e.target as HTMLInputElement).checked;
+      this.changed();
+    });
     $("copy-loop").addEventListener("click", () => {
       if (!this.st.loop) { this.deps.onStatus("먼저 A 와 B 를 정하거나 「이 마디부터」를 눌러 주세요"); return; }
       this.st.loopOn = !this.st.loopOn;
@@ -231,6 +236,8 @@ export class CopyPlayer {
     $("copy-loopbar").addEventListener("click", () => {
       if (!this.duration) return;
       const n = Number($<HTMLSelectElement>("copy-loopn").value);
+      this.passes = 0;
+      $("copy-passes").textContent = "";
       this.st.loop = loopFromBar(audio.currentTime, n, this.st, this.duration);
       this.st.loopOn = true;
       this.seek(this.st.loop.a);
@@ -429,6 +436,17 @@ export class CopyPlayer {
     if (!this.audio.paused && this.st.loopOn && this.st.loop && t >= this.st.loop.b) {
       this.audio.currentTime = this.st.loop.a;
       this.clearHeld();
+      this.passes += 1;
+      if (this.st.ramp) {
+        const n = nextSpeed(this.st.speed);
+        if (n !== this.st.speed) {
+          this.st.speed = n;
+          this.audio.playbackRate = n;
+          this.changed();
+          this.refreshAll();
+        }
+      }
+      $("copy-passes").textContent = `${this.passes + 1}번째 바퀴`;
     }
     if (!this.audio.paused) this.followView(t);
     this.refreshPos();
@@ -680,6 +698,7 @@ export class CopyPlayer {
     $<HTMLSelectElement>("copy-beats").value = String(st.beatsPerBar);
     $("copy-offinfo").textContent = `1박 = ${st.offset.toFixed(2)}초`;
     $<HTMLInputElement>("copy-overlay").checked = st.overlay;
+    $<HTMLInputElement>("copy-ramp").checked = st.ramp;
     $<HTMLInputElement>("copy-firstbar").value = String(st.firstBar);
     this.el.key.value = st.key ? keyToValue(st.key) : "";
     this.applyVolumes();

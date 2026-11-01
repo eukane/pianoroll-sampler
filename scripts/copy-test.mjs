@@ -57,6 +57,7 @@ await page.tap("#unlock").catch(() => {});
 const st = () => page.evaluate(() => JSON.parse(JSON.stringify(window.__copy.copy.st)));
 const now = () => page.evaluate(() => window.__copy.copy.audio.currentTime);
 const holds = () => page.evaluate(() => [...window.__copy.scheduler.keyHolds.keys()].sort((a, b) => a - b));
+const text = (sel) => page.textContent(sel);
 const click = (sel) => page.evaluate((s) => document.querySelector(s).click(), sel);
 
 // ============================================================= ① 열기 · 느린 재생
@@ -99,6 +100,22 @@ await click("#copy-next");
 s = await st();
 check("「다음 구간」: 2~4초로 옮기고 그 자리에서 시작", Math.abs(s.loop.a - 2) < 1e-6 && Math.abs(s.loop.b - 4) < 1e-6, s.loop);
 await click("#copy-play");
+
+// ---- 한 바퀴마다 빨라지기
+await page.evaluate(() => { const c = window.__copy.copy; c.st.bpm = 240; c.st.beatsPerBar = 4; c.st.offset = 0; });
+await page.evaluate(() => window.__copy.copy.seek(0.3));
+await page.selectOption("#copy-loopn", "1");
+await click("#copy-loopbar");
+await click('#copy-speed [data-speed="0.5"]');
+await page.evaluate(() => { document.getElementById("copy-ramp").click(); });
+await click("#copy-play");
+await sleep(5200);
+const ramped = await st();
+check("「한 바퀴마다 빨라지게」: 0.5× 로 시작해 몇 바퀴 뒤 더 빨라지고, 화면의 속도 표시도 따라간다", ramped.ramp === true && ramped.speed > 0.5 && (await page.evaluate(() => document.querySelector('#copy-speed [aria-pressed="true"]').dataset.speed)) === String(ramped.speed) && (await text("#copy-passes")).includes("바퀴"), [ramped.speed, await text("#copy-passes")]);
+await click("#copy-play");
+await page.evaluate(() => { document.getElementById("copy-ramp").click(); });
+await click('#copy-speed [data-speed="1"]');
+await page.evaluate(() => { const c = window.__copy.copy; c.st.loopOn = false; c.st.loop = { a: 2, b: 4 }; c.st.bpm = 120; });
 
 // ============================================================= ③ 적은 코드 울리기
 await page.evaluate(() => { window.__copy.copy.st.loopOn = false; });
