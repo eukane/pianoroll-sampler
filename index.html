@@ -91,9 +91,9 @@
           </label>
           <label>
             박자
-            <!-- 마디 길이가 4분음표 정수 개인 것만 넣는다. 7/8·5/8 은 3.5·2.5박
-                 이라 화면·위치 표시·격자가 전부 4분음표 기준인 지금 셈법과
-                 안 맞는다. 그건 따로 손봐야 할 일이라 목록에 안 올린다. -->
+            <!-- 곡 처음의 박자. 곡 중간에 바뀌는 건 오른쪽 「변박·템포」 에서 정한다.
+                 7/8 처럼 마디가 4분음표 정수 개가 아닌 박자는 마디선·메트로놈은 정확하지만
+                 격자(스냅)는 곡 처음부터 4분음표 단위라, 이런 마디에서는 1/8 격자가 맞다. -->
             <select id="timesig">
               <option value="4/4" selected>4/4</option>
               <option value="3/4">3/4</option>
@@ -102,9 +102,14 @@
               <option value="6/8">6/8</option>
               <option value="12/8">12/8</option>
               <option value="2/2">2/2</option>
+              <option value="3/8">3/8</option>
+              <option value="5/8">5/8</option>
+              <option value="7/8">7/8</option>
+              <option value="9/8">9/8</option>
             </select>
           </label>
           <label>마디 <input id="bars" type="number" min="1" max="64" step="1" value="4" /></label>
+          <button id="tm" type="button" title="곡 중간에 박자(변박)나 빠르기(템포)를 바꾸기">🕒 변박·템포</button>
           <label>
             소리
             <select id="wave">
@@ -169,6 +174,54 @@
       <footer id="hint">
         빈 곳 탭=찍기 · 노트 탭=꾸밈·지우기 · 끌기=옮기기 · 오른쪽 끝=길이 · 두 손가락=확대 · 위 눈금=위치/루프
       </footer>
+    </div>
+
+    <!-- 변박·템포 변화 (ui/timelinePanel.ts, 계산은 model/timeline.ts). -->
+    <div id="tm-modal" class="hidden">
+      <div class="sheet tm-sheet">
+        <div class="sheet-head">
+          <b>🕒 변박 · 템포 변화</b>
+          <span class="spacer"></span>
+          <button id="tm-close" type="button">닫기</button>
+        </div>
+        <div class="sheet-body">
+          <p class="note">
+            노트는 움직이지 않습니다. 마디선이 다시 그어지고, 소리 나는 속도만 달라집니다.
+            곡 <b>처음</b>의 박자와 빠르기는 위쪽 박자·BPM 칸에서 바꾸세요.
+          </p>
+          <h4 class="tm-h">박자 (변박)</h4>
+          <div id="tm-meters" class="tm-list"></div>
+          <div class="tm-add">
+            <label>마디 <input id="tm-m-bar" type="number" min="2" step="1" /></label>
+            <label>
+              부터
+              <select id="tm-m-sig">
+                <option value="4/4">4/4</option>
+                <option value="3/4">3/4</option>
+                <option value="2/4">2/4</option>
+                <option value="5/4">5/4</option>
+                <option value="6/8">6/8</option>
+                <option value="12/8">12/8</option>
+                <option value="2/2">2/2</option>
+                <option value="3/8">3/8</option>
+                <option value="5/8">5/8</option>
+                <option value="7/8">7/8</option>
+                <option value="9/8">9/8</option>
+              </select>
+            </label>
+            <button id="tm-m-add" type="button">＋ 박자 바꾸기</button>
+          </div>
+          <h4 class="tm-h">템포</h4>
+          <div id="tm-tempos" class="tm-list"></div>
+          <div class="tm-add">
+            <label>마디 <input id="tm-t-bar" type="number" min="1" step="1" /></label>
+            <label>박 <input id="tm-t-beat" type="number" min="1" step="1" value="1" /></label>
+            <label>BPM <input id="tm-t-bpm" type="number" min="20" max="300" step="1" /></label>
+            <button id="tm-t-add" type="button">＋ 템포 바꾸기</button>
+          </div>
+          <p id="tm-msg" class="note"></p>
+        </div>
+      </div>
     </div>
 
     <!-- 귀 훈련: 진행을 듣고 몇 도 코드인지 맞힌다 (ui/earTraining.ts, 문제는 model/ear.ts). -->

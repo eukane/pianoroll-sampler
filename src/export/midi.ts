@@ -17,8 +17,12 @@
 // 확장자를 붙여 적는다. Node 의 ESM 은 확장자를 생략하면 못 찾는데, 이 모듈은
 // 브라우저 없이 테스트해야 해서(scripts/midi-roundtrip.mjs) Node 에서도 그대로
 // import 되어야 한다. Vite 는 양쪽 다 받는다.
-import type { Note, Project, Track } from "../model/types";
-import { beatsPerBar, emptyTrack, makeNote, sortNotes } from "../model/project.ts";
+import type { MeterChange, Note, Project, TempoChange, Track } from "../model/types";
+import { emptyTrack, makeNote, sortNotes } from "../model/project.ts";
+import { barIndexAt, barStartBeat, bpmAt, meterChangeList, secondsBetween, sigBeats, tempoChangeList } from "../model/timeline.ts";
+
+/** 불러올 템포 변화의 상한. 서서히 느려지는(리타르단도) 곡은 이벤트가 수백 개라 끝없이 쌓일 수 있다. */
+export const MAX_IMPORTED_TEMPO_CHANGES = 512;
 import { assignChannels, MAX_TRACKS } from "../model/channels.ts";
 import { packPresetId, unpackPresetId } from "../model/preset.ts";
 import { shakes, VIBRATO_FADE } from "../audio/vibrato.ts";
@@ -121,21 +125,38 @@ export function projectToMidi(project: Project, options: MidiOptions = {}): Uint
   const tracks: Uint8Array[] = [];
 
   // 0번 트랙: 템포와 박자만. 노트는 없다.
-  const tempo = new ByteWriter();
-  const usPerQuarter = Math.round(60_000_000 / Math.max(1, project.bpm));
-  tempo.varint(0);
-  tempo.raw([0xff, 0x51, 0x03, (usPerQuarter >> 16) & 0xff, (usPerQuarter >> 8) & 0xff, usPerQuarter & 0xff]);
-  tempo.varint(0);
+  //
+  // 틱은 **박 × PPQ** 라 템포와 무관하다 — 템포가 바뀌어도 노트의 틱은 그대로고, 바뀐다는
+  // 사실만 이 트랙의 템포 이벤트로 알린다. 변박은 마디가 시작하는 틱에 박자 이벤트를 놓는다.
+  type MetaAt = { tick: number; order: number; data: number[] };
+  const meta: MetaAt[] = [];
+  const tempoEvent = (bpm: number) => {
+    const us = Math.round(60_000_000 / Math.max(1, bpm));
+    return [0xff, 0x51, 0x03, (us >> 16) & 0xff, (us >> 8) & 0xff, us & 0xff];
+  };
   // 분모는 2의 지수로 적는다 (4 → 2, 8 → 3).
-  const [num, den] = project.timeSig;
-  tempo.raw([0xff, 0x58, 0x04, num, Math.round(Math.log2(den)), 24, 8]);
+  const sigEvent = (sig: [number, number]) => [0xff, 0x58, 0x04, sig[0], Math.round(Math.log2(sig[1])), 24, 8];
+  meta.push({ tick: 0, order: 0, data: tempoEvent(project.bpm) });
+  meta.push({ tick: 0, order: 1, data: sigEvent(project.timeSig) });
+  for (const t of tempoChangeList(project)) meta.push({ tick: Math.round(t.beat * PPQ), order: 0, data: tempoEvent(t.bpm) });
+  for (const m of meterChangeList(project)) {
+    meta.push({ tick: Math.round(barStartBeat(project, m.bar) * PPQ), order: 1, data: sigEvent(m.sig) });
+  }
+  meta.sort((x, y) => x.tick - y.tick || x.order - y.order);
+  const tempo = new ByteWriter();
+  let metaLast = 0;
+  for (const ev of meta) {
+    tempo.varint(ev.tick - metaLast);
+    tempo.raw(ev.data);
+    metaLast = ev.tick;
+  }
   tempo.varint(0);
   tempo.raw([0xff, 0x2f, 0x00]); // 트랙 끝
   tracks.push(chunk("MTrk", tempo.toBytes()));
 
   const channels = assignChannels(project);
   project.tracks.forEach((track, index) => {
-    tracks.push(chunk("MTrk", writeTrack(track, channels[index], includeMixer, project.bpm)));
+    tracks.push(chunk("MTrk", writeTrack(track, channels[index], includeMixer, project)));
   });
 
   const header = new ByteWriter();
@@ -158,7 +179,7 @@ function writeTrack(
   track: Track,
   channel: number,
   includeMixer: boolean,
-  bpm: number,
+  project: Project,
 ): Uint8Array {
   const events: Event[] = [];
 
@@ -187,7 +208,9 @@ function writeTrack(
   // 꾸밈(떨림 CC1 · 음정 곡선 피치 벤드)은 **언제나** 싣는다. 볼륨·팬과 달리
   // 우리 렌더에서 따로 거는 데가 없어서, 여기서 빼면 뽑아낸 WAV 에만 꾸밈이
   // 사라진다.
-  const secToTick = (sec: number) => Math.round((sec * Math.max(1, bpm) * PPQ) / 60);
+  // 꾸밈 시각(초)을 틱으로. 그 음이 울리는 자리의 빠르기로 센다 — 떨림이 시작되는 지연 같은
+  // 0.1~0.3초짜리 값이라 음 도중에 템포가 바뀌는 경우의 어긋남은 귀에 안 들린다.
+  const secToTick = (sec: number, atBeat: number) => Math.round((sec * Math.max(1, bpmAt(project, atBeat)) * PPQ) / 60);
   const bendValue = (cents: number) => {
     const c = Math.max(-MAX_BEND_CENTS, Math.min(MAX_BEND_CENTS, cents));
     const v = Math.max(0, Math.min(16383, Math.round(8192 + (c / MAX_BEND_CENTS) * 8191)));
@@ -207,7 +230,7 @@ function writeTrack(
   for (const note of track.notes) {
     const on = Math.round(note.start * PPQ);
     const off = Math.round((note.start + note.length) * PPQ);
-    const seconds = (note.length * 60) / Math.max(1, bpm);
+    const seconds = secondsBetween(project, note.start, note.start + note.length);
     const expr = expressionFor(track, note, seconds);
     const vib = expr.vibrato;
 
@@ -221,7 +244,7 @@ function writeTrack(
       if (shakes(vib, seconds)) {
         const full = clamp7(vib.depth * 127);
         for (const step of [1 / 3, 2 / 3, 1]) {
-          setMod(on + secToTick(vib.delay + VIBRATO_FADE * step), clamp7(full * step));
+          setMod(on + secToTick(vib.delay + VIBRATO_FADE * step, note.start), clamp7(full * step));
         }
       }
       vibBusyUntil = Math.max(vibBusyUntil, off);
@@ -229,12 +252,12 @@ function writeTrack(
 
     if (expr.bend.length > 0) {
       for (const p of sampleBend(expr.bend)) {
-        events.push({ tick: on + secToTick(p.t), order: 5, data: bendValue(p.cents) });
+        events.push({ tick: on + secToTick(p.t, note.start), order: 5, data: bendValue(p.cents) });
       }
       const last = expr.bend[expr.bend.length - 1];
       // 반드시 가운데로 되돌린다. 안 그러면 그 뒤 음이 전부 휜 채로 난다.
       if (last.cents !== 0) {
-        events.push({ tick: on + secToTick(last.t) + 1, order: 5, data: bendValue(0) });
+        events.push({ tick: on + secToTick(last.t, note.start) + 1, order: 5, data: bendValue(0) });
       }
       bent = true;
     } else if (bent) {
@@ -342,8 +365,10 @@ export function midiToProject(bytes: Uint8Array): Project {
   }
   const ppq = division || PPQ;
 
-  let bpm = 120;
-  let timeSig: [number, number] = [4, 4];
+  // 템포·박자는 **어느 틱에서** 바뀌는지까지 모은다. 예전에는 마지막 값 하나만 남겨서, 곡 중간에
+  // 템포가 바뀌는 파일을 열면 곡 전체가 마지막 템포로 돌았다.
+  const tempoEvents: { tick: number; bpm: number }[] = [];
+  const sigEvents: { tick: number; sig: [number, number] }[] = [];
   /** MIDI 채널 → 노트 목록. 채널이 곧 악기라 이 단위로 트랙을 만든다. */
   const byChannel = new Map<number, { notes: Note[]; name: string; program: number; bankMSB: number }>();
 
@@ -387,9 +412,12 @@ export function midiToProject(bytes: Uint8Array): Project {
         const from = r.at;
         if (type === 0x51 && len === 3) {
           const us = (r.u8() << 16) | (r.u8() << 8) | r.u8();
-          if (us > 0) bpm = Math.round(60_000_000 / us);
+          // 소수 첫째 자리까지 (137.5 가 138 로 어긋나면 길게 가는 곡에서 박이 밀린다).
+          if (us > 0) tempoEvents.push({ tick, bpm: Math.round((60_000_000 / us) * 10) / 10 });
         } else if (type === 0x58 && len >= 2) {
-          timeSig = [r.u8(), 2 ** r.u8()];
+          const num = r.u8();
+          const den = 2 ** r.u8();
+          if (num > 0 && den > 0 && den <= 64) sigEvents.push({ tick, sig: [num, den] });
         } else if (type === 0x03) {
           trackName = new TextDecoder().decode(bytes.subarray(from, from + len));
         }
@@ -457,18 +485,53 @@ export function midiToProject(bytes: Uint8Array): Project {
     return track;
   });
 
+  // 템포: 제일 이른 이벤트가 곡 처음의 빠르기, 이후는 변화다. 같은 값이 이어지면 건너뛴다.
+  tempoEvents.sort((x, y) => x.tick - y.tick);
+  const bpm = tempoEvents.length > 0 ? tempoEvents[0].bpm : 120;
+  const tempoChanges: TempoChange[] = [];
+  let curBpm = bpm;
+  for (const e of tempoEvents.slice(1)) {
+    if (e.bpm === curBpm) continue;
+    const beat = e.tick / ppq;
+    // 한 틱에 둘이 겹치면 뒤의 것이 이긴다 (SMF 에서 같은 틱의 마지막 값이 유효하다).
+    if (tempoChanges.length > 0 && tempoChanges[tempoChanges.length - 1].beat === beat) {
+      tempoChanges[tempoChanges.length - 1].bpm = e.bpm;
+    } else if (beat > 0) {
+      tempoChanges.push({ beat, bpm: e.bpm });
+    }
+    curBpm = e.bpm;
+    if (tempoChanges.length >= MAX_IMPORTED_TEMPO_CHANGES) break;
+  }
+
+  // 박자: 첫 이벤트가 곡 처음의 박자. 이후는 **마디 경계로 맞춘 변박**이다 (박자표는 마디 첫 박에서만
+  // 바뀐다). 마디 중간에 놓인 이벤트는 가장 가까운 마디선으로 옮긴다.
+  sigEvents.sort((x, y) => x.tick - y.tick);
+  const timeSig: [number, number] = sigEvents.length > 0 ? [...sigEvents[0].sig] : [4, 4];
+  const meterChanges: MeterChange[] = [];
+  let run = { fromBar: 0, startBeat: 0, len: sigBeats(timeSig), sig: timeSig };
+  for (const e of sigEvents.slice(1)) {
+    if (e.sig[0] === run.sig[0] && e.sig[1] === run.sig[1]) continue;
+    const bar = run.fromBar + Math.round((e.tick / ppq - run.startBeat) / run.len);
+    if (bar <= run.fromBar) continue;
+    const startBeat = run.startBeat + (bar - run.fromBar) * run.len;
+    meterChanges.push({ bar, sig: [e.sig[0], e.sig[1]] });
+    run = { fromBar: bar, startBeat, len: sigBeats(e.sig), sig: [e.sig[0], e.sig[1]] };
+  }
+
   const project: Project = {
     bpm,
     bars: 4,
     timeSig,
     tracks: tracks.length > 0 ? tracks : [emptyTrack()],
   };
+  if (meterChanges.length > 0) project.meterChanges = meterChanges;
+  if (tempoChanges.length > 0) project.tempoChanges = tempoChanges;
 
-  // 마디 수는 제일 늦게 끝나는 노트에 맞춘다.
+  // 마디 수는 제일 늦게 끝나는 노트에 맞춘다. 변박이 있으면 마디 길이가 제각각이라 마디를 직접 센다.
   const lastBeat = Math.max(
     0,
     ...project.tracks.flatMap((t) => t.notes.map((n) => n.start + n.length)),
   );
-  project.bars = Math.max(1, Math.ceil(lastBeat / beatsPerBar(project)));
+  project.bars = lastBeat <= 1e-6 ? 1 : Math.max(1, barIndexAt(project, lastBeat - 1e-6) + 1);
   return project;
 }

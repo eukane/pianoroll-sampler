@@ -20,7 +20,8 @@
 
 import type { Note, Project } from "../model/types";
 import { boxFrom, notesInBox, pruneSelection, type SelectBox } from "../model/selection";
-import { beatsPerBar, makeNote, snap, snapFloor, sortNotes, totalBeats } from "../model/project";
+import { makeNote, snap, snapFloor, sortNotes, totalBeats } from "../model/project";
+import { barIndexAt, barStartBeat, barLength, secondsBetween, sigAtBar, sigLabel, tempoChangeList } from "../model/timeline";
 import { clampPitch, isBlackKey, isC, midiToName } from "../util/music";
 import { inKey, isTonic } from "../model/scale";
 import {
@@ -221,9 +222,6 @@ export class PianoRoll {
 
   render(): void {
     const g = this.ctx2d;
-    const project = this.getProject();
-    const bpb = beatsPerBar(project);
-
     g.fillStyle = C.bg;
     g.fillRect(0, 0, this.width, this.height);
 
@@ -234,7 +232,7 @@ export class PianoRoll {
 
     this.drawRows();
     this.drawLoopShade();
-    this.drawGrid(bpb);
+    this.drawGrid();
     this.drawNotes();
     this.drawSelectBox();
     this.drawPlayhead();
@@ -242,7 +240,7 @@ export class PianoRoll {
     g.restore();
 
     this.drawKeyboard();
-    this.drawRuler(bpb);
+    this.drawRuler();
   }
 
   /**
@@ -322,7 +320,7 @@ export class PianoRoll {
     return true;
   }
 
-  private drawGrid(bpb: number): void {
+  private drawGrid(): void {
     const g = this.ctx2d;
     const startBeat = Math.max(0, Math.floor(this.xToBeat(GUTTER)));
     const endBeat = Math.ceil(this.xToBeat(this.width));
@@ -341,22 +339,31 @@ export class PianoRoll {
       }
     }
 
-    // 박 선. 정수 박마다.
-    g.fillStyle = C.lineBeat;
-    for (let b = startBeat; b <= endBeat; b += 1) {
-      g.fillRect(Math.round(this.beatToX(b)), RULER, 1, this.height - RULER);
-    }
-
-    // 마디 선은 **따로 돈다.**
+    // 박 선과 마디 선. **마디를 걸음 단위로** 돈다.
     //
-    // 예전에는 정수 박을 돌면서 `b % bpb === 0` 인 자리를 마디로 칠했다.
-    // 마디 길이가 정수가 아니면(7/8 은 3.5박) 그 조건에 걸리는 정수 박이
-    // 없어서 **마디 선이 하나도 안 그려졌다.** 실제로 재서 확인했다 —
-    // 7/8 에서 3.5·7·10.5·14 박에 있어야 할 선 중 7·14 만 나왔다.
-    // 마디 자체를 걸음 단위로 삼으면 그런 일이 없다.
-    g.fillStyle = C.lineBar;
-    for (let b = Math.floor(startBeat / bpb) * bpb; b <= endBeat; b += bpb) {
-      g.fillRect(Math.round(this.beatToX(b)), RULER, 2, this.height - RULER);
+    // 예전에는 정수 박을 돌면서 `b % bpb === 0` 인 자리를 마디로 칠했다. 마디 길이가 정수가
+    // 아니면(7/8 은 3.5박) 그 조건에 걸리는 정수 박이 없어서 **마디 선이 하나도 안 그려졌다**
+    // (7/8 에서 3.5·7·10.5·14 박 중 7·14 만 나왔다). 변박이 생기면 마디마다 길이가 달라
+    // 더더욱 그렇다. 마디를 돌면서 그 마디 첫 박부터 4분음표 간격으로 박 선을 긋는다 —
+    // 변박이 없으면 옛 그림과 똑같다.
+    this.eachBar(startBeat, endBeat, (_index, from, len) => {
+      g.fillStyle = C.lineBeat;
+      for (let b = from + 1; b < from + len - 1e-6; b += 1) {
+        g.fillRect(Math.round(this.beatToX(b)), RULER, 1, this.height - RULER);
+      }
+      g.fillStyle = C.lineBar;
+      g.fillRect(Math.round(this.beatToX(from)), RULER, 2, this.height - RULER);
+    });
+  }
+
+  /** 화면에 걸친 마디들을 차례로. `fn(마디 번호(0부터), 시작 박, 길이 박)`. */
+  private eachBar(startBeat: number, endBeat: number, fn: (index: number, start: number, len: number) => void): void {
+    const project = this.getProject();
+    for (let i = barIndexAt(project, startBeat); ; i += 1) {
+      const from = barStartBeat(project, i);
+      if (from > endBeat) break;
+      fn(i, from, barLength(project, i));
+      if (i > 100000) break; // 안전장치: 화면 계산이 어긋나도 무한히 돌지 않는다
     }
   }
 
@@ -469,7 +476,7 @@ export class PianoRoll {
     // **실제 길이(초)로 계산한다.** 프리셋 꾸밈은 구간을 초로도 재기 때문에
     // (0.13초짜리 끌어올림), 1초로 뭉뚱그려 그리면 긴 음에서 화면과 소리가
     // 다른 모양이 된다. 화면이 거짓말을 하면 그리는 의미가 없다.
-    const durationSec = (n.length * 60) / Math.max(1, this.getProject().bpm);
+    const durationSec = secondsBetween(this.getProject(), n.start, n.start + n.length);
     const orn2 = ornamentOf(n);
     // 직접 그린 곡선은 **있는 그대로 읽는다.** curveOf 는 걸러 내고 정렬까지
     // 하는데, 그건 파일을 읽을 때와 손으로 고칠 때 할 일이지 **매 프레임**
@@ -580,7 +587,7 @@ export class PianoRoll {
     g.fillRect(GUTTER - 1, RULER, 1, this.height - RULER);
   }
 
-  private drawRuler(bpb: number): void {
+  private drawRuler(): void {
     const g = this.ctx2d;
     g.fillStyle = C.ruler;
     g.fillRect(0, 0, this.width, RULER);
@@ -606,12 +613,30 @@ export class PianoRoll {
     const endBeat = Math.ceil(this.xToBeat(this.width));
     g.font = "600 10px system-ui, sans-serif";
     g.textBaseline = "middle";
-    for (let b = Math.floor(startBeat / bpb) * bpb; b <= endBeat; b += bpb) {
-      const x = Math.round(this.beatToX(b));
+    const project = this.getProject();
+    const changed = (project.meterChanges?.length ?? 0) > 0;
+    this.eachBar(startBeat, endBeat, (index, from) => {
+      const x = Math.round(this.beatToX(from));
       g.fillStyle = C.lineBar;
       g.fillRect(x, RULER - 8, 1, 8);
       g.fillStyle = C.dim;
-      g.fillText(String(Math.round(b / bpb) + 1), x + 4, RULER / 2);
+      g.fillText(String(index + 1), x + 4, RULER / 2);
+      // 박자가 바뀌는 마디(와, 변박이 있는 곡의 첫 마디)에는 박자를 적는다.
+      const sig = sigAtBar(project, index);
+      const prev = index > 0 ? sigAtBar(project, index - 1) : null;
+      if (changed && (!prev || prev[0] !== sig[0] || prev[1] !== sig[1])) {
+        g.fillStyle = C.noteActive;
+        g.fillText(sigLabel(sig), x + 4 + 7 * String(index + 1).length + 4, RULER / 2);
+      }
+    });
+    // 템포가 바뀌는 자리. 마디 숫자 아래쪽 눈금 위에 작게 ♩=120.
+    for (const t of tempoChangeList(project)) {
+      const x = Math.round(this.beatToX(t.beat));
+      if (x < GUTTER - 40 || x > this.width) continue;
+      g.fillStyle = C.selectEdge;
+      g.fillRect(x, 0, 1, RULER - 8);
+      g.fillStyle = C.selectEdge;
+      g.fillText(`♩${Math.round(t.bpm)}`, x + 3, 7);
     }
 
     // 재생 헤드 손잡이. 끌 수 있다는 걸 보여 주려면 잡을 만한 게 그려져 있어야 한다.

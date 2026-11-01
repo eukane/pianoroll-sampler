@@ -97,11 +97,26 @@ export type Track = {
   vibratoDelay?: number;
 };
 
+/** 곡 중간에 박자가 바뀐다 — `bar` 마디(0부터)부터 `sig` 박자. 마디 경계에서만 바뀐다. */
+export type MeterChange = { bar: number; sig: [number, number] };
+
+/** 곡 중간에 빠르기가 바뀐다 — `beat` 박(4분음표 기준)부터 `bpm`. 계단식이다 (서서히 변하지 않는다). */
+export type TempoChange = { beat: number; bpm: number };
+
 export type Project = {
+  /** 곡 처음의 빠르기. 중간에 바뀌는 건 `tempoChanges`. */
   bpm: number;
   bars: number;
-  timeSig: [number, number]; // 기본 [4, 4]
+  /** 곡 처음의 박자. 중간에 바뀌는 건 `meterChanges`. 기본 [4, 4] */
+  timeSig: [number, number];
   tracks: Track[];
+  /**
+   * 변박. 없거나 비어 있으면 곡 내내 `timeSig` 다 (예전 파일은 전부 이쪽이다).
+   * 마디 번호 오름차순, 1 이상, 같은 마디에 둘 이상 없음. 계산은 model/timeline.ts 한 곳에서 한다.
+   */
+  meterChanges?: MeterChange[];
+  /** 템포 변화. 없거나 비어 있으면 곡 내내 `bpm`. 박 오름차순, 0 보다 큼. */
+  tempoChanges?: TempoChange[];
   /**
    * 곡의 조. 없으면 정하지 않은 것이다.
    *

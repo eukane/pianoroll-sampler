@@ -18,6 +18,11 @@ import {
 import {
   LEVELS, degreeNumeral, describeAnswer, grade, levelById, makeQuestion, questionChords,
 } from "../src/model/ear.ts";
+import {
+  dropRedundantMeters, barAt, barBeatLabel, barIndexAt, barLength, barStartBeat, beatToSec, bpmAt, clickAtOrAfter, hasMeterChanges,
+  isBarStart, nextClick, secToBeat, secondsBetween, sigAtBar, sigBeats, totalBeats as tlTotal, totalSeconds,
+} from "../src/model/timeline.ts";
+import { midiToProject, projectToMidi, PPQ } from "../src/export/midi.ts";
 import { DEMOS } from "../src/model/demos.ts";
 import { projectFromJson, projectToJson } from "../src/export/projectFile.ts";
 
@@ -286,6 +291,130 @@ const lcg = (seed) => { let x = seed >>> 0; return () => ((x = (Math.imul(x, 166
   ok("로마숫자 글자 (장조 · 단조)", [0, 1, 2, 3, 4, 5, 6].map((d) => degreeNumeral("major", d)).join(" ") === "I ii iii IV V vi vii°" &&
     [0, 1, 2, 3, 4, 5, 6].map((d) => degreeNumeral("minor", d)).join(" ") === "i ii° III iv v VI VII");
   ok("없는 단계는 undefined", levelById("zzz") === undefined && levelById("L3")?.pool.length === 7);
+}
+
+// ------------------------------------------------------------ 변박 · 템포 변화
+//
+// 가장 중요한 검사는 **변박·템포 변화가 없는 곡이 옛 식과 똑같은 값을 내는가** 다.
+// 옛 식: 마디 = 박 ÷ beatsPerBar, 초 = 박 × 60 ÷ bpm. 기존 곡이 어긋나면 이 기능은 못 낸다.
+{
+  const bad = [];
+  for (const sig of [[4, 4], [3, 4], [2, 4], [5, 4], [6, 8], [12, 8], [2, 2], [7, 8]]) {
+    for (const bpm of [20, 60, 100, 137.5, 300]) {
+      const p = { bpm, bars: 9, timeSig: sig, tracks: [] };
+      const bpb = (sig[0] * 4) / sig[1];
+      if (Math.abs(tlTotal(p) - 9 * bpb) > 1e-9) bad.push(["total", sig, bpm]);
+      for (const beat of [0, 0.5, 1, bpb - 0.001, bpb, bpb + 0.25, 3 * bpb, 8.999 * bpb, 9 * bpb]) {
+        if (Math.abs(beatToSec(p, beat) - (beat * 60) / bpm) > 1e-9) bad.push(["sec", sig, bpm, beat]);
+        if (Math.abs(secToBeat(p, (beat * 60) / bpm) - beat) > 1e-9) bad.push(["beat", sig, bpm, beat]);
+        if (barIndexAt(p, beat) !== Math.floor(beat / bpb + 1e-9)) bad.push(["bar", sig, bpm, beat]);
+      }
+      for (let b = 0; b <= 12; b += 1) if (Math.abs(barStartBeat(p, b) - b * bpb) > 1e-9) bad.push(["start", sig, b]);
+      if (hasMeterChanges(p)) bad.push(["hasMeter", sig]);
+    }
+  }
+  ok("변박·템포 변화가 없으면 옛 식과 똑같다 (8가지 박자 × 5가지 빠르기)", bad.length === 0, bad.slice(0, 4));
+}
+{
+  // 4/4 두 마디 → 3/4 두 마디 → 7/8 한 마디 → (4/4 로 복귀) 한 마디. 박 단위로 손으로 센 값.
+  const p = {
+    bpm: 120, bars: 6, timeSig: [4, 4], tracks: [],
+    meterChanges: [{ bar: 2, sig: [3, 4] }, { bar: 4, sig: [7, 8] }, { bar: 5, sig: [4, 4] }],
+  };
+  ok("마디 시작: 0 4 8 11 14 17.5", [0, 1, 2, 3, 4, 5].map((b) => barStartBeat(p, b)).join() === "0,4,8,11,14,17.5",
+    [0, 1, 2, 3, 4, 5].map((b) => barStartBeat(p, b)));
+  ok("곡 길이 = 4+4+3+3+3.5+4 = 21.5박", tlTotal(p) === 21.5, tlTotal(p));
+  ok("마디 길이", [0, 2, 4, 5].map((b) => barLength(p, b)).join() === "4,3,3.5,4");
+  ok("박 → 마디 번호 (마디선 위는 그 마디)", [0, 3.99, 4, 7.99, 8, 10.99, 11, 13.99, 14, 17.49, 17.5, 21.49].map((b) => barIndexAt(p, b)).join() === "0,0,1,1,2,2,3,3,4,4,5,5",
+    [0, 3.99, 4, 7.99, 8, 10.99, 11, 13.99, 14, 17.49, 17.5, 21.49].map((b) => barIndexAt(p, b)));
+  ok("박자 이름", [0, 1, 2, 3, 4, 5].map((b) => sigAtBar(p, b).join("/")).join() === "4/4,4/4,3/4,3/4,7/8,4/4");
+  ok("곡 끝을 넘은 마디는 마지막 박자를 이어 센다", barStartBeat(p, 6) === 21.5 && barStartBeat(p, 7) === 25.5 && barLength(p, 9) === 4);
+  const bar4 = barAt(p, 15);
+  ok("barAt: 15박은 5번째 마디(7/8) [14, 17.5)", bar4.index === 4 && bar4.start === 14 && bar4.end === 17.5 && bar4.sig.join("/") === "7/8", bar4);
+  ok("마디 라벨 「마디 : 박」", barBeatLabel(p, 0) === "1 : 1" && barBeatLabel(p, 9.5) === "3 : 2" && barBeatLabel(p, 17.5) === "6 : 1", [barBeatLabel(p, 9.5), barBeatLabel(p, 17.5)]);
+  // 메트로놈: 마디마다 첫 박부터 센다. 7/8 마디(3.5박) 다음 마디는 정수 박이 아닌 17.5 에서 시작한다.
+  const clicks = [];
+  let c = clickAtOrAfter(p, 12);
+  for (let i = 0; i < 9 && c < tlTotal(p) - 1e-6; i += 1) { clicks.push(c); c = nextClick(p, c); }
+  ok("메트로놈 틱이 마디마다 마디 첫 박에서 다시 센다 (…12 13 14 15 16 17 17.5 18.5 19.5 20.5)", clicks.join() === "12,13,14,15,16,17,17.5,18.5,19.5", clicks);
+  ok("마디 첫 박만 높은 틱", [11, 14, 17.5, 8].every((b) => isBarStart(p, b)) && ![12, 15, 17, 18.5].some((b) => isBarStart(p, b)));
+  ok("틱을 박 중간에서 시작해도 다음 박에 맞춘다", clickAtOrAfter(p, 12.2) === 13 && clickAtOrAfter(p, 17.2) === 17.5 && clickAtOrAfter(p, 14) === 14);
+  ok("마디 수를 줄여 변박이 곡 끝 뒤로 밀려도 곡 길이가 맞다", tlTotal({ ...p, bars: 3 }) === 11 && tlTotal({ ...p, bars: 1 }) === 4);
+  const messy = { ...p, meterChanges: [{ bar: 0, sig: [9, 8] }, { bar: 2.5, sig: [3, 4] }, { bar: 2, sig: [3, 4] }, { bar: 2, sig: [6, 8] }, { bar: 3, sig: [0, 4] }] };
+  ok("이상한 변박(0마디 · 소수 · 중복 · 분자 0)은 건너뛰고 계산이 터지지 않는다", barStartBeat(messy, 3) === 11 && tlTotal(messy) === 20 && hasMeterChanges(messy), [barStartBeat(messy, 3), tlTotal(messy)]);
+}
+{
+  // 템포: 4박은 120, 이후는 60. 0~4박 = 2초, 4~8박 = 4초.
+  const p = { bpm: 120, bars: 4, timeSig: [4, 4], tracks: [], tempoChanges: [{ beat: 4, bpm: 60 }, { beat: 12, bpm: 240 }] };
+  ok("박 → 초: 0→0, 4→2, 8→6, 12→10, 14→10.5", [0, 4, 8, 12, 14].map((b) => beatToSec(p, b)).join() === "0,2,6,10,10.5", [0, 4, 8, 12, 14].map((b) => beatToSec(p, b)));
+  ok("초 → 박 (거꾸로) — 왕복해도 같다", [0, 1, 2, 5.5, 10, 10.25].map((s) => beatToSec(p, secToBeat(p, s))).every((v, i) => Math.abs(v - [0, 1, 2, 5.5, 10, 10.25][i]) < 1e-9));
+  ok("박 → 초 → 박 왕복", [0, 1.5, 4, 6.25, 12, 15.9].every((b) => Math.abs(secToBeat(p, beatToSec(p, b)) - b) < 1e-9));
+  ok("그 박의 빠르기 (바뀌는 박 위는 새 빠르기)", [0, 3.99, 4, 11.99, 12, 15].map((b) => bpmAt(p, b)).join() === "120,120,60,60,240,240");
+  ok("구간 사이 초", Math.abs(secondsBetween(p, 2, 6) - (1 + 2)) < 1e-9, secondsBetween(p, 2, 6));
+  ok("곡 전체 초 = 2 + 8 + 1 = 11", Math.abs(totalSeconds(p) - 11) < 1e-9, totalSeconds(p));
+  ok("20 BPM 아래는 20 으로 본다 (재생기가 늘 그렇게 했다)", beatToSec({ bpm: 5, bars: 1, timeSig: [4, 4], tracks: [] }, 4) === 12);
+  const unsorted = { ...p, tempoChanges: [{ beat: 12, bpm: 240 }, { beat: 4, bpm: 60 }, { beat: 4, bpm: 99 }, { beat: -1, bpm: 80 }, { beat: 0, bpm: 70 }] };
+  ok("템포 목록이 뒤섞이거나 이상해도 정리해서 계산한다", beatToSec(unsorted, 8) === 6 && bpmAt(unsorted, 0) === 120, beatToSec(unsorted, 8));
+}
+{
+  // 변박 + 템포를 같이: 마디 길이는 박이라 템포와 무관하다.
+  const p = { bpm: 90, bars: 4, timeSig: [3, 4], tracks: [], meterChanges: [{ bar: 2, sig: [4, 4] }], tempoChanges: [{ beat: 6, bpm: 180 }] };
+  ok("변박과 템포를 같이 써도 마디는 박으로, 시간은 초로 따로 계산된다",
+    barStartBeat(p, 2) === 6 && tlTotal(p) === 14 && Math.abs(beatToSec(p, 14) - (6 * 60 / 90 + 8 * 60 / 180)) < 1e-9, [tlTotal(p), beatToSec(p, 14)]);
+}
+
+// ----------------------------------------------- 변박 · 템포: 파일과 MIDI 로 나갔다 들어오기
+{
+  const note = (id, pitch, start, length) => ({ id, pitch, start, length, velocity: 100 });
+  const base = () => ({
+    bpm: 100, bars: 5, timeSig: [4, 4],
+    meterChanges: [{ bar: 2, sig: [3, 4] }, { bar: 4, sig: [7, 8] }],
+    tempoChanges: [{ beat: 6, bpm: 140 }, { beat: 13, bpm: 90.5 }],
+    tracks: [{
+      id: "t", name: "피아노", source: { kind: "sf2", presetId: 0 }, volume: 0.8, pan: 0, muted: false,
+      notes: [note("a", 60, 0, 1), note("b", 64, 8, 2), note("c", 67, 11, 3), note("d", 72, 14, 3.5)],
+    }],
+  });
+  const p0 = base();
+
+  // 저장 파일
+  const back = projectFromJson(projectToJson(p0));
+  ok("저장했다 열면 변박이 그대로다", JSON.stringify(back.meterChanges) === JSON.stringify(p0.meterChanges), back.meterChanges);
+  ok("저장했다 열면 템포 변화가 그대로다", JSON.stringify(back.tempoChanges) === JSON.stringify(p0.tempoChanges), back.tempoChanges);
+  ok("저장했다 열어도 곡 길이(박·초)가 그대로다", tlTotal(back) === tlTotal(p0) && Math.abs(totalSeconds(back) - totalSeconds(p0)) < 1e-9);
+  const old = projectFromJson(JSON.stringify({ bpm: 100, bars: 4, timeSig: [3, 4], tracks: [] }));
+  ok("예전 파일(변박·템포 없음)은 그 필드 없이 열린다", !("meterChanges" in old) && !("tempoChanges" in old) && old.timeSig.join() === "3,4", old);
+  const junk = projectFromJson(JSON.stringify({
+    bpm: 100, bars: 4, timeSig: [4, 4], tracks: [],
+    meterChanges: [{ bar: 0, sig: [3, 4] }, { bar: 1.5, sig: [3, 4] }, "x", null, { bar: 2, sig: [3, 4] }, { bar: 2, sig: [5, 4] }, { sig: [2, 4] }],
+    tempoChanges: [{ beat: 0, bpm: 90 }, { beat: -3, bpm: 90 }, { beat: 8, bpm: 9999 }, { beat: 8, bpm: 70 }, { beat: "a", bpm: 80 }, null],
+  }));
+  ok("이상한 항목만 버리고 쓸 수 있는 건 남긴다 (변박)", JSON.stringify(junk.meterChanges) === JSON.stringify([{ bar: 2, sig: [3, 4] }]), junk.meterChanges);
+  ok("이상한 항목만 버리고 쓸 수 있는 건 남긴다 (템포: 범위 밖 BPM 은 300 으로)", JSON.stringify(junk.tempoChanges) === JSON.stringify([{ beat: 8, bpm: 300 }]), junk.tempoChanges);
+  ok("전부 쓸 수 없으면 필드가 아예 없다", !("meterChanges" in projectFromJson(JSON.stringify({ tracks: [], meterChanges: [{ bar: 0, sig: [3, 4] }], tempoChanges: [{ beat: 0, bpm: 90 }] }))));
+
+  // MIDI 왕복
+  const bytes = projectToMidi(p0);
+  const mid = midiToProject(bytes);
+  ok("MIDI 왕복: 처음 박자·빠르기", mid.timeSig.join() === "4,4" && mid.bpm === 100, [mid.timeSig, mid.bpm]);
+  ok("MIDI 왕복: 변박이 같은 마디에 같은 박자로 돌아온다", JSON.stringify(mid.meterChanges) === JSON.stringify(p0.meterChanges), mid.meterChanges);
+  ok("MIDI 왕복: 템포 변화가 같은 박에 같은 값으로 돌아온다 (90.5 도 소수 첫째 자리까지)",
+    JSON.stringify(mid.tempoChanges) === JSON.stringify(p0.tempoChanges), mid.tempoChanges);
+  ok("MIDI 왕복: 노트가 그대로 (박 단위로 변박·템포와 무관)",
+    JSON.stringify(mid.tracks[0].notes.map((n) => [n.pitch, n.start, n.length])) === JSON.stringify(p0.tracks[0].notes.map((n) => [n.pitch, n.start, n.length])));
+  ok("MIDI 왕복: 곡 길이(박)가 마지막 노트를 담는다 — 17.5박이 끝이라 변박 5마디", tlTotal(mid) >= 17.5 && mid.bars === 5, [mid.bars, tlTotal(mid)]);
+  ok("MIDI 왕복 두 번째도 같다", JSON.stringify(midiToProject(projectToMidi(mid)).tempoChanges) === JSON.stringify(mid.tempoChanges));
+  ok("틱은 박 × " + PPQ + " 라 템포가 바뀌어도 노트 틱이 안 변한다", (() => {
+    const flat = { ...p0 }; delete flat.tempoChanges;
+    const a = midiToProject(projectToMidi(flat)).tracks[0].notes.map((n) => n.start).join();
+    return a === mid.tracks[0].notes.map((n) => n.start).join();
+  })());
+  const plain = midiToProject(projectToMidi({ bpm: 120, bars: 2, timeSig: [3, 4], tracks: p0.tracks.map((t) => ({ ...t, notes: [note("z", 60, 0, 1)] })) }));
+  ok("변박·템포가 없는 곡은 MIDI 로 나갔다 와도 그 필드가 안 생긴다", !("meterChanges" in plain) && !("tempoChanges" in plain) && plain.timeSig.join() === "3,4", plain);
+
+  // 마디 중간에 놓인 박자 이벤트와 같은 값 반복은 정리된다
+  ok("같은 박자로 「바뀌는」 항목은 변박이 아니다", JSON.stringify(dropRedundantMeters([4, 4], [{ bar: 2, sig: [4, 4] }, { bar: 3, sig: [3, 4] }, { bar: 5, sig: [3, 4] }, { bar: 6, sig: [4, 4] }])) ===
+    JSON.stringify([{ bar: 3, sig: [3, 4] }, { bar: 6, sig: [4, 4] }]));
 }
 
 // ------------------------------------------------------------- 예제 곡의 조

@@ -14,6 +14,7 @@ import { canUseSoundFont, INSECURE_HINT } from "./audio/soundfont";
 import type { Waveform } from "./audio/oscInstrument";
 import { Scheduler } from "./audio/scheduler";
 import { beatsPerBar, emptyProject, makeNote, snap, sortNotes, totalBeats } from "./model/project";
+import { barAt, barBeatLabel, barIndexAt, barLength, hasMeterChanges } from "./model/timeline";
 import { assignChannels } from "./model/channels";
 import type { Project } from "./model/types";
 import { PianoRoll } from "./ui/pianoroll";
@@ -32,6 +33,7 @@ import { Metronome } from "./audio/metronome";
 import { VelocityLane } from "./ui/velocityLane";
 import { PlayKeyboard } from "./ui/playKeyboard";
 import { EarTraining } from "./ui/earTraining";
+import { TimelinePanel } from "./ui/timelinePanel";
 import {
   clearCalibration,
   DEFAULT_SCREEN_CM,
@@ -62,6 +64,14 @@ const $ = <T extends HTMLElement>(id: string): T => {
 };
 
 // 건반 찍기 되감기 기록 (설명은 stepInsert 근처). applyProject 가 먼저 불릴 수 있어 위에 둔다.
+/**
+ * 건반으로 찍은 칸을 되감는 기록. 코드를 한 번 찍을 때마다(쉼표도) 한 줄 쌓인다.
+ *
+ * 툴바의 ↶ 는 모든 편집을 되돌리지만 재생 위치는 안 돌려준다. 틀린 코드를 지우고
+ * 같은 자리에 다시 치려면 헤드도 한 칸 돌아와야 해서 따로 둔다. 노트는 **id 로**
+ * 찾아 지운다 — 되돌리기·다시 실행·파일 열기가 프로젝트를 통째로 갈아 끼우면
+ * 객체 참조가 끊기기 때문이다. 그런 일이 생기면 기록을 비운다 (applyProject).
+ */
 type StepEntry = { track: number; at: number; ids: string[] };
 const stepLog: StepEntry[] = [];
 const kbUndoBtn = $<HTMLButtonElement>("kb-undo");
@@ -410,8 +420,14 @@ function applyProject(loaded: Project, { keepHistory = true } = {}): void {
   // 상태로 되돌렸는데 조가 남아 화면이 거짓말을 한다. 직접 맞춘다.
   if (loaded.key) project.key = { ...loaded.key };
   else delete project.key;
+  // 변박·템포 변화도 같다. 없는 상태로 되돌렸는데 남아 있으면 곡이 엉뚱한 박자로 돈다.
+  if (loaded.meterChanges) project.meterChanges = loaded.meterChanges.map((m) => ({ bar: m.bar, sig: [m.sig[0], m.sig[1]] }));
+  else delete project.meterChanges;
+  if (loaded.tempoChanges) project.tempoChanges = loaded.tempoChanges.map((t) => ({ ...t }));
+  else delete project.tempoChanges;
   keySelect.value = keyToValue(project.key);
   refreshChordButtons();
+  timelinePanel.refresh();
 
   bpmInput.value = String(project.bpm);
   barsInput.value = String(project.bars);
@@ -555,12 +571,12 @@ deleteBtn.addEventListener("click", () => {
  * 잡히는 게 맞다.
  */
 function copyRange(): { start: number; end: number } {
-  const bpb = beatsPerBar(project);
   if (scheduler.loopEnabled && scheduler.loopEnd - scheduler.loopStart > 0.01) {
     return { start: scheduler.loopStart, end: scheduler.loopEnd };
   }
-  const bar = Math.floor(scheduler.positionBeats() / bpb);
-  return { start: bar * bpb, end: (bar + 1) * bpb };
+  // 재생 헤드가 있는 마디. 변박이 있으면 마디마다 길이가 다르다 (model/timeline.ts).
+  const bar = barAt(project, scheduler.positionBeats());
+  return { start: bar.start, end: bar.end };
 }
 
 copyBtn.addEventListener("click", () => {
@@ -598,10 +614,11 @@ copyBtn.addEventListener("click", () => {
   // 다음 자리에서 시작하는 게 맞다.
   scheduler.seek(end);
   roll.followPlayhead(scheduler.positionBeats());
-  const bars = (copied.lengthBeats / beatsPerBar(project)).toFixed(
-    copied.lengthBeats % beatsPerBar(project) === 0 ? 0 : 1,
-  );
-  showStatus(`${copied.notes.length}개 음을 복사했습니다 (${bars}마디). 붙여넣기를 연달아 누르면 계속 채워집니다.`);
+  // 변박이 있으면 마디 길이가 제각각이라 「몇 마디」 가 한 숫자로 안 나온다 — 박으로 말한다.
+  const size = hasMeterChanges(project)
+    ? `${Number(copied.lengthBeats.toFixed(2))}박`
+    : `${(copied.lengthBeats / beatsPerBar(project)).toFixed(copied.lengthBeats % beatsPerBar(project) === 0 ? 0 : 1)}마디`;
+  showStatus(`${copied.notes.length}개 음을 복사했습니다 (${size}). 붙여넣기를 연달아 누르면 계속 채워집니다.`);
 });
 
 pasteBtn.addEventListener("click", () => {
@@ -613,8 +630,7 @@ pasteBtn.addEventListener("click", () => {
   const added = pasteAt(track, clipboard, at);
 
   // 곡 끝을 넘겨 붙였으면 마디를 늘린다. 조용히 잘라내면 붙인 게 사라진다.
-  const bpb = beatsPerBar(project);
-  const needed = Math.ceil(lastBeat(added) / bpb);
+  const needed = barsNeeded(lastBeat(added));
   if (needed > project.bars) {
     project.bars = Math.min(64, needed);
     barsInput.value = String(project.bars);
@@ -780,7 +796,7 @@ kbStepBtn.addEventListener("click", () => {
 function stepBeats(): number {
   const v = kbLen.value;
   if (v === "snap") return roll.snapUnit;
-  if (v === "bar") return beatsPerBar(project);
+  if (v === "bar") return barLength(project, barIndexAt(project, stepAt())); // 지금 자리의 마디 길이
   const n = Number(v);
   return Number.isFinite(n) && n > 0 ? n : roll.snapUnit;
 }
@@ -792,17 +808,17 @@ function stepAt(): number {
 }
 
 /**
- * 건반으로 찍은 칸을 되감는 기록. 코드를 한 번 찍을 때마다(쉼표도) 한 줄 쌓인다.
- *
- * 툴바의 ↶ 는 모든 편집을 되돌리지만 재생 위치는 안 돌려준다. 틀린 코드를 지우고
- * 같은 자리에 다시 치려면 헤드도 한 칸 돌아와야 해서 따로 둔다. 노트는 **id 로**
- * 찾아 지운다 — 되돌리기·다시 실행·파일 열기가 프로젝트를 통째로 갈아 끼우면
- * 객체 참조가 끊기기 때문이다. 그런 일이 생기면 기록을 비운다 (applyProject).
+ * 이 박까지 담으려면 마디가 몇 개 있어야 하나. 변박이 있으면 마디마다 길이가 달라
+ * `박 ÷ 한 마디 길이` 로는 안 나온다 — 마디 번호를 직접 센다.
  */
+function barsNeeded(endBeat: number): number {
+  if (endBeat <= 1e-6) return 1;
+  return barIndexAt(project, endBeat - 1e-6) + 1;
+}
+
 /** 곡 끝을 넘기면 마디를 늘린다 (붙여넣기와 같다). 64마디가 끝이다. */
 function growTo(endBeat: number): boolean {
-  const bpb = beatsPerBar(project);
-  const needed = Math.ceil(endBeat / bpb - 1e-9);
+  const needed = barsNeeded(endBeat);
   if (needed > 64) return false;
   if (needed > project.bars) {
     project.bars = needed;
@@ -1009,6 +1025,26 @@ kbUndoBtn.addEventListener("click", () => {
   else showStatus(`${where} 코드 ${removed}음을 지웠습니다 → 같은 자리에 다시 치세요`);
 });
 
+// ------------------------------------------------------- 변박 · 템포 변화
+
+const timelinePanel = new TimelinePanel({
+  getProject: () => project,
+  playheadBeat: () => scheduler.positionBeats(),
+  begin: () => history.begin(),
+  commit: () => {
+    history.commit();
+    refreshHistoryButtons();
+  },
+  onChange: () => {
+    // 마디 길이가 바뀌면 곡 전체 길이도 바뀐다. 루프가 곡 밖으로 나가면 재생이 빈 데를 돈다.
+    const end = totalBeats(project);
+    if (scheduler.loopEnd > end) scheduler.loopEnd = end;
+    scheduler.invalidate();
+    roll.render();
+  },
+  onStatus: showStatus,
+});
+
 // ------------------------------------------------------- 귀 훈련
 
 /** 소리를 낼 트랙. 드럼 트랙(프리셋 16384~)은 음높이가 악기 번호라 코드가 안 들린다 — 피한다. */
@@ -1141,10 +1177,7 @@ function relayout(): void {
 // ---------------------------------------------------------------- 그리기 루프
 
 function formatPosition(beat: number): string {
-  const bpb = beatsPerBar(project);
-  const bar = Math.floor(beat / bpb) + 1;
-  const inBar = Math.floor(beat % bpb) + 1;
-  return `${bar} : ${inBar}`;
+  return barBeatLabel(project, beat);
 }
 
 let lastPos = "";
@@ -1184,7 +1217,7 @@ requestAnimationFrame(frame);
 if (import.meta.env.DEV) {
   (window as unknown as Record<string, unknown>).__app = {
     project, scheduler, roll, engine, registry, panel, mixer, mixerState, history,
-    keyboard, lane, metronome, calibration, ear,
+    keyboard, lane, metronome, calibration, ear, timelinePanel,
   };
 }
 
@@ -1228,6 +1261,7 @@ window.addEventListener("keydown", (e) => {
       document.getElementById(id)?.classList.add("hidden");
     }
     if (ear.isOpen) ear.close();
+    if (timelinePanel.isOpen) timelinePanel.close();
     roll.clearSelection();
   }
   // 고른 것을 Delete 로도 지운다. 폰에는 없는 키지만 PC 에서는 이게 자연스럽다.

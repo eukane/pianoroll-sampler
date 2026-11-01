@@ -33,7 +33,7 @@
 import { WorkletSynthesizer } from "spessasynth_lib";
 import { BasicMIDI } from "spessasynth_core";
 import type { Project, Track } from "../model/types";
-import { totalBeats } from "../model/project";
+import { totalSeconds, beatToSec } from "../model/timeline";
 import { assignChannels } from "../model/channels";
 import { expressionFor, singingExpressions } from "../audio/expression";
 import { Mixer } from "../audio/mixer";
@@ -49,7 +49,8 @@ export const SAMPLE_RATE = 44100;
 const TAIL_SECONDS = 2.0;
 
 export function projectSeconds(project: Project): number {
-  return (totalBeats(project) * 60) / Math.max(1, project.bpm) + TAIL_SECONDS;
+  // 템포 변화가 있어도 맞는 곡 길이(초). 변화가 없으면 옛 식 `박 × 60 ÷ bpm` 과 같다.
+  return totalSeconds(project) + TAIL_SECONDS;
 }
 
 function workletUrl(): string {
@@ -211,7 +212,9 @@ function renderLocally(
   const sampler = new FolderSampler(ctx, mixer);
   sampler.adopt(folders);
 
-  const secPerBeat = 60 / Math.max(1, part.bpm);
+  // 박 → 초는 곱셈이 아니라 변환 함수다 (템포가 곡 중간에 바뀔 수 있다).
+  const at = (beat: number) => beatToSec(part, beat);
+  const lenSec = (start: number, length: number) => Math.max(0.02, at(start + length) - at(start));
   // 트랙마다 다시 계산하지 않는다.
   const channels = assignChannels(full);
 
@@ -235,12 +238,12 @@ function renderLocally(
         track.notes.map((n) => ({
           id: n.id,
           pitch: n.pitch,
-          startSec: n.start * secPerBeat,
-          lengthSec: Math.max(0.02, n.length * secPerBeat),
+          startSec: at(n.start),
+          lengthSec: lenSec(n.start, n.length),
           lyric: n.lyric ?? "",
         })),
         0,
-        singingExpressions(track, track.notes, (n) => Math.max(0.02, n.length * secPerBeat)),
+        singingExpressions(track, track.notes, (n) => lenSec(n.start, n.length)),
       );
       continue;
     }
@@ -253,13 +256,13 @@ function renderLocally(
       }
     }
     for (const note of track.notes) {
-      const seconds = Math.max(0.02, note.length * secPerBeat);
+      const seconds = lenSec(note.start, note.length);
       // 꾸밈은 화면에서 들은 대로 뽑혀야 한다. 사운드폰트 쪽은 MIDI 가 실어
       // 나르고(export/midi.ts), 이쪽 두 악기는 여기서 직접 걸어 준다.
       instrument.play(
         note.pitch,
         note.velocity,
-        note.start * secPerBeat,
+        at(note.start),
         seconds,
         channel,
         expressionFor(track, note, seconds),

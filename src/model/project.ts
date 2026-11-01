@@ -1,5 +1,6 @@
 /** Project 를 만들고 고치는 헬퍼. 순수 함수 위주라 나중에 실행취소를 얹기 쉽다. */
 
+import { sigBeats } from "./timeline.ts";
 import type { Note, Project, Track } from "./types";
 
 let idCounter = 0;
@@ -33,16 +34,19 @@ export function emptyProject(): Project {
   };
 }
 
-/** 한 마디에 몇 박인가. 4/4 면 4, 6/8 이면 3박(8분음표 6개 = 4분음표 3개). */
+/**
+ * **곡 처음 마디**의 길이(박). 4/4 면 4, 6/8 이면 3박(8분음표 6개 = 4분음표 3개).
+ *
+ * 변박이 있으면 마디마다 길이가 다르다 — 그때는 이 값이 곡 전체에 맞지 않는다. 마디를 다루는
+ * 곳은 `model/timeline.ts` 의 `barAt` · `barLength` · `barStartBeat` 를 쓴다. 이 함수는 「새 곡의
+ * 처음 박자」 를 말할 때(박자 고르기 칸)만 남겨 뒀다.
+ */
 export function beatsPerBar(project: Project): number {
-  const [num, den] = project.timeSig;
-  return (num * 4) / den;
+  return sigBeats(project.timeSig);
 }
 
-/** 곡 전체 길이(박). */
-export function totalBeats(project: Project): number {
-  return project.bars * beatsPerBar(project);
-}
+/** 곡 전체 길이(박). 변박을 반영한다 (model/timeline.ts). */
+export { totalBeats } from "./timeline.ts";
 
 export function makeNote(pitch: number, start: number, length: number, velocity = 100): Note {
   return { id: newId("n"), pitch, start, length, velocity };

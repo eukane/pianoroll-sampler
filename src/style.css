@@ -852,6 +852,82 @@ button.danger {
   width: 90px;
 }
 
+/* ------------------------------------------------------- 변박 · 템포 변화 */
+
+#tm-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 45;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  background: rgba(8, 10, 14, 0.62);
+}
+
+#tm-modal.hidden {
+  display: none;
+}
+
+.tm-sheet {
+  max-width: 640px;
+}
+
+.tm-h {
+  margin: 14px 0 6px;
+  font-size: 14px;
+}
+
+.tm-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.tm-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.tm-row.first {
+  border-style: dashed;
+  color: var(--dim);
+}
+
+.tm-row.unused {
+  opacity: 0.55;
+}
+
+.tm-row .grow {
+  flex: 1 1 auto;
+}
+
+.tm-add {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+.tm-add input {
+  width: 70px;
+  min-height: 40px;
+}
+
+.tm-add select,
+.tm-add button {
+  min-height: 40px;
+}
+
+#tm-msg.error {
+  color: #e8a35c;
+}
+
 /* ------------------------------------------------------------ 귀 훈련 */
 
 #ear-modal {

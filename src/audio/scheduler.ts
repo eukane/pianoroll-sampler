@@ -23,7 +23,8 @@ import type { AudioEngine } from "./engine";
 import type { InstrumentRegistry } from "./registry";
 import type { Mixer } from "./mixer";
 import type { MixerState } from "./mixerState";
-import { beatsPerBar, totalBeats } from "../model/project";
+import { totalBeats } from "../model/project";
+import { barAt, beatToSec, bpmAt, clickAtOrAfter, isBarStart, nextClick, secToBeat } from "../model/timeline";
 import type { Metronome } from "./metronome";
 import { assignChannels, channelForTrack } from "../model/channels";
 import { expressionFor, singingExpressions } from "./expression";
@@ -130,12 +131,27 @@ export class Scheduler {
     return this.playing;
   }
 
-  private get secPerBeat(): number {
-    return 60 / Math.max(20, this.getProject().bpm);
+  /**
+   * 박 → 초. 템포 변화가 있으면 박마다 초당 길이가 다르므로 **곱셈이 아니라 변환 함수**를 쓴다
+   * (model/timeline.ts). 변화가 없으면 옛 식 `박 × 60 ÷ bpm` 과 똑같은 값이다.
+   */
+  private sec(beat: number): number {
+    return beatToSec(this.getProject(), beat);
   }
 
-  private get regionBeats(): number {
-    return Math.max(0.0001, this.regionEnd - this.regionStart);
+  /** 이번 구간(재생 범위)의 시작을 0초로 둔 초. */
+  private rel(beat: number): number {
+    return this.sec(beat) - this.sec(this.regionStart);
+  }
+
+  /** 노트 하나의 길이(초). 템포가 도중에 바뀌어도 맞다. */
+  private lenSec(start: number, length: number): number {
+    return Math.max(0.02, this.sec(start + length) - this.sec(start));
+  }
+
+  /** 재생 범위 한 바퀴의 길이(초). */
+  private get regionSec(): number {
+    return Math.max(0.0001, this.rel(this.regionEnd));
   }
 
   // ------------------------------------------------------------- 재생 제어
@@ -171,17 +187,19 @@ export class Scheduler {
     let lead = 0;
     this.countInUntil = 0;
     if (countIn && this.metronome) {
-      const spb = this.secPerBeat;
-      const bpb = beatsPerBar(project);
+      // 예비박은 **시작하는 자리의 마디** 한 마디, 그 자리의 빠르기로 친다 (변박·템포가 있어도).
+      const spb = 60 / bpmAt(project, from);
+      const bar = barAt(project, from);
+      const bpb = bar.end - bar.start;
       const t0 = this.engine.currentTime + COUNT_IN_PAD;
-      const beats = Math.max(1, Math.round(bpb));
+      const beats = Math.max(1, Math.ceil(bpb - 1e-6));
       for (let i = 0; i < beats; i += 1) this.metronome.click(t0 + i * spb, i === 0);
       lead = COUNT_IN_PAD + bpb * spb;
       this.countInUntil = this.engine.currentTime + lead;
       this.countInFrom = from;
     }
 
-    this.startTime = this.engine.currentTime + lead - (from - this.regionStart) * this.secPerBeat;
+    this.startTime = this.engine.currentTime + lead - this.rel(from);
     this.passBase = this.startTime;
     this.evIdx = this.firstEventAtOrAfter(from);
     this.resetClicks(from);
@@ -241,7 +259,7 @@ export class Scheduler {
     // 예비박 중이면 시작 시각을 건드리지 않는다. 아래처럼 "지금 = pos" 로 다시
     // 맞추면 남은 예비박이 통째로 사라지고 곡이 곧바로 시작해 버린다.
     if (!this.countingIn) {
-      this.startTime = this.engine.currentTime - (pos - this.regionStart) * this.secPerBeat;
+      this.startTime = this.engine.currentTime - this.rel(pos);
       this.passBase = this.startTime;
     }
     this.evIdx = this.firstEventAtOrAfter(pos);
@@ -261,13 +279,17 @@ export class Scheduler {
   positionBeats(): number {
     if (!this.playing) return this.stoppedAt;
     if (this.countingIn) return this.countInFrom;
-    const elapsedBeats = (this.engine.currentTime - this.startTime) / this.secPerBeat;
+    // 경과 시간(초)을 박으로 되돌린다. 템포가 바뀌는 곡에서는 초와 박이 비례하지 않으므로
+    // 구간 시작의 절대 초에 더해서 곡 전체의 초 → 박 변환을 거친다.
+    const project = this.getProject();
+    const base = this.sec(this.regionStart);
+    const elapsed = this.engine.currentTime - this.startTime;
     if (this.loopEnabled) {
-      const len = this.regionBeats;
-      const wrapped = ((elapsedBeats % len) + len) % len;
-      return this.regionStart + wrapped;
+      const len = this.regionSec;
+      const wrapped = ((elapsed % len) + len) % len;
+      return secToBeat(project, base + wrapped);
     }
-    return Math.min(this.regionEnd, this.regionStart + Math.max(0, elapsedBeats));
+    return Math.min(this.regionEnd, secToBeat(project, base + Math.max(0, elapsed)));
   }
 
   // ------------------------------------------------------------- 내부
@@ -320,30 +342,27 @@ export class Scheduler {
 
   private resetClicks(fromBeat: number): void {
     this.clickPass = 0;
-    this.clickBeat = Math.ceil(fromBeat - 1e-6);
+    this.clickBeat = clickAtOrAfter(this.getProject(), fromBeat);
   }
 
   private scheduleClicks(now: number, ahead: number): void {
     const met = this.metronome;
     if (!met || !this.metronomeOn) return;
-    const spb = this.secPerBeat;
-    const bpb = beatsPerBar(this.getProject());
-    const len = this.regionBeats;
+    const project = this.getProject();
+    const len = this.regionSec;
     for (let guard = 0; guard < 64; guard += 1) {
       if (this.clickBeat >= this.regionEnd - 1e-6) {
         if (!this.loopEnabled) return;
         this.clickPass += 1;
-        this.clickBeat = Math.ceil(this.regionStart - 1e-6);
+        this.clickBeat = clickAtOrAfter(project, this.regionStart);
         continue;
       }
-      const when = this.startTime + (this.clickPass * len + (this.clickBeat - this.regionStart)) * spb;
+      const when = this.startTime + this.clickPass * len + this.rel(this.clickBeat);
       if (when >= ahead) return;
       // 지나간 틱은 치지 않는다. 늦게 치면 박자가 틀려 들린다 — 안 치는 게 낫다.
-      if (when >= now - 0.005) {
-        const inBar = ((this.clickBeat % bpb) + bpb) % bpb;
-        met.click(Math.max(when, now), inBar < 1e-6 || bpb - inBar < 1e-6);
-      }
-      this.clickBeat += 1;
+      // 틱은 **마디마다 그 마디의 첫 박부터** 센다 (변박에서 마디가 정수 박에 안 떨어진다).
+      if (when >= now - 0.005) met.click(Math.max(when, now), isBarStart(project, this.clickBeat));
+      this.clickBeat = nextClick(project, this.clickBeat);
     }
   }
 
@@ -351,18 +370,17 @@ export class Scheduler {
     if (!this.playing) return;
     const now = this.engine.currentTime;
     const ahead = now + LOOKAHEAD_SEC;
-    const spb = this.secPerBeat;
     this.scheduleClicks(now, ahead);
 
     // guard: 루프 구간이 아주 짧고 노트가 없으면 무한루프가 될 수 있다.
     for (let guard = 0; guard < 2000; guard += 1) {
       if (this.evIdx >= this.events.length) {
         if (!this.loopEnabled) {
-          const endTime = this.passBase + this.regionBeats * spb;
+          const endTime = this.passBase + this.regionSec;
           if (endTime <= now) this.stop();
           return;
         }
-        this.passBase += this.regionBeats * spb;
+        this.passBase += this.regionSec;
         this.evIdx = 0;
         // 새 회차가 시작된다 — 노래도 그 회차만큼 다시 예약해야 한다.
         this.singVoices(this.passBase, this.regionStart);
@@ -371,7 +389,7 @@ export class Scheduler {
       }
 
       const ev = this.events[this.evIdx];
-      const when = this.passBase + (ev.start - this.regionStart) * spb;
+      const when = this.passBase + this.rel(ev.start);
       if (when >= ahead) return;
 
       this.scheduleEvent(ev, Math.max(when, now));
@@ -405,7 +423,6 @@ export class Scheduler {
    */
   private singVoices(base: number, fromBeat: number): void {
     const project = this.getProject();
-    const spb = this.secPerBeat;
 
     for (const track of project.tracks) {
       if (track.source.kind !== "voice") continue;
@@ -418,8 +435,8 @@ export class Scheduler {
         .map((n) => ({
           id: n.id,
           pitch: n.pitch,
-          startSec: (n.start - this.regionStart) * spb,
-          lengthSec: Math.max(0.02, n.length * spb),
+          startSec: this.rel(n.start),
+          lengthSec: this.lenSec(n.start, n.length),
           lyric: n.lyric ?? "",
         }));
       if (notes.length === 0) continue;
@@ -436,7 +453,7 @@ export class Scheduler {
         this.mixer.input(channel),
         notes,
         base,
-        singingExpressions(track, track.notes, (n) => Math.max(0.02, n.length * spb)),
+        singingExpressions(track, track.notes, (n) => this.lenSec(n.start, n.length)),
       );
       if (result.missing.length > 0) this.onMissingLyrics?.(result.missing.map((m) => m.lyric));
     }
@@ -455,7 +472,7 @@ export class Scheduler {
     if (this.loopEnabled) {
       lengthBeats = Math.min(lengthBeats, this.regionEnd - ev.start);
     }
-    const durationSec = Math.max(0.02, lengthBeats * this.secPerBeat);
+    const durationSec = this.lenSec(ev.start, lengthBeats);
 
     // 트랙 번호와 MIDI 채널은 같지 않다 (드럼은 9번, 나머지는 9번을 건너뛴다).
     // 음량·팬은 play() 에서 한 번 걸어 뒀다 — 노트마다 다시 걸 필요가 없다.

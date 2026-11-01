@@ -9,7 +9,7 @@
  * 진행된다. 무엇이 잘못됐는지 사람 말로 돌려준다.
  */
 
-import type { Note, Project, Track } from "../model/types";
+import type { MeterChange, Note, Project, TempoChange, Track } from "../model/types";
 import { emptyTrack, newId, sortNotes } from "../model/project.ts";
 import { MAX_TRACKS } from "../model/channels.ts";
 import { MAX_PRESET_ID } from "../model/preset.ts";
@@ -54,6 +54,12 @@ export function projectFromJson(text: string): Project {
   // 엉뚱한 조를 칠해 보여 주느니 안 보여 주는 게 낫다.
   const key = readKey(data.key);
   if (key) project.key = key;
+  // 변박·템포 변화도 **있을 때만** 단다 (예전 파일에는 없다). 이상한 항목은 그것만 버린다 —
+  // 하나가 틀렸다고 곡 전체의 박자가 엉키지 않게.
+  const meters = readMeterChanges(data.meterChanges);
+  if (meters.length > 0) project.meterChanges = meters;
+  const tempos = readTempoChanges(data.tempoChanges);
+  if (tempos.length > 0) project.tempoChanges = tempos;
   return project;
 }
 
@@ -133,6 +139,39 @@ function readTimeSig(raw: unknown): [number, number] {
     return [num0, pow];
   }
   return [4, 4];
+}
+
+const MAX_METER_CHANGES = 64;
+const MAX_TEMPO_CHANGES = 512;
+
+function readMeterChanges(raw: unknown): MeterChange[] {
+  if (!Array.isArray(raw)) return [];
+  const out: MeterChange[] = [];
+  for (const m of raw) {
+    if (typeof m !== "object" || m === null) continue;
+    const r = m as Record<string, unknown>;
+    const bar = num(r.bar, -1);
+    // 곡 처음 박자는 `timeSig` 다. 0마디에 또 두면 둘이 다투므로 1 이상만 받는다.
+    if (!Number.isInteger(bar) || bar < 1 || bar > 100000) continue;
+    out.push({ bar, sig: readTimeSig(r.sig) });
+  }
+  out.sort((a, b) => a.bar - b.bar);
+  // 같은 마디에 둘이면 앞의 것만 (읽는 쪽 timeline.ts 와 같은 규칙).
+  return out.filter((m, i) => i === 0 || m.bar !== out[i - 1].bar).slice(0, MAX_METER_CHANGES);
+}
+
+function readTempoChanges(raw: unknown): TempoChange[] {
+  if (!Array.isArray(raw)) return [];
+  const out: TempoChange[] = [];
+  for (const t of raw) {
+    if (typeof t !== "object" || t === null) continue;
+    const r = t as Record<string, unknown>;
+    const beat = num(r.beat, -1);
+    if (!(beat > 0) || beat > 1e6) continue; // 0박은 곡 처음 `bpm` 이다
+    out.push({ beat, bpm: clamp(num(r.bpm, 100), 20, 300) });
+  }
+  out.sort((a, b) => a.beat - b.beat);
+  return out.filter((t, i) => i === 0 || Math.abs(t.beat - out[i - 1].beat) > 1e-9).slice(0, MAX_TEMPO_CHANGES);
 }
 
 function num(v: unknown, fallback: number): number {

@@ -10,7 +10,8 @@
 
 import type { Project } from "../model/types";
 import { projectToMidi, midiToProject } from "../export/midi";
-import { totalBeats, beatsPerBar } from "../model/project";
+import { totalBeats } from "../model/project";
+import { barIndexAt } from "../model/timeline";
 import { projectToJson, projectFromJson } from "../export/projectFile";
 import { DEMOS, type Demo } from "../model/demos";
 import { audioBufferToWav, peakOf } from "../export/wav";
@@ -333,13 +334,12 @@ export class ExportPanel {
       0,
     );
     if (beyond > 0) {
-      const bpb = beatsPerBar(project);
       const last = Math.max(
         ...project.tracks.flatMap((t) => t.notes.map((n) => n.start + n.length)),
       );
       return (
         `저장했지만 ${beyond}개 음이 빠졌습니다. 곡 길이가 ${project.bars}마디인데` +
-        ` ${Math.ceil(last / bpb)}마디까지 노트가 있습니다 — 마디 수를 늘리고 다시 뽑으세요.`
+        ` ${barIndexAt(project, last - 1e-6) + 1}마디까지 노트가 있습니다 — 마디 수를 늘리고 다시 뽑으세요.`
       );
     }
     return null;
