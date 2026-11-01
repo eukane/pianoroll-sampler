@@ -31,7 +31,8 @@
     "select": "node scripts/selection-test.mjs",
     "theory": "node scripts/theory-test.mjs",
     "persist": "node scripts/persist-test.mjs",
-    "chords": "node scripts/chords-test.mjs"
+    "chords": "node scripts/chords-test.mjs",
+    "ear": "node scripts/ear-test.mjs"
   },
   "devDependencies": {
     "@vitejs/plugin-basic-ssl": "^1.2.0",

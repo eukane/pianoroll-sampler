@@ -31,6 +31,7 @@ import { diatonicChords, progressionPitches, progressionsFor } from "./model/pro
 import { Metronome } from "./audio/metronome";
 import { VelocityLane } from "./ui/velocityLane";
 import { PlayKeyboard } from "./ui/playKeyboard";
+import { EarTraining } from "./ui/earTraining";
 import {
   clearCalibration,
   DEFAULT_SCREEN_CM,
@@ -1008,6 +1009,27 @@ kbUndoBtn.addEventListener("click", () => {
   else showStatus(`${where} 코드 ${removed}음을 지웠습니다 → 같은 자리에 다시 치세요`);
 });
 
+// ------------------------------------------------------- 귀 훈련
+
+/** 소리를 낼 트랙. 드럼 트랙(프리셋 16384~)은 음높이가 악기 번호라 코드가 안 들린다 — 피한다. */
+function earTrack(): number {
+  const isDrum = (i: number) => {
+    const src = project.tracks[i]?.source;
+    return !!src && src.kind === "sf2" && src.presetId >= 16384;
+  };
+  if (!isDrum(panel.activeTrack)) return panel.activeTrack;
+  const other = project.tracks.findIndex((_, i) => !isDrum(i));
+  return other >= 0 ? other : panel.activeTrack;
+}
+
+const ear = new EarTraining({
+  trackIndex: earTrack,
+  hold: (pitch, track) => scheduler.keyHold(pitch, track),
+  release: (pitch) => scheduler.keyRelease(pitch, true),
+  isUnlocked: () => engine.isUnlocked,
+  onStatus: showStatus,
+});
+
 // ------------------------------------------------------- 건반 크기 맞추기
 
 const calModal = $<HTMLDivElement>("cal-modal");
@@ -1162,7 +1184,7 @@ requestAnimationFrame(frame);
 if (import.meta.env.DEV) {
   (window as unknown as Record<string, unknown>).__app = {
     project, scheduler, roll, engine, registry, panel, mixer, mixerState, history,
-    keyboard, lane, metronome, calibration,
+    keyboard, lane, metronome, calibration, ear,
   };
 }
 
@@ -1205,6 +1227,7 @@ window.addEventListener("keydown", (e) => {
     for (const id of ["preset-modal", "export-modal", "mixer-modal", "map-modal", "note-modal", "cal-modal"]) {
       document.getElementById(id)?.classList.add("hidden");
     }
+    if (ear.isOpen) ear.close();
     roll.clearSelection();
   }
   // 고른 것을 Delete 로도 지운다. 폰에는 없는 키지만 PC 에서는 이게 자연스럽다.

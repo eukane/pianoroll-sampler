@@ -15,6 +15,9 @@ import { chordLine, identifyChord, inversionLabel, romanNumeral } from "../src/m
 import {
   PROGRESSIONS, chordPitches, diatonicChords, progressionPitches, progressionsFor,
 } from "../src/model/progression.ts";
+import {
+  LEVELS, degreeNumeral, describeAnswer, grade, levelById, makeQuestion, questionChords,
+} from "../src/model/ear.ts";
 import { DEMOS } from "../src/model/demos.ts";
 import { projectFromJson, projectToJson } from "../src/export/projectFile.ts";
 
@@ -224,6 +227,66 @@ ok("장조 진행과 단조 진행이 섞여 나오지 않는다",
   progressionsFor("major").length >= 5 && progressionsFor("minor").length >= 3);
 ok("정석 진행의 도수는 전부 0~6", PROGRESSIONS.every((p) => p.chords.every((c) => Number.isInteger(c.degree) && c.degree >= 0 && c.degree <= 6)));
 ok("진행 id 가 겹치지 않는다", new Set(PROGRESSIONS.map((p) => p.id)).size === PROGRESSIONS.length);
+
+// ------------------------------------------------------------------ 귀 훈련
+//
+// 문제는 난수로 나오지만 규칙은 지켜야 한다. 정해진 수열(LCG)로 많이 뽑아 규칙을 센다.
+const lcg = (seed) => { let x = seed >>> 0; return () => ((x = (Math.imul(x, 1664525) + 1013904223) >>> 0) / 4294967296); };
+{
+  const bad = [];
+  for (const level of LEVELS) {
+    const rand = lcg(12345 + level.id.charCodeAt(0));
+    let prev;
+    const seenKeys = new Set();
+    const seenFirst = new Set();
+    for (let i = 0; i < 400; i += 1) {
+      const q = makeQuestion(level.id, rand, true, prev);
+      seenKeys.add(q.key.tonic);
+      if (q.key.mode !== level.mode) bad.push(`${level.id}: 조 종류`);
+      if (prev && prev.key.tonic === q.key.tonic && prev.key.mode === q.key.mode) bad.push(`${level.id}: 같은 조 연속`);
+      if (level.kind === "degrees") {
+        seenFirst.add(q.degrees[0]);
+        if (q.degrees.length !== level.length) bad.push(`${level.id}: 길이`);
+        if (q.degrees.some((d) => !level.pool.includes(d))) bad.push(`${level.id}: 풀 밖 도수`);
+        if (q.degrees.some((d, k) => k > 0 && d === q.degrees[k - 1])) bad.push(`${level.id}: 같은 코드 연속`);
+        if (prev && prev.degrees.join() === q.degrees.join()) bad.push(`${level.id}: 직전과 같은 문제`);
+        const { chords, tonic } = questionChords(q);
+        if (chords.length !== level.length || tonic.length !== 3) bad.push(`${level.id}: 들려줄 코드`);
+      } else {
+        const o = q.options ?? [];
+        if (!o.includes(q.progression) || new Set(o).size !== o.length || o.length < 2 || o.length > 4) bad.push(`${level.id}: 보기 ${o}`);
+        if (o.some((n) => !level.names.includes(n))) bad.push(`${level.id}: 보기가 단계 밖`);
+        if (prev && prev.progression === q.progression) bad.push(`${level.id}: 직전과 같은 진행`);
+      }
+      prev = q;
+    }
+    if (seenKeys.size < 10) bad.push(`${level.id}: 조가 ${seenKeys.size}가지뿐`);
+    if (level.kind === "degrees" && level.pool.includes(0) && seenFirst.size < 2) bad.push(`${level.id}: 첫 코드가 늘 같다`);
+  }
+  ok("모든 단계에서 400문제씩 뽑아도 규칙(조 종류·길이·풀·연속 금지·보기)이 지켜진다", bad.length === 0, [...new Set(bad)].slice(0, 6));
+}
+{
+  const rand = lcg(7);
+  let first0 = 0;
+  for (let i = 0; i < 400; i += 1) if (makeQuestion("L2", rand, true).degrees[0] === 0) first0 += 1;
+  ok("첫 코드는 으뜸이 많지만(절반 넘게) 늘 그렇지는 않다", first0 > 200 && first0 < 400, first0);
+}
+{
+  const fixed = makeQuestion("L1", lcg(1), false);
+  ok("조 바꾸기를 끄면 C 장조 / A 단조", fixed.key.tonic === 0 && fixed.key.mode === "major" &&
+    makeQuestion("L4", lcg(1), false).key.tonic === 9);
+  const q = { level: "L2", key: Gmaj, degrees: [3, 4, 2, 5] };
+  ok("정답 설명: G 장조에서 IV V iii vi = C D Bm Em", describeAnswer(q) === "IV V iii vi = C D Bm Em", describeAnswer(q));
+  ok("채점: 다 맞으면 정답", grade(q, [3, 4, 2, 5]).correct);
+  ok("채점: 하나 틀리면 그 칸만 틀림", JSON.stringify(grade(q, [3, 4, 5, 5]).marks) === "[true,true,false,true]" && !grade(q, [3, 4, 5, 5]).correct);
+  ok("채점: 덜 눌렀으면 정답이 아니다", !grade(q, [3, 4, 2]).correct);
+  const n = { level: "N1", key: Cmaj, degrees: [], progression: "komuro", options: ["komuro", "oudou"] };
+  ok("정석 이름 채점", grade(n, "komuro").correct && !grade(n, "oudou").correct);
+  ok("정석 진행을 설명하면 코드가 나온다", describeAnswer(n) === "vi IV V I = Am F G C", describeAnswer(n));
+  ok("로마숫자 글자 (장조 · 단조)", [0, 1, 2, 3, 4, 5, 6].map((d) => degreeNumeral("major", d)).join(" ") === "I ii iii IV V vi vii°" &&
+    [0, 1, 2, 3, 4, 5, 6].map((d) => degreeNumeral("minor", d)).join(" ") === "i ii° III iv v VI VII");
+  ok("없는 단계는 undefined", levelById("zzz") === undefined && levelById("L3")?.pool.length === 7);
+}
 
 // ------------------------------------------------------------- 예제 곡의 조
 //
